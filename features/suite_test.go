@@ -53,10 +53,9 @@ func tagExpr() string {
 	if v := os.Getenv("FEATURES_TAGS"); v != "" {
 		return v
 	}
-	// TODO(wave2): drop ~@github once features/steps_github_test.go wires the github
-	// scenarios (EDR two-wave plan). Until then their steps are undefined and Strict
-	// mode would fail them, so exclude the tag by default.
-	expr := "~@unmet && ~@service && ~@pending && ~@github"
+	// features/steps_github_test.go now wires the github scenarios (EDR two-wave
+	// plan wave 2), so @github @local runs by default; @pending (@live) stays out.
+	expr := "~@unmet && ~@service && ~@pending"
 	if runtime.GOOS != "linux" {
 		expr += " && ~@linux"
 	}
