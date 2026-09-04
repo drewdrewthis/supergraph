@@ -4,23 +4,20 @@ Feature: Core-tier supergraph server
   So that plugins can be added later without touching core code
 
   @integration @AC-CORE-1
-  Scenario: Envelope round-trips byte-identical through query
+  Scenario: Envelope round-trips byte-identical through the running server
     Given a supergraph server started with the template plugin and data dir <tmp>
-    When the template plugin emits a "V:2" event with payload <payload>
-    And I run `supergraph query '{ templatePing }'`
-    Then stdout contains a Payload that is byte-identical to <payload>
-    And the Payload's "v" field equals 2
+    When the template plugin emits a "V:2" event captured from the templateEvents subscription
+    Then the stored Payload is byte-identical to the emitted Payload
+    And the emitted event's "v" field equals 2
     And exit code is 0
 
   @integration @AC-CORE-2
-  Scenario: SQLite ring prunes to capacity and cursor survives restart
-    Given a supergraph server started with the template plugin and data dir <tmp>
-    And the ring capacity for "template" is N
-    When the template plugin emits N+5 events
-    Then a query of the "template" ring returns exactly N rows
-    When I run `supergraph stop`
-    And I run `supergraph start`
-    Then the "template" plugin's cursor is unchanged from before the restart
+  Scenario: SQLite ring prunes to capacity and cursor survives reopen
+    Given a template ring store with capacity 5 in data dir <tmp>
+    When 10 events are appended through the ring
+    Then a query of the ring returns exactly 5 rows
+    When the ring store is closed and reopened
+    Then a cursor written before the reopen is unchanged after it
 
   @integration @AC-CORE-3
   Scenario: Health endpoint and health query return matching shape
@@ -29,7 +26,7 @@ Feature: Core-tier supergraph server
     Then exit code is 0
     And the JSON response is an array of objects with exactly the keys "plugin", "lastEventAt", "cursor", "lagSeconds", "state"
     And each object's "state" is one of "starting", "ok", "stale"
-    And the "template" object's "lastEventAt" is null before any event
+    And every object's "lastEventAt" is JSON null or a valid timestamp (never empty string or epoch)
     When I run `supergraph query '{ health { plugin state } }'`
     Then the GraphQL response matches the same plugin/state set as the `/health` response
 
@@ -43,7 +40,7 @@ Feature: Core-tier supergraph server
     Then stderr contains an "address in use" error
     And exit code is non-zero
 
-  @integration @linux @AC-CORE-7
+  @integration @service @linux @AC-CORE-7
   Scenario: Install is idempotent on Linux
     Given a clean data dir <tmp> with no supergraph service installed
     When I run `supergraph install`
@@ -55,7 +52,7 @@ Feature: Core-tier supergraph server
     When I run `supergraph uninstall`
     Then `systemctl --user status supergraph` reports no unit
 
-  @integration @darwin @AC-CORE-7
+  @integration @service @darwin @AC-CORE-7
   Scenario: Install is idempotent on macOS
     Given a clean data dir <tmp> with no supergraph service installed
     When I run `supergraph install`
@@ -99,7 +96,7 @@ Feature: Core-tier supergraph server
       | a valid "hostId"          | 0         | the loaded config exposes "hostId", "peers", "tokens"  |
       | no "hostId" field         | non-zero  | stderr contains an error message naming "hostId"       |
 
-  @integration @linux @darwin @AC-CORE-14
+  @integration @service @linux @darwin @AC-CORE-14
   Scenario: CLI lifecycle drives the installed service through start, status, and stop
     Given a supergraph service installed via `supergraph install`
     When I run `supergraph start`

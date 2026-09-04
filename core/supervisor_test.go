@@ -37,7 +37,7 @@ type fakePlugin struct {
 
 func (f *fakePlugin) Name() string { return f.name }
 
-func (f *fakePlugin) Migrate(ctx context.Context, s *Store) error {
+func (f *fakePlugin) Migrate(_ context.Context, _ *Store) error {
 	f.rec.add(f.name + ":migrate")
 	return nil
 }
@@ -53,7 +53,7 @@ func (f *fakePlugin) Start(ctx context.Context, emit Emit) error {
 	return nil
 }
 
-func (f *fakePlugin) Health(ctx context.Context) HealthStatus {
+func (f *fakePlugin) Health(_ context.Context) HealthStatus {
 	return HealthStatus{Plugin: f.name}
 }
 

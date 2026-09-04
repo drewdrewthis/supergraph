@@ -21,7 +21,9 @@ type Runner func(name string, args ...string) (string, error)
 
 // execRun is the production Runner: it actually shells out.
 func execRun(name string, args ...string) (string, error) {
-	out, err := exec.Command(name, args...).CombinedOutput()
+	// name/args come from the OS Manager's own fixed command set (systemctl /
+	// launchctl subcommands), never from external input.
+	out, err := exec.Command(name, args...).CombinedOutput() //nolint:gosec // fixed systemctl/launchctl command set, no external input
 	return string(out), err
 }
 

@@ -143,7 +143,7 @@ func (p *Plugin) emit(ctx context.Context, emit core.Emit, eventType, msg string
 
 // Health returns a freshness snapshot: the last emit time and a cursor naming the
 // running emit count.
-func (p *Plugin) Health(ctx context.Context) core.HealthStatus {
+func (p *Plugin) Health(_ context.Context) core.HealthStatus {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 

@@ -52,11 +52,13 @@ func renderPlist(binPath string) string {
 func (l *launchd) domain() string { return "gui/" + strconv.Itoa(l.uid) }
 
 func (l *launchd) Install() error {
-	if err := os.MkdirAll(filepath.Dir(l.plistPath), 0o755); err != nil {
+	// ~/Library/LaunchAgents is conventionally 0755 and the plist must be
+	// launchd-readable; these are standard user-agent install perms, not a leak.
+	if err := os.MkdirAll(filepath.Dir(l.plistPath), 0o755); err != nil { //nolint:gosec // standard ~/Library/LaunchAgents dir perms
 		return fmt.Errorf("service: create LaunchAgents dir: %w", err)
 	}
 	// Overwrite so a repeated install leaves exactly one plist.
-	if err := os.WriteFile(l.plistPath, []byte(renderPlist(l.binPath)), 0o644); err != nil {
+	if err := os.WriteFile(l.plistPath, []byte(renderPlist(l.binPath)), 0o644); err != nil { //nolint:gosec // launchd plist must be launchd-readable
 		return fmt.Errorf("service: write plist: %w", err)
 	}
 	// bootstrap registers the agent; it errors if already loaded, so fall back to

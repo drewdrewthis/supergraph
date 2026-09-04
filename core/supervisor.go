@@ -146,7 +146,7 @@ func (sv *Supervisor) startAll(ctx context.Context) {
 		if err := plugin.Migrate(ctx, store); err != nil {
 			log.Printf("core: migrate %q failed: %v", name, err)
 			sv.health.MarkStale(name)
-			store.Close()
+			_ = store.Close()
 			continue
 		}
 

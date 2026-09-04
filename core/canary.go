@@ -1,3 +1,6 @@
+// Package core is the binary shell: the ingest envelope, plugin contract, SQLite
+// base, supervisor, health aggregation, and canary. Plugins compile against this
+// package and never edit it (PRD §6, the S5 zero-core-edit seam).
 package core
 
 import (

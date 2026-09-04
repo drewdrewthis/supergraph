@@ -22,7 +22,7 @@ func serveCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "serve",
 		Short: "Run the aggregator in the foreground",
-		RunE: func(cmd *cobra.Command, _ []string) error {
+		RunE: func(_ *cobra.Command, _ []string) error {
 			return runServe()
 		},
 	}
@@ -32,6 +32,7 @@ func runServe() error {
 	// Structured JSON logs to stdout for the whole serve lifetime.
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
+	logger.Info("supergraph starting", "version", version)
 
 	// A missing/invalid config (including an absent hostId) aborts before boot with
 	// the error naming the offending field (AC-CORE-11).

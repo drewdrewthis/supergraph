@@ -33,7 +33,7 @@ func runQuery(listen, query string) error {
 	if err != nil {
 		return fmt.Errorf("query transport: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {

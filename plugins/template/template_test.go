@@ -57,7 +57,7 @@ func TestStartEmitsHelloWithinOneSecond(t *testing.T) {
 	}
 
 	captured := make(chan core.Envelope, 4)
-	emit := func(ctx context.Context, e core.Envelope) error {
+	emit := func(_ context.Context, e core.Envelope) error {
 		captured <- e
 		return nil
 	}
@@ -86,7 +86,7 @@ func TestStartPanicsOnPanicInjectConfig(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	emit := func(ctx context.Context, e core.Envelope) error { return nil }
+	emit := func(_ context.Context, _ core.Envelope) error { return nil }
 
 	func() {
 		defer func() {
@@ -107,7 +107,7 @@ func TestStartPanicsOnPanicInjectEnvVar(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	emit := func(ctx context.Context, e core.Envelope) error { return nil }
+	emit := func(_ context.Context, _ core.Envelope) error { return nil }
 
 	func() {
 		defer func() {

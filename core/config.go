@@ -54,7 +54,9 @@ const (
 // because hostId is load-bearing for peer identity (AC-CORE-11). Defaults are
 // applied for every optional field left unset.
 func LoadConfig(path string) (Config, error) {
-	b, err := os.ReadFile(path)
+	// path is an operator-supplied config location (--config), not attacker input;
+	// reading a variable path here is the intended behaviour.
+	b, err := os.ReadFile(path) //nolint:gosec // operator-supplied config path, not attacker input
 	if err != nil {
 		return Config{}, fmt.Errorf("core: read config %s: %w", path, err)
 	}

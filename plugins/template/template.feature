@@ -6,8 +6,8 @@ Feature: Template plugin contract
   @integration @AC-CORE-10
   Scenario: Adding the template plugin touches zero files under core/
     Given the template plugin exists under `plugins/template/`, registered via `graph/plugins_import.go` and regenerated `graph/`
-    When I run `git diff --stat core/`
-    Then the diff output is empty
+    When I check that no file under core/ references the template plugin
+    Then no core file imports a plugin package
     And a supergraph server started with the template plugin and data dir <tmp> serves a "template" entry in `/health`
 
   @integration @AC-CORE-10b

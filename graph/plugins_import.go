@@ -6,5 +6,8 @@ package graph
 // blank import below plus the plugin's own files — never an edit under core/ (S5).
 // Step 12 adds the template plugin's import here.
 import (
+	// fakeok self-registers via init() for tests and the dev harness.
+	_ "github.com/drewdrewthis/supergraph/plugins/fakeok"
+	// template is the reference plugin (PRD §6 template plugin).
 	_ "github.com/drewdrewthis/supergraph/plugins/template"
 )

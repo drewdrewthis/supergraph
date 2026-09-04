@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	_ "modernc.org/sqlite" // pure-Go SQLite driver; registers driver name "sqlite" (PRD §5 D1)
 )
@@ -26,7 +27,7 @@ type Store struct {
 // writer (AppendEvent) without a "database is locked" error, so core does not need
 // to serialize all access to a single connection (PRD §5 D1, risk 3).
 func OpenStore(ctx context.Context, path string, ringCapacity int) (*Store, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return nil, fmt.Errorf("core: create data dir: %w", err)
 	}
 
@@ -43,16 +44,26 @@ func OpenStore(ctx context.Context, path string, ringCapacity int) (*Store, erro
 
 	s := &Store{db: db, ringCapacity: ringCapacity}
 	if err := s.migrate(ctx); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, err
 	}
 	return s, nil
 }
 
-// migrate creates core's tables idempotently. It runs on every open, so reopening
-// an existing db is a no-op that never errors or loses data.
-func (s *Store) migrate(ctx context.Context) error {
-	const schema = `
+// coreMigration is one numbered, add-only step in core's own schema. Steps run in
+// ascending version order; each is applied at most once (see applyCoreMigrations).
+type coreMigration struct {
+	version int
+	sql     string
+}
+
+// coreMigrations is the ordered list of core schema versions. Append new versions
+// with the next integer — never edit or reorder an already-shipped step, so a db
+// stamped at version N stays consistent with the code that wrote it.
+var coreMigrations = []coreMigration{
+	{
+		version: 1,
+		sql: `
 CREATE TABLE IF NOT EXISTS events (
 	id      INTEGER PRIMARY KEY AUTOINCREMENT,
 	ts      TEXT,
@@ -65,9 +76,59 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE TABLE IF NOT EXISTS cursors (
 	name  TEXT PRIMARY KEY,
 	value TEXT
-);`
-	if _, err := s.db.ExecContext(ctx, schema); err != nil {
-		return fmt.Errorf("core: migrate: %w", err)
+);`,
+	},
+}
+
+// migrate applies core's own schema. It runs on every open and is idempotent:
+// reopening an existing db re-applies nothing and never errors or loses data.
+func (s *Store) migrate(ctx context.Context) error {
+	return s.applyCoreMigrations(ctx)
+}
+
+// applyCoreMigrations records core's schema version in a schema_version table and
+// runs each coreMigration whose version is not already present, in ascending
+// order. A version already stamped is skipped, so this is safe to call on every
+// open. Each step plus its version-stamp row commit together, so a crash mid-step
+// cannot leave a version recorded whose migration did not fully run.
+func (s *Store) applyCoreMigrations(ctx context.Context) error {
+	if _, err := s.db.ExecContext(ctx, `
+CREATE TABLE IF NOT EXISTS schema_version (
+	version    INTEGER PRIMARY KEY,
+	applied_at TEXT
+);`); err != nil {
+		return fmt.Errorf("core: create schema_version: %w", err)
+	}
+
+	for _, m := range coreMigrations {
+		var exists int
+		if err := s.db.QueryRowContext(ctx,
+			`SELECT COUNT(1) FROM schema_version WHERE version = ?`, m.version,
+		).Scan(&exists); err != nil {
+			return fmt.Errorf("core: read schema_version %d: %w", m.version, err)
+		}
+		if exists > 0 {
+			continue
+		}
+
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return fmt.Errorf("core: begin migration %d: %w", m.version, err)
+		}
+		if _, err := tx.ExecContext(ctx, m.sql); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("core: migration %d: %w", m.version, err)
+		}
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO schema_version (version, applied_at) VALUES (?, ?)`,
+			m.version, time.Now().UTC().Format(timeLayout),
+		); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("core: stamp schema_version %d: %w", m.version, err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("core: commit migration %d: %w", m.version, err)
+		}
 	}
 	return nil
 }
@@ -84,7 +145,7 @@ func (s *Store) AppendEvent(ctx context.Context, e Envelope) error {
 	if err != nil {
 		return fmt.Errorf("core: begin append tx: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO events (ts, source, type, v, key, payload) VALUES (?,?,?,?,?,?)`,
@@ -142,7 +203,7 @@ func (s *Store) Events(ctx context.Context, limit int) ([]Envelope, error) {
 	if err != nil {
 		return nil, fmt.Errorf("core: query events: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var out []Envelope
 	for rows.Next() {

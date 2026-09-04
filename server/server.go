@@ -36,9 +36,12 @@ const lagPollInterval = time.Second
 // from the live Supervisor so the GraphQL view and /health share one source.
 func New(cfg core.Config, sv *core.Supervisor) *http.Server {
 	res := &graph.Resolver{
-		Health: func(ctx context.Context) []core.HealthStatus { return sv.Health().Snapshot() },
+		Health: func(_ context.Context) []core.HealthStatus { return sv.Health().Snapshot() },
 		Lag: func(ctx context.Context, threshold float64) <-chan core.HealthStatus {
 			return lagStream(ctx, sv, threshold)
+		},
+		Events: func(ctx context.Context, source string) <-chan core.Envelope {
+			return EventsChannel(ctx, sv, source)
 		},
 	}
 
@@ -47,7 +50,22 @@ func New(cfg core.Config, sv *core.Supervisor) *http.Server {
 	gql.AddTransport(transport.GET{})
 	gql.AddTransport(transport.POST{})
 	gql.AddTransport(transport.Websocket{
+		// Set BOTH keepalive intervals: KeepAlivePingInterval drives the legacy
+		// graphql-ws `ka` frames, PingPongInterval drives graphql-transport-ws
+		// ping/pong. A client speaking transport-ws with only KeepAlivePingInterval
+		// set hits its own unset 30s read deadline every cycle and disconnects —
+		// see sol.2026-09-03-gqlgen-daemon-missing-pingponginterval-kills-graphql-transport-ws-subscriptions.
 		KeepAlivePingInterval: 10 * time.Second,
+		PingPongInterval:      10 * time.Second,
+		// PLUGIN-TIER RULE: gqlgen's websocket transport builds one InitFunc/loader
+		// context at connection OPEN and reuses it for every operation on that
+		// socket for the socket's lifetime. Do NOT capture request-scoped state
+		// (dataloaders, per-op caches) here or in an InitFunc: a long-lived
+		// subscription carries many distinct ops over one socket, so anything cached
+		// at connect serves the first op's data to later ops. Build per-operation
+		// state per operation, not per connection. No dataloaders exist yet; when
+		// one is added, obey this — see
+		// sol.2026-09-04-gqlgen-websocket-loader-captured-at-connect-not-per-op.
 		// coder/websocket is gqlgen's default impl; InsecureSkipVerify disables
 		// origin checks — acceptable because the server only binds loopback.
 		Implementation: transport.CoderWebsocketImplementation{
@@ -58,7 +76,7 @@ func New(cfg core.Config, sv *core.Supervisor) *http.Server {
 		// normal-close-status / cancelled-context error. Drop those so a routine
 		// disconnect is never logged as a server error (AC-CORE-8); anything else
 		// is a real fault and is logged.
-		ErrorFunc: func(ctx context.Context, err error) {
+		ErrorFunc: func(_ context.Context, err error) {
 			if isNormalClose(err) {
 				return
 			}
@@ -72,7 +90,9 @@ func New(cfg core.Config, sv *core.Supervisor) *http.Server {
 	mux.Handle("/graphql", gql)
 	mux.HandleFunc("GET /health", sv.Health().ServeHTTP)
 
-	return &http.Server{Addr: cfg.Listen, Handler: mux}
+	// ReadHeaderTimeout bounds how long a client may take to send request headers,
+	// closing the Slowloris hole gosec G112 flags even though we bind loopback.
+	return &http.Server{Addr: cfg.Listen, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 }
 
 // isNormalClose reports whether err is a routine websocket teardown rather than a

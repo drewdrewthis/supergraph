@@ -1,0 +1,28 @@
+# golangci-lint v2 config. Enables the correctness + security linters the core
+# tier committed to. Generated gqlgen output (graph/generated.go and everything
+# under graph/model/) is excluded — we do not hand-edit it.
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - staticcheck
+    - govet
+    - revive
+    - gosec
+  exclusions:
+    generated: lax
+    paths:
+      - graph/generated\.go
+      - graph/model
+    rules:
+      # gosec and unchecked-defer-Close noise on test fixtures is not signal:
+      # test files set fixture file perms and defer Close() idiomatically.
+      - path: _test\.go
+        linters:
+          - gosec
+          - errcheck

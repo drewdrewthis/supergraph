@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -45,15 +46,15 @@ func itoa(i int) string {
 func TestAppendEventRingCap(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "sub", "ring.db")
-	const cap = 10
+	const capN = 10
 
-	s, err := OpenStore(ctx, path, cap)
+	s, err := OpenStore(ctx, path, capN)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
 	defer s.Close()
 
-	for i := 0; i < cap+5; i++ {
+	for i := 0; i < capN+5; i++ {
 		if err := s.AppendEvent(ctx, testEnvelope(i)); err != nil {
 			t.Fatalf("append %d: %v", i, err)
 		}
@@ -63,8 +64,8 @@ func TestAppendEventRingCap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("events: %v", err)
 	}
-	if len(evs) != cap {
-		t.Fatalf("rows=%d want %d", len(evs), cap)
+	if len(evs) != capN {
+		t.Fatalf("rows=%d want %d", len(evs), capN)
 	}
 
 	// Newest-first: the most recent append (i=cap+4) is first; oldest kept is i=5.
@@ -77,8 +78,8 @@ func TestAppendEventRingCap(t *testing.T) {
 	if err := json.Unmarshal(evs[len(evs)-1].Payload, &oldest); err != nil {
 		t.Fatalf("decode oldest: %v", err)
 	}
-	if newest.I != cap+4 {
-		t.Errorf("newest i=%d want %d", newest.I, cap+4)
+	if newest.I != capN+4 {
+		t.Errorf("newest i=%d want %d", newest.I, capN+4)
 	}
 	if oldest.I != 5 {
 		t.Errorf("oldest i=%d want 5 (older pruned)", oldest.I)
@@ -204,5 +205,67 @@ func TestConcurrentReadWriteNoLock(t *testing.T) {
 			}
 			t.Fatalf("concurrent op error: %v", err)
 		}
+	}
+}
+
+// PRD "Rebuildable": deleting the db file and reopening rebuilds core's schema
+// from scratch — core tables present and the schema_version row stamped at 1.
+func TestDeleteDBAndRebuild(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "rebuild.db")
+
+	s, err := OpenStore(ctx, path, 100)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if err := s.AppendEvent(ctx, testEnvelope(1)); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	// Remove the db and its WAL/SHM sidecars — a real "delete the db" (PRD §6).
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		if err := os.Remove(path + suffix); err != nil && !os.IsNotExist(err) {
+			t.Fatalf("remove %s: %v", path+suffix, err)
+		}
+	}
+
+	s2, err := OpenStore(ctx, path, 100)
+	if err != nil {
+		t.Fatalf("reopen after delete: %v", err)
+	}
+	defer s2.Close()
+
+	// Core tables rebuilt.
+	for _, table := range []string{"events", "cursors", "schema_version"} {
+		var name string
+		err := s2.DB().QueryRowContext(ctx,
+			`SELECT name FROM sqlite_master WHERE type='table' AND name=?`, table,
+		).Scan(&name)
+		if err != nil {
+			t.Fatalf("table %q missing after rebuild: %v", table, err)
+		}
+	}
+
+	// Schema stamped at version 1, exactly one row.
+	var count, version int
+	if err := s2.DB().QueryRowContext(ctx,
+		`SELECT COUNT(1), COALESCE(MAX(version), 0) FROM schema_version`,
+	).Scan(&count, &version); err != nil {
+		t.Fatalf("read schema_version: %v", err)
+	}
+	if count != 1 || version != 1 {
+		t.Fatalf("schema_version rows=%d maxVersion=%d, want rows=1 version=1", count, version)
+	}
+
+	// Fresh db has no leftover data from before the delete.
+	evs, err := s2.Events(ctx, 10)
+	if err != nil {
+		t.Fatalf("events: %v", err)
+	}
+	if len(evs) != 0 {
+		t.Fatalf("rebuilt db not empty: rows=%d want 0", len(evs))
 	}
 }

@@ -21,7 +21,7 @@ func TestHealthQueryResolvesInjectedStatuses(t *testing.T) {
 		{Plugin: "beta", Cursor: "c2", LagSeconds: 99, LastEventAt: &now, State: core.HealthStale},
 	}
 	res := &Resolver{
-		Health: func(ctx context.Context) []core.HealthStatus { return fake },
+		Health: func(_ context.Context) []core.HealthStatus { return fake },
 	}
 	srv := handler.NewDefaultServer(NewExecutableSchema(Config{Resolvers: res}))
 	c := client.New(srv)

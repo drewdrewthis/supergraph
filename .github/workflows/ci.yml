@@ -1,0 +1,73 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # version.mk runs `git describe --tags`
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: gofmt
+        run: |
+          out=$(gofmt -l .)
+          if [ -n "$out" ]; then
+            echo "gofmt needs to run on:"; echo "$out"; exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      # golangci-lint v2 built with the module's own Go toolchain: the released
+      # v1 binary cannot parse a go1.26 module, so we install v2 by version.
+      - name: golangci-lint
+        run: |
+          go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2
+          "$(go env GOPATH)/bin/golangci-lint" run ./...
+
+      - name: gqlgen generate is in sync
+        run: |
+          go run github.com/99designs/gqlgen generate
+          git diff --exit-code
+
+      - name: go test (race)
+        run: go test -race -count=1 ./...
+
+      - name: godog feature suite (@service excluded by default)
+        run: go test ./features/ -run TestFeatures -count=1
+
+  cross-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: cross-compile cmd/supergraph
+        run: |
+          VERSION=$(git describe --tags --always --dirty)
+          LDFLAGS="-X main.version=$VERSION"
+          GOOS=linux  GOARCH=amd64 go build -ldflags "$LDFLAGS" -o dist/supergraph-linux-amd64  ./cmd/supergraph
+          GOOS=darwin GOARCH=arm64 go build -ldflags "$LDFLAGS" -o dist/supergraph-darwin-arm64 ./cmd/supergraph

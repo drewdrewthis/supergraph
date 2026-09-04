@@ -122,7 +122,7 @@ func (h *HealthAggregator) Snapshot() []HealthStatus {
 // ServeHTTP answers GET /health with the snapshot JSON array (AC-CORE-3). The array
 // is never null even with no plugins, and lastEventAt serializes as JSON null before
 // a plugin's first event.
-func (h *HealthAggregator) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (h *HealthAggregator) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(h.Snapshot())
 }

@@ -25,9 +25,9 @@ type onDemandPlugin struct {
 	ready chan struct{}
 }
 
-func (p *onDemandPlugin) Name() string                                     { return "faker" }
-func (p *onDemandPlugin) Migrate(ctx context.Context, s *core.Store) error { return nil }
-func (p *onDemandPlugin) Health(ctx context.Context) core.HealthStatus {
+func (p *onDemandPlugin) Name() string                                   { return "faker" }
+func (p *onDemandPlugin) Migrate(_ context.Context, _ *core.Store) error { return nil }
+func (p *onDemandPlugin) Health(_ context.Context) core.HealthStatus {
 	return core.HealthStatus{Plugin: "faker"}
 }
 func (p *onDemandPlugin) Start(ctx context.Context, emit core.Emit) error {
@@ -155,11 +155,11 @@ func TestSubscriptionPushOnEmit(t *testing.T) {
 		t.Fatalf("ws dial: %v", err)
 	}
 
-	writeJSON(t, ctx, conn, map[string]any{"type": "connection_init"})
-	if got := readType(t, ctx, conn); got != "connection_ack" {
+	writeJSON(ctx, t, conn, map[string]any{"type": "connection_init"})
+	if got := readType(ctx, t, conn); got != "connection_ack" {
 		t.Fatalf("want connection_ack, got %q", got)
 	}
-	writeJSON(t, ctx, conn, map[string]any{
+	writeJSON(ctx, t, conn, map[string]any{
 		"id":      "1",
 		"type":    "subscribe",
 		"payload": map[string]string{"query": "subscription { pluginLag(thresholdSeconds: 0) { plugin state } }"},
@@ -171,7 +171,7 @@ func TestSubscriptionPushOnEmit(t *testing.T) {
 
 	readCtx, readCancel := context.WithTimeout(ctx, time.Second)
 	defer readCancel()
-	if got := readType(t, readCtx, conn); got != "next" {
+	if got := readType(readCtx, t, conn); got != "next" {
 		t.Fatalf("want next message, got %q", got)
 	}
 	if d := time.Since(start); d > time.Second {
@@ -185,7 +185,7 @@ func TestSubscriptionPushOnEmit(t *testing.T) {
 	}
 }
 
-func writeJSON(t *testing.T, ctx context.Context, c *coderws.Conn, v any) {
+func writeJSON(ctx context.Context, t *testing.T, c *coderws.Conn, v any) {
 	t.Helper()
 	b, _ := json.Marshal(v)
 	if err := c.Write(ctx, coderws.MessageText, b); err != nil {
@@ -193,7 +193,7 @@ func writeJSON(t *testing.T, ctx context.Context, c *coderws.Conn, v any) {
 	}
 }
 
-func readType(t *testing.T, ctx context.Context, c *coderws.Conn) string {
+func readType(ctx context.Context, t *testing.T, c *coderws.Conn) string {
 	t.Helper()
 	_, data, err := c.Read(ctx)
 	if err != nil {
