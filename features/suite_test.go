@@ -51,7 +51,7 @@ func tagExpr() string {
 	if v := os.Getenv("FEATURES_TAGS"); v != "" {
 		return v
 	}
-	expr := "~@unmet && ~@service"
+	expr := "~@unmet && ~@service && ~@pending"
 	if runtime.GOOS != "linux" {
 		expr += " && ~@linux"
 	}

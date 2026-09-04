@@ -12,10 +12,17 @@ import (
 	"time"
 
 	coderws "github.com/coder/websocket"
+	"go.uber.org/goleak"
 
 	"github.com/drewdrewthis/supergraph/core"
 	"github.com/drewdrewthis/supergraph/server"
 )
+
+// TestMain runs goleak for the server package so a leaked http.Server or
+// subscriber goroutine (one not shut down at test end) fails the suite.
+func TestMain(m *testing.M) {
+	goleak.VerifyTestMain(m)
+}
 
 // onDemandPlugin is an integration test double registered into a LOCAL factories
 // map (never the global registry): it emits nothing on its own and forwards each

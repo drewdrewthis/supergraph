@@ -9,6 +9,7 @@ require (
 	github.com/pelletier/go-toml/v2 v2.4.3
 	github.com/spf13/cobra v1.10.2
 	github.com/vektah/gqlparser/v2 v2.5.37
+	go.uber.org/goleak v1.3.0
 	modernc.org/sqlite v1.58.0
 )
 

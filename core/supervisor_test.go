@@ -5,7 +5,16 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"go.uber.org/goleak"
 )
+
+// TestMain runs goleak once for the whole core package so any goroutine our
+// code leaves running past a test (e.g. a Bus subscriber not exiting on
+// ctx.Done) fails the suite instead of leaking silently.
+func TestMain(m *testing.M) {
+	goleak.VerifyTestMain(m)
+}
 
 // recorder captures ordered call events from fake plugins for ordering assertions.
 type recorder struct {

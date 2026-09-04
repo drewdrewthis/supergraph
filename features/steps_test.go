@@ -38,6 +38,8 @@ func InitializeScenario(sc *godog.ScenarioContext) {
 		return ctx, nil
 	})
 
+	registerPRDSteps(sc)
+
 	// --- shared ---
 	sc.Step(lit("a supergraph server started with the template plugin and data dir <tmp>"), w.startDefaultServer)
 	sc.Step(lit("exit code is 0"), w.assertExit0)

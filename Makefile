@@ -1,7 +1,7 @@
 # supergraph dev harness. `make dev` is the one-command bring-up (AC-CORE-15):
 # it builds, points every plugin db at a throwaway .dev/data dir (never the real
 # ~/.local/share), and runs the server in the foreground with the template plugin.
-.PHONY: build generate test features features-red dev dev-check
+.PHONY: build generate test features features-red features-pending dev dev-check
 include mk/version.mk
 
 BIN := bin/supergraph
@@ -27,6 +27,12 @@ features:
 # only when the suite fails, and fails loudly if an unmet scenario ever passes.
 features-red:
 	! FEATURES_TAGS=@unmet go test ./features/ -run TestFeatures
+
+# features-pending lists the PRD scenarios (S1-S6, F1-F8) not yet backed by a
+# plugin tier; strict mode makes a non-empty pending set exit non-zero, so a
+# non-zero exit here is the expected/reportable state, not a failure to fix.
+features-pending:
+	FEATURES_TAGS=@pending go test ./features/ -run TestFeatures
 
 # dev-config writes a throwaway config only if one is not already present, so a
 # hand-edited .dev/config.toml is never clobbered.
