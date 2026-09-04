@@ -230,18 +230,34 @@ func (w *world) startServe() error {
 	return w.waitHealth(10 * time.Second)
 }
 
+// readyPlugins are the plugins every serve subprocess in this suite starts
+// (the binary is always built with -tags harness, see TestMain), so a serve
+// process is only "ready" once both have run their startup emit.
+var readyPlugins = []string{"template", "fakeok"}
+
+// waitHealth blocks until /health reports 200 AND every plugin in
+// readyPlugins has a non-null "lastEventAt". A 200 alone only means the HTTP
+// server is up; the Supervisor may still be mid-Migrate/Start (its plugins
+// report "starting" with no lastEventAt yet), which raced scenarios that read
+// the DB or lastEventAt straight after startServe returned.
 func (w *world) waitHealth(d time.Duration) error {
 	deadline := time.Now().Add(d)
 	client := http.Client{Timeout: time.Second}
+	var lastBody []byte
 	for time.Now().Before(deadline) {
 		if w.serve != nil && w.serve.exited() {
 			return fmt.Errorf("serve exited early: %s", w.serve.stderr.String())
 		}
 		resp, err := client.Get("http://" + w.listen + "/health")
 		if err == nil {
+			body, _ := io.ReadAll(resp.Body)
 			resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {
-				return nil
+				lastBody = body
+				var rows []map[string]any
+				if err := json.Unmarshal(body, &rows); err == nil && allPluginsReady(rows) {
+					return nil
+				}
 			}
 		}
 		time.Sleep(50 * time.Millisecond)
@@ -250,7 +266,24 @@ func (w *world) waitHealth(d time.Duration) error {
 	if w.serve != nil {
 		stderr = w.serve.stderr.String()
 	}
-	return fmt.Errorf("/health not ready within %s: %s", d, stderr)
+	return fmt.Errorf("/health not ready within %s: %s (last body: %s)", d, stderr, lastBody)
+}
+
+// allPluginsReady reports whether every readyPlugins entry is present in rows
+// with a non-null, non-empty "lastEventAt" (set only after Migrate has run and
+// the plugin's Start has emitted its first event).
+func allPluginsReady(rows []map[string]any) bool {
+	for _, name := range readyPlugins {
+		r := findRow(rows, name)
+		if r == nil {
+			return false
+		}
+		s, _ := r["lastEventAt"].(string)
+		if s == "" {
+			return false
+		}
+	}
+	return true
 }
 
 func (w *world) stopServe() {

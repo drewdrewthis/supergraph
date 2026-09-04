@@ -1063,17 +1063,36 @@ func (w *world) ac13Serve1() error {
 }
 
 func (w *world) ac13Tables() error {
-	tabs, err := w.templateTables()
-	if err != nil {
-		return err
+	// waitHealth only proves the plugins have emitted; the WAL write behind
+	// that emit can still take a beat to become visible to a fresh
+	// connection, so retry briefly rather than failing on the first miss.
+	need := []string{"template_state", "events", "cursors"}
+	deadline := time.Now().Add(2 * time.Second)
+	var tabs []string
+	var err error
+	for {
+		tabs, err = w.templateTables()
+		if err == nil && allTablesPresent(tabs, need) {
+			w.firstTables = tabs
+			return nil
+		}
+		if time.Now().After(deadline) {
+			if err != nil {
+				return err
+			}
+			return fmt.Errorf("missing table in %v (want %v)", tabs, need)
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
-	for _, need := range []string{"template_state", "events", "cursors"} {
-		if !contains(tabs, need) {
-			return fmt.Errorf("missing table %q in %v", need, tabs)
+}
+
+func allTablesPresent(tabs, need []string) bool {
+	for _, n := range need {
+		if !contains(tabs, n) {
+			return false
 		}
 	}
-	w.firstTables = tabs
-	return nil
+	return true
 }
 
 func (w *world) ac13Serve2() error { return w.startServe() }

@@ -43,11 +43,13 @@ WantedBy=default.target
 }
 
 func (s *systemd) Install() error {
-	if err := os.MkdirAll(filepath.Dir(s.unitPath), 0o755); err != nil {
+	// systemd --user only needs the owning user to read these; keep the unit
+	// dir and file closed to group/world (gosec G301/G306).
+	if err := os.MkdirAll(filepath.Dir(s.unitPath), 0o700); err != nil {
 		return fmt.Errorf("service: create unit dir: %w", err)
 	}
 	// Overwrite (not append) so a repeated install leaves exactly one unit.
-	if err := os.WriteFile(s.unitPath, []byte(renderUnit(s.binPath)), 0o644); err != nil {
+	if err := os.WriteFile(s.unitPath, []byte(renderUnit(s.binPath)), 0o600); err != nil {
 		return fmt.Errorf("service: write unit: %w", err)
 	}
 	if _, err := s.run("systemctl", "--user", "daemon-reload"); err != nil {
