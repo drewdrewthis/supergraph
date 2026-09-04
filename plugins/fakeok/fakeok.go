@@ -1,16 +1,18 @@
+//go:build harness
+
 // Package fakeok is a second reference plugin whose only job is to stay healthy
 // while a sibling plugin fails. It exists so the panic-isolation contract
 // (AC-CORE-4) is provable end to end: when the template plugin panics in Start,
 // a live server must still report a DIFFERENT plugin as "ok". It carries no data
 // source and contributes no GraphQL schema — it just emits a heartbeat on a short
-// interval so its /health entry reads "ok" independent of the canary.
+// interval so its /health entry reads "ok" independent of the canary. It is built
+// only under the `harness` tag so it never ships in a production binary.
 package fakeok
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/drewdrewthis/supergraph/core"
@@ -28,10 +30,7 @@ func init() {
 // Plugin is a plugin that emits a heartbeat and never panics.
 type Plugin struct {
 	hostID string
-
-	mu       sync.Mutex
-	count    int
-	lastEmit time.Time
+	hb     core.Heartbeat
 }
 
 // New builds the fakeok plugin from its resolved config.
@@ -66,12 +65,7 @@ func (p *Plugin) Start(ctx context.Context, emit core.Emit) error {
 }
 
 func (p *Plugin) emit(ctx context.Context, emit core.Emit, eventType string) error {
-	p.mu.Lock()
-	p.count++
-	n := p.count
-	now := time.Now().UTC()
-	p.lastEmit = now
-	p.mu.Unlock()
+	n, now := p.hb.Mark()
 
 	payload, err := json.Marshal(map[string]any{"n": n})
 	if err != nil {
@@ -79,28 +73,10 @@ func (p *Plugin) emit(ctx context.Context, emit core.Emit, eventType string) err
 	}
 	return emit(ctx, core.Envelope{
 		TS:      now,
-		Source:  "fakeok",
+		Source:  p.Name(),
 		Type:    eventType,
 		V:       1,
 		Key:     "fakeok:heartbeat@" + p.hostID,
 		Payload: payload,
 	})
-}
-
-// Health returns a freshness snapshot.
-func (p *Plugin) Health(_ context.Context) core.HealthStatus {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	status := core.HealthStatus{
-		Plugin: "fakeok",
-		Cursor: fmt.Sprintf("n=%d", p.count),
-		State:  core.HealthStarting,
-	}
-	if !p.lastEmit.IsZero() {
-		t := p.lastEmit
-		status.LastEventAt = &t
-		status.LagSeconds = time.Since(p.lastEmit).Seconds()
-		status.State = core.HealthOK
-	}
-	return status
 }

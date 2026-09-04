@@ -29,6 +29,8 @@ func newManager(binPath string, run Runner) (Manager, error) {
 // renderPlist builds the LaunchAgent plist. ProgramArguments is [binary, serve],
 // RunAtLoad boots it at login and KeepAlive restarts it on crash.
 func renderPlist(binPath string) string {
+	// binPath is the caller's own os.Executable() path (see cmd newManager), never
+	// user input, so interpolating it into the plist carries no injection risk.
 	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">

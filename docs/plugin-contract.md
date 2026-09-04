@@ -29,6 +29,9 @@ type Envelope struct {
 
 ## Plugin interface
 
+The block below is **verbatim identical** to the one in `core/plugin.go` (CI diffs
+the two sed-extracted blocks; AC-CORE-16). Do not reword it here alone.
+
 ```go
 type Plugin interface {
 	// Name is the plugin's stable id. It is used as the SQLite filename and the
@@ -41,11 +44,34 @@ type Plugin interface {
 	// each event. It runs in its own recover-guarded goroutine so a panic here
 	// isolates to this plugin (marks it stale) rather than taking down the process.
 	Start(ctx context.Context, emit Emit) error
-	// Health returns a freshness snapshot for the _health endpoint. It is polled by
-	// core, not pushed, so it must be cheap and non-blocking.
-	Health(ctx context.Context) HealthStatus
 }
 ```
+
+### Optional interfaces
+
+A plugin MAY implement either of these; core type-asserts for them, so a plugin that
+ignores them still satisfies the required contract above.
+
+```go
+// CursorReporter surfaces a resume cursor in the health snapshot. Cursor is called
+// while core holds the health-aggregator lock, so it must be cheap and non-blocking
+// (an in-memory read, never I/O).
+type CursorReporter interface {
+	Cursor(ctx context.Context) string
+}
+
+// HTTPRoutes gives a plugin its own HTTP surface (e.g. a webhook receiver). Core
+// mounts each pattern under /plugins/<name>/<pattern> — so a new HTTP source (the
+// github webhook plugin, S5) needs zero core edit. Patterns are path-relative to the
+// prefix; a leading slash is optional.
+type HTTPRoutes interface {
+	Routes() map[string]http.Handler
+}
+```
+
+`/plugins/<name>/` routes are dispatched per-request against the running plugin, so a
+plugin's routes work regardless of startup order. An unknown plugin, a plugin without
+`HTTPRoutes`, or an unmatched pattern is a 404.
 
 ## HealthState and HealthStatus
 
@@ -127,11 +153,13 @@ func (r *queryResolver) <Name>Field(ctx context.Context) (string, error) {
 
 ## Health
 
-`Health()` must return a fresh `HealthStatus` snapshot including:
+A plugin does **not** implement a `Health()` method. Core derives every field of the
+`HealthStatus` snapshot itself, from the emit path:
 
-- `LastEventAt`: timestamp of the most recent event emitted (nil if no events yet).
-- `Cursor`: opaque string identifying the last processed checkpoint (for dedup/resume).
-- `LagSeconds`: seconds since `LastEventAt` (core will derive state from lag threshold).
+- `LastEventAt`: stamped by core on each `emit()` (nil until the first event).
+- `LagSeconds` / `State`: derived by core from `LastEventAt` and the lag threshold.
+- `Cursor`: pulled from the plugin's optional `CursorReporter.Cursor()`; empty if the
+  plugin does not implement it.
 
 ## Canary / heartbeat
 

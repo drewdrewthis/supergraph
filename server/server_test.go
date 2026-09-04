@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -34,9 +35,6 @@ type onDemandPlugin struct {
 
 func (p *onDemandPlugin) Name() string                                   { return "faker" }
 func (p *onDemandPlugin) Migrate(_ context.Context, _ *core.Store) error { return nil }
-func (p *onDemandPlugin) Health(_ context.Context) core.HealthStatus {
-	return core.HealthStatus{Plugin: "faker"}
-}
 func (p *onDemandPlugin) Start(ctx context.Context, emit core.Emit) error {
 	close(p.ready)
 	for {
@@ -189,6 +187,120 @@ func TestSubscriptionPushOnEmit(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	if s := logBuf.String(); strings.Contains(s, "server: websocket error") {
 		t.Fatalf("server logged an error on client disconnect: %s", s)
+	}
+}
+
+// routedPlugin is a fake plugin implementing the optional core.HTTPRoutes: it emits
+// nothing and exposes one route so the /plugins/<name>/ mount seam (S5) is provable.
+type routedPlugin struct{ ready chan struct{} }
+
+func (p *routedPlugin) Name() string                                   { return "routed" }
+func (p *routedPlugin) Migrate(_ context.Context, _ *core.Store) error { return nil }
+func (p *routedPlugin) Start(ctx context.Context, _ core.Emit) error {
+	close(p.ready)
+	<-ctx.Done()
+	return nil
+}
+func (p *routedPlugin) Routes() map[string]http.Handler {
+	return map[string]http.Handler{
+		"/hook": http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte("hooked"))
+		}),
+	}
+}
+
+// A2/S5: a plugin implementing HTTPRoutes has its routes mounted under
+// /plugins/<name>/ with zero core edit; GET /plugins/routed/hook returns its body.
+func TestPluginHTTPRoutesMounted(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	rp := &routedPlugin{ready: make(chan struct{})}
+	cfg := core.Config{HostID: "h", DataDir: t.TempDir(), LagThresholdSeconds: 300}
+	sv := core.NewSupervisor(cfg, map[string]core.Factory{
+		"routed": func(core.PluginConfig) (core.Plugin, error) { return rp, nil },
+	}, core.NewHealthAggregator(cfg.LagThresholdSeconds), core.NewBus())
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	cfg.Listen = ln.Addr().String()
+	srv := server.New(cfg, sv)
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close() })
+	go sv.Run(ctx)
+
+	select {
+	case <-rp.ready:
+	case <-time.After(2 * time.Second):
+		t.Fatal("plugin never started")
+	}
+
+	resp, err := http.Get("http://" + ln.Addr().String() + "/plugins/routed/hook")
+	if err != nil {
+		t.Fatalf("GET /plugins/routed/hook: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if string(body) != "hooked" {
+		t.Fatalf("body = %q, want hooked", string(body))
+	}
+}
+
+// C9: a non-loopback listen wraps every route (including /health) in bearer auth —
+// no/wrong token is 401, the configured token is 200. The loopback no-auth branch is
+// covered by TestHealthEndpointShape (loopback listen, no token, 200).
+func TestBearerAuthNonLoopback(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	fake := &onDemandPlugin{emit: make(chan core.Envelope, 1), ready: make(chan struct{})}
+	// A non-loopback advertised address triggers the middleware; we still Serve on a
+	// real loopback listener, which is what the http.Server.Addr would otherwise bind.
+	cfg := core.Config{HostID: "h", DataDir: t.TempDir(), LagThresholdSeconds: 300,
+		Listen: "192.0.2.1:7788", Tokens: map[string]string{"cli": "s3cret"}}
+	sv := core.NewSupervisor(cfg, map[string]core.Factory{
+		"faker": func(core.PluginConfig) (core.Plugin, error) { return fake, nil },
+	}, core.NewHealthAggregator(cfg.LagThresholdSeconds), core.NewBus())
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	srv := server.New(cfg, sv)
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close() })
+	go sv.Run(ctx)
+
+	select {
+	case <-fake.ready:
+	case <-time.After(2 * time.Second):
+		t.Fatal("plugin never started")
+	}
+	base := "http://" + ln.Addr().String()
+
+	resp, err := http.Get(base + "/health")
+	if err != nil {
+		t.Fatalf("GET /health (no token): %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("no-token status = %d, want 401", resp.StatusCode)
+	}
+
+	req, _ := http.NewRequest(http.MethodGet, base+"/health", nil)
+	req.Header.Set("Authorization", "Bearer s3cret")
+	resp2, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /health (token): %v", err)
+	}
+	resp2.Body.Close()
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("token status = %d, want 200", resp2.StatusCode)
 	}
 }
 

@@ -27,6 +27,8 @@ func newManager(binPath string, run Runner) (Manager, error) {
 // renderUnit builds the .service file. ExecStart is the absolute binary path plus
 // `serve`, and Restart=on-failure keeps a crashed serve coming back.
 func renderUnit(binPath string) string {
+	// binPath is the caller's own os.Executable() path (see cmd newManager), never
+	// user input, so interpolating it into the unit file carries no injection risk.
 	return fmt.Sprintf(`[Unit]
 Description=supergraph aggregator
 After=network.target

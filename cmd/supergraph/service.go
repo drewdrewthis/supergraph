@@ -31,13 +31,27 @@ func newManager() (service.Manager, error) {
 	return service.New(exe, nil)
 }
 
+// managerFactory and healthProbe are package-level seams so cmd/supergraph
+// service tests can substitute a fake Manager and a scripted health result
+// without a real systemctl/launchctl or a real server (AC-CORE-14 backfill).
+var (
+	managerFactory = newManager
+	healthProbe    = func(addr string) bool {
+		_, err := probeHealth(addr)
+		return err == nil
+	}
+	// exitFunc lets a test observe the intended exit code from statusCmd
+	// without the test process itself terminating.
+	exitFunc = os.Exit
+)
+
 func serviceCmds() []*cobra.Command {
 	simple := func(use, short string, action func(service.Manager) error) *cobra.Command {
 		return &cobra.Command{
 			Use:   use,
 			Short: short,
 			RunE: func(_ *cobra.Command, _ []string) error {
-				m, err := newManager()
+				m, err := managerFactory()
 				if err != nil {
 					return err
 				}
@@ -67,14 +81,16 @@ func statusCmd() *cobra.Command {
 			if cfg, err := core.LoadConfig(configPath); err == nil {
 				listen = cfg.Listen
 			}
-			rows, err := probeHealth(listen)
-			if err != nil {
+			if !healthProbe(listen) {
 				fmt.Printf("not running (%s)\n", listen)
-				os.Exit(3)
+				exitFunc(3)
+				return nil
 			}
 			fmt.Printf("running on %s\n", listen)
-			for _, r := range rows {
-				fmt.Printf("  %-16s %-8s lag=%.1fs\n", r.Plugin, r.State, r.LagSeconds)
+			if rows, err := probeHealth(listen); err == nil {
+				for _, r := range rows {
+					fmt.Printf("  %-16s %-8s lag=%.1fs\n", r.Plugin, r.State, r.LagSeconds)
+				}
 			}
 			return nil
 		},

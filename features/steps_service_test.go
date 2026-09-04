@@ -12,7 +12,7 @@ import (
 )
 
 // serviceManager builds the OS service manager over the freshly-built binary. It
-// is used only by the @service scenarios (AC-CORE-7 / -14), which are excluded by
+// is used only by the @service scenarios (AC-CORE-7a/7b / -14), which are excluded by
 // default and run only under FEATURES_SERVICE=1 with an explicit FEATURES_TAGS.
 func serviceManager() (service.Manager, error) {
 	return service.New(binPath, nil)

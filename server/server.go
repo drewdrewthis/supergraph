@@ -7,11 +7,13 @@ package server
 
 import (
 	"context"
+	"crypto/subtle"
 	"errors"
 	"io"
 	"log"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	coderws "github.com/coder/websocket"
@@ -89,10 +91,84 @@ func New(cfg core.Config, sv *core.Supervisor) *http.Server {
 	mux := http.NewServeMux()
 	mux.Handle("/graphql", gql)
 	mux.HandleFunc("GET /health", sv.Health().ServeHTTP)
+	// Plugin HTTP surfaces (e.g. a webhook receiver) are dispatched per-request under
+	// /plugins/<name>/ so a new HTTP source needs zero core edit (S5).
+	mux.Handle("/plugins/", pluginRoutesHandler(sv))
+
+	// A non-loopback bind exposes the API off-box, so wrap every route (including
+	// /health) in bearer auth. Loopback binds stay open for the zero-config local
+	// case. core.ListenIsLoopback is the shared predicate with LoadConfig, so the
+	// mandatory-token config check and this middleware never disagree.
+	var handler http.Handler = mux
+	if !core.ListenIsLoopback(cfg.Listen) {
+		handler = bearerAuth(mux, cfg.Tokens)
+	}
 
 	// ReadHeaderTimeout bounds how long a client may take to send request headers,
 	// closing the Slowloris hole gosec G112 flags even though we bind loopback.
-	return &http.Server{Addr: cfg.Listen, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+	return &http.Server{Addr: cfg.Listen, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
+}
+
+// pluginRoutesHandler dispatches /plugins/<name>/<pattern> to a running plugin's
+// HTTPRoutes handler. It resolves the plugin per-request (not at server build) so
+// routes work even though plugins start after server.New returns. An unknown plugin,
+// a plugin without HTTPRoutes, or an unmatched pattern is a 404.
+func pluginRoutesHandler(sv *core.Supervisor) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		name, _, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/plugins/"), "/")
+		if name == "" {
+			http.NotFound(w, r)
+			return
+		}
+		p, ok := sv.Plugins()[name]
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		hr, ok := p.(core.HTTPRoutes)
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		// Build a private sub-mux under this plugin's prefix so the plugin's declared
+		// ServeMux patterns match as written. A leading slash on the pattern is
+		// optional — it is normalised so both "/hook" and "hook" mount identically.
+		sub := http.NewServeMux()
+		for pattern, h := range hr.Routes() {
+			sub.Handle("/plugins/"+name+"/"+strings.TrimPrefix(pattern, "/"), h)
+		}
+		sub.ServeHTTP(w, r)
+	})
+}
+
+// bearerAuth guards next with a bearer-token check: the Authorization header must be
+// `Bearer <t>` matching one configured token, compared in constant time so a wrong
+// token leaks no timing signal. It never logs token values. Used only for
+// non-loopback binds (see New).
+func bearerAuth(next http.Handler, tokens map[string]string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		const prefix = "Bearer "
+		h := r.Header.Get("Authorization")
+		if strings.HasPrefix(h, prefix) && tokenMatches(h[len(prefix):], tokens) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		w.Header().Set("WWW-Authenticate", "Bearer")
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+	})
+}
+
+// tokenMatches reports whether got equals any configured token. It checks every
+// entry (no early return) so the comparison time does not reveal how many tokens
+// exist or which matched.
+func tokenMatches(got string, tokens map[string]string) bool {
+	match := false
+	for _, want := range tokens {
+		if subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1 {
+			match = true
+		}
+	}
+	return match
 }
 
 // isNormalClose reports whether err is a routine websocket teardown rather than a

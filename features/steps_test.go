@@ -156,7 +156,7 @@ func InitializeScenario(sc *godog.ScenarioContext) {
 	sc.Step(lit("I run `supergraph serve` again with the template plugin against data dir <tmp>"), w.ac13Serve2)
 	sc.Step(lit("`sqlite3 <tmp>/template.db .tables` lists the same tables with no duplicates"), w.ac13SameTables)
 
-	// --- AC-CORE-7 / -14 (service, gated by FEATURES_SERVICE) ---
+	// --- AC-CORE-7a/7b / -14 (service, gated by FEATURES_SERVICE) ---
 	registerServiceSteps(sc, w)
 }
 
@@ -467,14 +467,24 @@ func (w *world) ac6AddrInUse() error {
 
 func (w *world) wsOpen() error { return w.openSubscription("templateEvents") }
 
-func (w *world) wsEmit() error { return nil } // server emits via tick/canary on its own
+func (w *world) wsEmit() error {
+	// Connection setup/ack already happened in wsOpen; the clock for the <1s
+	// bound starts here, at the emit trigger, not before.
+	w.wsEmitAt = time.Now()
+	return nil // server emits via tick/canary on its own
+}
 
 func (w *world) wsPushedWithin1s() error {
-	// The generic server runs the canary sub-second, so a push arrives well under
-	// 1s; a 2s bound absorbs CI scheduling jitter without weakening the proof.
-	p, err := w.ws.nextPush(2 * time.Second)
+	// Outer read deadline is generous (absorbs CI scheduling jitter reading the
+	// socket); the actual AC bound is asserted separately against elapsed time
+	// from the emit trigger, so a miss on either axis reports cleanly.
+	p, err := w.ws.nextPush(3 * time.Second)
 	if err != nil {
 		return err
+	}
+	elapsed := time.Since(w.wsEmitAt)
+	if elapsed >= time.Second {
+		return fmt.Errorf("push arrived after %s (>= 1s bound)", elapsed)
 	}
 	if _, ok := p["data"]; !ok {
 		return fmt.Errorf("push without data: %v", p)
@@ -891,8 +901,18 @@ func (w *world) ac5Cap1() error {
 }
 
 func (w *world) ac5Wait1() error {
-	time.Sleep(2200 * time.Millisecond)
-	return nil
+	deadline := time.Now().Add(6 * time.Second)
+	t1 := lastEventAt(w.cap1, "template")
+	for time.Now().Before(deadline) {
+		rows, _, err := w.getHealth()
+		if err == nil {
+			if t2 := lastEventAt(rows, "template"); t2 != "" && t2 != t1 {
+				return nil
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return fmt.Errorf("template lastEventAt did not advance within 6s (canary never fired)")
 }
 
 func (w *world) ac5Cap2() error {
@@ -930,8 +950,17 @@ func (w *world) ac5Cut() error {
 }
 
 func (w *world) ac5WaitT() error {
-	time.Sleep(2500 * time.Millisecond)
-	return nil
+	deadline := time.Now().Add(6 * time.Second)
+	for time.Now().Before(deadline) {
+		rows, _, err := w.getHealth()
+		if err == nil {
+			if r := findRow(rows, "template"); r != nil && r["state"] == "stale" {
+				return nil
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return fmt.Errorf("template did not reach stale within 6s after emit cut")
 }
 
 func (w *world) ac5Cap3() error {

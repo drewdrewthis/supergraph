@@ -4,66 +4,12 @@ import (
 	"context"
 	"log"
 	"path/filepath"
-	"sort"
 	"sync"
 )
 
 // defaultRingCapacity is the per-plugin event-ring size when the supervisor opens a
 // Store. Kept modest: the ring is a recent-events buffer, not the system of record.
 const defaultRingCapacity = 10000
-
-// subBuffer is the per-subscriber channel depth on the Bus. A subscriber that falls
-// this far behind starts losing the oldest events rather than stalling the emit path.
-const subBuffer = 256
-
-// Bus fans out emitted envelopes to live subscribers. Each subscriber gets its own
-// buffered channel; a full channel drops the event for THAT subscriber only (select
-// with a default) so one slow consumer can never block AppendEvent, the canary, or a
-// sibling subscriber. Dropping is acceptable here because subscriptions are a live
-// tail, not a durable log — the Store is the durable record.
-type Bus struct {
-	mu   sync.Mutex
-	next int
-	subs map[int]chan Envelope
-}
-
-// NewBus builds an empty Bus.
-func NewBus() *Bus {
-	return &Bus{subs: map[int]chan Envelope{}}
-}
-
-// Subscribe returns a channel of future envelopes. The subscription lives until ctx
-// is cancelled, at which point the channel is removed and closed so ranging callers
-// terminate cleanly.
-func (b *Bus) Subscribe(ctx context.Context) <-chan Envelope {
-	ch := make(chan Envelope, subBuffer)
-	b.mu.Lock()
-	id := b.next
-	b.next++
-	b.subs[id] = ch
-	b.mu.Unlock()
-
-	go func() {
-		<-ctx.Done()
-		b.mu.Lock()
-		delete(b.subs, id)
-		close(ch)
-		b.mu.Unlock()
-	}()
-	return ch
-}
-
-// publish delivers e to every subscriber, dropping for any whose buffer is full.
-func (b *Bus) publish(e Envelope) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	for _, ch := range b.subs {
-		select {
-		case ch <- e:
-		default: // slow subscriber: drop rather than block the shared emit path
-		}
-	}
-}
 
 // Supervisor builds every registered plugin, gives each its own SQLite Store and a
 // recover-guarded goroutine, and owns the shared emit path (Store append -> health
@@ -105,6 +51,19 @@ func (sv *Supervisor) Health() *HealthAggregator { return sv.health }
 // Bus exposes the fan-out bus so callers can wire subscriptions.
 func (sv *Supervisor) Bus() *Bus { return sv.bus }
 
+// Plugins returns a snapshot copy of the currently running plugins keyed by name, so
+// the server can discover optional interfaces (e.g. HTTPRoutes) without core knowing
+// any concrete plugin type. A plugin appears only after its Start goroutine launches.
+func (sv *Supervisor) Plugins() map[string]Plugin {
+	sv.mu.Lock()
+	defer sv.mu.Unlock()
+	out := make(map[string]Plugin, len(sv.plugins))
+	for n, p := range sv.plugins {
+		out[n] = p
+	}
+	return out
+}
+
 // emitFor builds the emit closure a plugin (and the canary) uses: persist to the
 // plugin's ring, stamp health freshness, then fan out to subscribers. It is bound to
 // one plugin's name and Store so the write always lands in the right db.
@@ -126,7 +85,7 @@ func (sv *Supervisor) emitFor(name string, store *Store) Emit {
 // the others. Exposed (unexported) for tests that need plugins running without the
 // blocking Run loop.
 func (sv *Supervisor) startAll(ctx context.Context) {
-	for _, name := range sortedKeys(sv.factories) {
+	for _, name := range SortedFactoryNames(sv.factories) {
 		sv.health.MarkStarting(name)
 
 		plugin, err := sv.factories[name](sv.cfg.PluginConfigFor(name))
@@ -134,6 +93,12 @@ func (sv *Supervisor) startAll(ctx context.Context) {
 			log.Printf("core: build plugin %q failed: %v", name, err)
 			sv.health.MarkStale(name)
 			continue
+		}
+
+		// An optional CursorReporter surfaces the plugin's resume cursor in the
+		// health snapshot without core knowing the plugin's concrete type.
+		if cr, ok := plugin.(CursorReporter); ok {
+			sv.health.SetCursorFunc(name, func() string { return cr.Cursor(ctx) })
 		}
 
 		store, err := OpenStore(ctx, filepath.Join(sv.cfg.DataDir, name+".db"), sv.ringCapacity)
@@ -203,9 +168,10 @@ func (sv *Supervisor) Stop() {
 	}
 }
 
-// StopCanary suppresses the canary for one plugin. Used by the panic-inject / test
-// path to simulate a plugin that has stopped emitting, so it can be observed
-// crossing the lag threshold into stale.
+// StopCanary suppresses the canary for one plugin. It is the PRODUCTION path for a
+// dead plugin: stopDead calls it when a plugin panics or its Start returns, so core
+// stops firing synthetic canary events that would otherwise advance the dead
+// plugin's lastEventAt and mask the failure as ok. It is not a test-only hook.
 func (sv *Supervisor) StopCanary(name string) {
 	sv.mu.Lock()
 	defer sv.mu.Unlock()
@@ -244,14 +210,4 @@ func (sv *Supervisor) fireCanary(ctx context.Context, name string) error {
 		Key:    "canary:" + name,
 	}
 	return sv.emitFor(name, store)(ctx, e)
-}
-
-// sortedKeys returns a factory map's names in stable order for deterministic startup.
-func sortedKeys(m map[string]Factory) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
 }

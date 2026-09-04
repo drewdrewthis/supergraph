@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"net/http"
 	"time"
 )
 
@@ -13,7 +14,8 @@ type Emit func(ctx context.Context, e Envelope) error
 
 // Plugin is the FIXED contract for every data source compiled into the binary.
 // It is deliberately small: adding a source must not require editing core, so the
-// four methods below are the whole surface core depends on.
+// three methods below are the whole REQUIRED surface core depends on. Optional
+// capabilities (CursorReporter, HTTPRoutes) are separate interfaces core type-asserts.
 type Plugin interface {
 	// Name is the plugin's stable id. It is used as the SQLite filename and the
 	// health key, so it must never change across versions of a plugin.
@@ -25,9 +27,25 @@ type Plugin interface {
 	// each event. It runs in its own recover-guarded goroutine so a panic here
 	// isolates to this plugin (marks it stale) rather than taking down the process.
 	Start(ctx context.Context, emit Emit) error
-	// Health returns a freshness snapshot for the _health endpoint. It is polled by
-	// core, not pushed, so it must be cheap and non-blocking.
-	Health(ctx context.Context) HealthStatus
+}
+
+// CursorReporter is an OPTIONAL Plugin interface. A plugin that tracks a resume
+// cursor (a poll high-water mark, a last-seen id) implements it so its cursor shows
+// in the health snapshot. Core does NOT require it: freshness is derived from the
+// emit path, not from a polled Health method. Cursor is invoked from within a health
+// Snapshot while core holds its aggregator lock, so it MUST be cheap and non-blocking
+// — return an in-memory value, never do I/O.
+type CursorReporter interface {
+	Cursor(ctx context.Context) string
+}
+
+// HTTPRoutes is an OPTIONAL Plugin interface. A plugin that needs its own HTTP
+// surface (e.g. a webhook receiver) returns a map of relative pattern to handler;
+// core mounts each under /plugins/<name>/<pattern>, so adding an HTTP source needs
+// zero core edit (S5). Patterns are path-relative to that prefix (a leading slash is
+// optional); the handler sees the full request path.
+type HTTPRoutes interface {
+	Routes() map[string]http.Handler
 }
 
 // HealthState is the coarse liveness classification core derives from event lag.

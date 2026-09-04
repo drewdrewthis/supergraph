@@ -40,7 +40,7 @@ Feature: Core-tier supergraph server
     Then stderr contains an "address in use" error
     And exit code is non-zero
 
-  @integration @service @linux @AC-CORE-7
+  @integration @service @linux @AC-CORE-7a
   Scenario: Install is idempotent on Linux
     Given a clean data dir <tmp> with no supergraph service installed
     When I run `supergraph install`
@@ -52,7 +52,7 @@ Feature: Core-tier supergraph server
     When I run `supergraph uninstall`
     Then `systemctl --user status supergraph` reports no unit
 
-  @integration @service @darwin @AC-CORE-7
+  @integration @service @darwin @AC-CORE-7b
   Scenario: Install is idempotent on macOS
     Given a clean data dir <tmp> with no supergraph service installed
     When I run `supergraph install`
@@ -141,7 +141,8 @@ Feature: Core-tier supergraph server
   # AC-CORE-4: "Panic isolation — F5" → covered in plugins/template/template.feature
   # AC-CORE-5: "Canary positive-fire, named channel" → covered in plugins/template/template.feature
   # AC-CORE-6: "CLI serve + query round-trip" → Scenario: CLI serve binds the port and query round-trips
-  # AC-CORE-7: "Install idempotent, OS-detected" → Scenario: Install is idempotent on Linux / Install is idempotent on macOS
+  # AC-CORE-7a: "Install idempotent, Linux/systemd" → Scenario: Install is idempotent on Linux
+  # AC-CORE-7b: "Install idempotent, macOS/launchd" → Scenario: Install is idempotent on macOS
   # AC-CORE-8: "Local subscription push" → Scenario: Local websocket subscription receives a pushed event
   # AC-CORE-9: ".feature runner red/green" → Scenario: The .feature runner reports a fully-satisfied scenario as green (+ deliberately-unmet counterpart)
   # AC-CORE-10: "S5 — zero core edit" → covered in plugins/template/template.feature

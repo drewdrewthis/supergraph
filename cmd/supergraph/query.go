@@ -6,30 +6,53 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 
 	"github.com/spf13/cobra"
 
 	"github.com/drewdrewthis/supergraph/core"
 )
 
+// defaultQueryEndpoint is the loopback GraphQL URL `query` targets when no config is
+// present, so the command works out of the box without a full config file.
+const defaultQueryEndpoint = "http://127.0.0.1:7788/graphql"
+
 func queryCmd() *cobra.Command {
-	return &cobra.Command{
+	var endpoint string
+	cmd := &cobra.Command{
 		Use:   "query '<graphql>'",
 		Short: "Run a GraphQL query against the local server and print JSON",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
-			cfg, err := core.LoadConfig(configPath)
-			if err != nil {
-				return err
-			}
-			return runQuery(cfg.Listen, args[0])
+			return runQuery(resolveEndpoint(endpoint, configPath), args[0])
 		},
 	}
+	cmd.Flags().StringVar(&endpoint, "endpoint", defaultQueryEndpoint,
+		"GraphQL endpoint URL (overrides the config's listen address)")
+	return cmd
 }
 
-func runQuery(listen, query string) error {
+// resolveEndpoint chooses the endpoint without requiring a full config: an explicit
+// --endpoint wins; otherwise, if the config file exists AND loads, its Listen is
+// used; otherwise the loopback default. A missing or invalid config (including one
+// without hostId) is NOT fatal for `query` — it silently falls back to the default.
+func resolveEndpoint(endpoint, cfgPath string) string {
+	if endpoint != defaultQueryEndpoint {
+		return endpoint
+	}
+	if _, err := os.Stat(cfgPath); err == nil {
+		if cfg, err := core.LoadConfig(cfgPath); err == nil {
+			return "http://" + cfg.Listen + "/graphql"
+		}
+	}
+	return endpoint
+}
+
+func runQuery(endpoint, query string) error {
 	body, _ := json.Marshal(map[string]string{"query": query})
-	resp, err := http.Post("http://"+listen+"/graphql", "application/json", bytes.NewReader(body))
+	// endpoint comes from --endpoint or the operator's own config Listen, not
+	// attacker input, so posting to a variable URL here is intended.
+	resp, err := http.Post(endpoint, "application/json", bytes.NewReader(body)) //nolint:gosec // operator-supplied endpoint, not attacker input
 	if err != nil {
 		return fmt.Errorf("query transport: %w", err)
 	}

@@ -1,7 +1,7 @@
 # supergraph dev harness. `make dev` is the one-command bring-up (AC-CORE-15):
 # it builds, points every plugin db at a throwaway .dev/data dir (never the real
 # ~/.local/share), and runs the server in the foreground with the template plugin.
-.PHONY: build generate test features features-red features-pending dev dev-check
+.PHONY: build build-harness generate test features features-red features-pending dev dev-check
 include mk/version.mk
 
 BIN := bin/supergraph
@@ -11,6 +11,12 @@ LISTEN := 127.0.0.1:7788
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o $(BIN) ./cmd/supergraph
+
+# build-harness is the dev build: it adds -tags harness so the harness-only sibling
+# plugin (fakeok) is compiled in for the panic-isolation demo. Production `build`
+# never sets the tag, so fakeok never ships.
+build-harness:
+	go build -tags harness -ldflags "$(LDFLAGS)" -o $(BIN) ./cmd/supergraph
 
 generate:
 	go run github.com/99designs/gqlgen generate
@@ -40,13 +46,13 @@ $(DEV_CONFIG):
 	mkdir -p $(DEV_DIR)
 	printf 'hostId = "dev"\nlisten = "%s"\ndataDir = "%s/data"\ncanaryIntervalSeconds = 5\nlagThresholdSeconds = 30\n' "$(LISTEN)" "$(DEV_DIR)" > $(DEV_CONFIG)
 
-dev: build $(DEV_CONFIG)
+dev: build-harness $(DEV_CONFIG)
 	$(BIN) --config $(DEV_CONFIG) serve
 
 # dev-check is the non-interactive form used by AC-CORE-15: it backgrounds serve,
 # polls /health until it returns 200 with a "template" entry (bounded 10s), prints
 # that body, then always kills serve. Exits 0 on success, 1 on timeout.
-dev-check: build $(DEV_CONFIG)
+dev-check: build-harness $(DEV_CONFIG)
 	@set -e; \
 	$(BIN) --config $(DEV_CONFIG) serve & \
 	SERVE_PID=$$!; \

@@ -2,6 +2,7 @@ package core
 
 import (
 	"fmt"
+	"sort"
 	"sync"
 )
 
@@ -37,5 +38,17 @@ func Factories() map[string]Factory {
 	for name, f := range factories {
 		out[name] = f
 	}
+	return out
+}
+
+// SortedFactoryNames returns a factory map's keys in ascending order — the stable
+// plugin ordering shared by the supervisor's deterministic startup and the CLI's
+// registered-plugins log, so both agree on order without duplicating the sort.
+func SortedFactoryNames(m map[string]Factory) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
 	return out
 }

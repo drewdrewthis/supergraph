@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"sort"
 	"syscall"
 	"time"
 
@@ -42,12 +41,7 @@ func runServe() error {
 	}
 
 	factories := core.Factories()
-	names := make([]string, 0, len(factories))
-	for n := range factories {
-		names = append(names, n)
-	}
-	sort.Strings(names)
-	logger.Info("registered plugins", "plugins", names)
+	logger.Info("registered plugins", "plugins", core.SortedFactoryNames(factories))
 
 	health := core.NewHealthAggregator(cfg.LagThresholdSeconds)
 	bus := core.NewBus()

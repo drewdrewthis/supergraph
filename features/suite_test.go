@@ -31,7 +31,9 @@ func TestMain(m *testing.M) {
 	defer os.RemoveAll(tmp)
 
 	binPath = filepath.Join(tmp, "supergraph")
-	build := exec.Command("go", "build", "-o", binPath, "../cmd/supergraph")
+	// -tags harness compiles in the fakeok plugin (panic-isolation sibling,
+	// AC-CORE-4) which lives behind the harness build tag in non-test builds.
+	build := exec.Command("go", "build", "-tags", "harness", "-o", binPath, "../cmd/supergraph")
 	build.Stdout = os.Stderr
 	build.Stderr = os.Stderr
 	if err := build.Run(); err != nil {

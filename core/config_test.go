@@ -85,6 +85,50 @@ func TestLoadConfigMissingHostID(t *testing.T) {
 	}
 }
 
+// C9: a non-loopback listen with no tokens is a hard error naming listen and tokens.
+func TestLoadConfigNonLoopbackRequiresTokens(t *testing.T) {
+	_, err := LoadConfig(writeConfig(t, "hostId = \"box-a\"\nlisten = \"0.0.0.0:7788\"\n"))
+	if err == nil {
+		t.Fatal("expected error for non-loopback listen without tokens, got nil")
+	}
+	if !strings.Contains(err.Error(), "listen") || !strings.Contains(err.Error(), "tokens") {
+		t.Errorf("error %q must name both listen and tokens", err.Error())
+	}
+}
+
+// C9: a non-loopback listen WITH at least one token loads cleanly.
+func TestLoadConfigNonLoopbackWithTokens(t *testing.T) {
+	c, err := LoadConfig(writeConfig(t, `
+hostId = "box-a"
+listen = "0.0.0.0:7788"
+
+[tokens]
+cli = "secret"
+`))
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if c.Listen != "0.0.0.0:7788" {
+		t.Errorf("Listen = %q", c.Listen)
+	}
+}
+
+// C9: ListenIsLoopback classifies loopback binds and rejects off-box ones.
+func TestListenIsLoopback(t *testing.T) {
+	loopback := []string{"127.0.0.1:7788", "127.0.0.5:7788", "[::1]:7788", "localhost:7788"}
+	for _, l := range loopback {
+		if !ListenIsLoopback(l) {
+			t.Errorf("ListenIsLoopback(%q) = false, want true", l)
+		}
+	}
+	offbox := []string{"0.0.0.0:7788", "192.0.2.1:7788", ":7788"}
+	for _, l := range offbox {
+		if ListenIsLoopback(l) {
+			t.Errorf("ListenIsLoopback(%q) = true, want false", l)
+		}
+	}
+}
+
 func TestDefaultConfigPath(t *testing.T) {
 	if !strings.HasSuffix(DefaultConfigPath(), filepath.Join("supergraph", "config.toml")) {
 		t.Errorf("DefaultConfigPath = %q", DefaultConfigPath())

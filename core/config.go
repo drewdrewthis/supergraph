@@ -2,6 +2,7 @@ package core
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -68,7 +69,37 @@ func LoadConfig(path string) (Config, error) {
 		return Config{}, fmt.Errorf("core: config %s: hostId is required (no default allowed)", path)
 	}
 	c.applyDefaults()
+	// A non-loopback listen exposes the API off-box, so it MUST carry at least one
+	// bearer token or the server would be open to the network. Loopback binds are
+	// left tokenless for the zero-config local case.
+	if !ListenIsLoopback(c.Listen) && len(c.Tokens) == 0 {
+		return Config{}, fmt.Errorf(
+			"core: config %s: listen %q is not loopback, so tokens must be set (add a [tokens] entry)",
+			path, c.Listen)
+	}
 	return c, nil
+}
+
+// ListenIsLoopback reports whether a listen address binds only the loopback
+// interface. It is the single predicate behind both the mandatory-token rule
+// (LoadConfig) and the Bearer auth middleware (server.New), so the two never
+// disagree on what counts as off-box. A bare port (":7788", host empty) binds all
+// interfaces and is therefore NOT loopback.
+func ListenIsLoopback(listen string) bool {
+	host, _, err := net.SplitHostPort(listen)
+	if err != nil {
+		host = listen
+	}
+	switch host {
+	case "":
+		return false
+	case "localhost":
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
 }
 
 // applyDefaults fills every optional field that was left at its zero value.

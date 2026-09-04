@@ -115,6 +115,7 @@ type world struct {
 	ws       *wsClient
 	wsData   map[string]any
 	wsPushed bool
+	wsEmitAt time.Time // AC-CORE-8: clock start, set after connection setup/ack so the <1s bound measures only emit-to-receipt
 
 	// AC-CORE-12
 	bootStdout string
@@ -138,7 +139,7 @@ type world struct {
 	concurrentRows int
 	lockErr        atomic.Bool
 
-	// service scenarios (AC-CORE-7 / -14, gated by FEATURES_SERVICE)
+	// service scenarios (AC-CORE-7a/7b / -14, gated by FEATURES_SERVICE)
 	svc bool
 }
 

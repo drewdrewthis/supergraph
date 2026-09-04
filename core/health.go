@@ -21,12 +21,13 @@ type HealthAggregator struct {
 }
 
 // pluginHealth is one plugin's mutable freshness state. State is not stored; it is
-// derived at Snapshot time from lastEventAt, the panic flag, and the current clock,
-// so a plugin can go stale purely by the passage of time with no event to trigger it.
+// derived at Snapshot time from lastEventAt, the forcedStale flag, and the current
+// clock, so a plugin can go stale purely by the passage of time with no event to
+// trigger it. cursorFn, when set, is the plugin's own CursorReporter.
 type pluginHealth struct {
 	lastEventAt *time.Time
-	cursor      string
-	panicked    bool
+	cursorFn    func() string
+	forcedStale bool
 }
 
 // NewHealthAggregator builds an aggregator whose stale threshold is thresholdSeconds.
@@ -50,18 +51,18 @@ func (h *HealthAggregator) entry(name string) *pluginHealth {
 
 // MarkStarting registers a plugin before its first event so it shows as "starting"
 // from the moment the supervisor builds it. It is also the only path that CLEARS a
-// panic mark: a plugin becomes healthy again only by being (re)started, never by a
-// stray event, which is what keeps a crashed plugin from being laundered back to ok.
+// forced-stale mark: a plugin becomes healthy again only by being (re)started, never
+// by a stray event, which is what keeps a crashed plugin from being laundered to ok.
 func (h *HealthAggregator) MarkStarting(name string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.entry(name).panicked = false
+	h.entry(name).forcedStale = false
 }
 
-// Record stamps a plugin's latest event time. It deliberately does NOT clear a panic
-// mark: once a plugin's Start has crashed it is not running, so any event arriving
-// afterwards (e.g. a stale canary in flight) must not resurrect it to ok. Only an
-// explicit restart via MarkStarting clears the flag.
+// Record stamps a plugin's latest event time. It deliberately does NOT clear a
+// forced-stale mark: once a plugin's Start has crashed it is not running, so any
+// event arriving afterwards (e.g. a stale canary in flight) must not resurrect it to
+// ok. Only an explicit restart via MarkStarting clears the flag.
 func (h *HealthAggregator) Record(name string, at time.Time) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -70,24 +71,29 @@ func (h *HealthAggregator) Record(name string, at time.Time) {
 	p.lastEventAt = &t
 }
 
-// MarkStale flags a plugin as unhealthy independent of lag — used when its Start
-// goroutine panics (AC-CORE-4). It stays stale until the next Record.
+// MarkStale flags a plugin as unhealthy independent of lag. It is used for every
+// forced failure — a panic in Start (AC-CORE-4) as well as a build, migrate, or
+// store-open failure — so the field is named forcedStale, not "panicked". It stays
+// stale until the next MarkStarting.
 func (h *HealthAggregator) MarkStale(name string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.entry(name).panicked = true
+	h.entry(name).forcedStale = true
 }
 
-// SetCursor records a plugin's persisted cursor for the health snapshot.
-func (h *HealthAggregator) SetCursor(name, cursor string) {
+// SetCursorFunc registers a plugin's cursor accessor (its CursorReporter) for the
+// health snapshot. fn is called while the aggregator lock is held during Snapshot,
+// so it MUST be cheap and non-blocking — an in-memory read, never I/O.
+func (h *HealthAggregator) SetCursorFunc(name string, fn func() string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.entry(name).cursor = cursor
+	h.entry(name).cursorFn = fn
 }
 
 // Snapshot returns every plugin's current HealthStatus, sorted by plugin name for
 // a stable endpoint ordering. LagSeconds is now - lastEventAt; State precedence is
-// panic (stale) > no-event-yet (starting) > lag-over-threshold (stale) > ok.
+// forced-stale > no-event-yet (starting) > lag-over-threshold (stale) > ok. Cursor
+// is pulled from the plugin's CursorReporter, if it registered one.
 func (h *HealthAggregator) Snapshot() []HealthStatus {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -95,9 +101,13 @@ func (h *HealthAggregator) Snapshot() []HealthStatus {
 	now := h.now()
 	out := make([]HealthStatus, 0, len(h.plugins))
 	for name, p := range h.plugins {
-		hs := HealthStatus{Plugin: name, Cursor: p.cursor}
+		cursor := ""
+		if p.cursorFn != nil {
+			cursor = p.cursorFn()
+		}
+		hs := HealthStatus{Plugin: name, Cursor: cursor}
 		switch {
-		case p.panicked:
+		case p.forcedStale:
 			hs.State = HealthStale
 		case p.lastEventAt == nil:
 			hs.State = HealthStarting

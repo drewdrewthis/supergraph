@@ -71,12 +71,16 @@ type Envelope struct {
 type Emit func(ctx context.Context, e Envelope) error
 
 // Plugin is the FIXED contract. Every data source is a Plugin compiled into the binary.
+// Core derives freshness from the emit path — a plugin has no Health() method.
 type Plugin interface {
 	Name() string                                   // stable id: SQLite filename + health key
 	Migrate(ctx context.Context, s *Store) error    // add-only migrations at boot on own db
 	Start(ctx context.Context, emit Emit) error     // run listener/poller until ctx done; calls emit
-	Health(ctx context.Context) HealthStatus        // freshness snapshot for _health
 }
+
+// Optional, type-asserted by core (a plugin may implement neither):
+type CursorReporter interface { Cursor(ctx context.Context) string }        // cursor for _health snapshot
+type HTTPRoutes interface { Routes() map[string]http.Handler }              // mounted at /plugins/<name>/<pattern> (S5)
 
 type HealthState string
 const (
@@ -154,7 +158,8 @@ Core-tier acceptance criteria. **Primary evidence is use-proof: an observation f
 - **AC-CORE-4 (Panic isolation — F5).** In a serve harness with **two registered plugins — `template` and a second `fakeok` fake that never panics** — inducing a panic in `template`'s `Start` sets `template` `_health` `state=stale` within one interval; `GET /health` still returns 200, `fakeok` still reads `ok`, and the base `{ __typename }` query still returns 200. Fails if the process exits, `/health` errors, or `fakeok` flips off `ok`. **Evidence:** `/health` JSON after induced panic (`template` stale, `fakeok` ok) + server still serving (exit-code-0 process). (Backfill: `go test ./core` two-fake unit test.)
 - **AC-CORE-5 (Canary positive-fire, named channel).** Channel = `/health.lastEventAt`. With the canary at interval I, two `/health` captures one interval apart show `template.lastEventAt` **advancing** (positive fire — the synthetic event is landing, per F6 spirit); then, after cutting the plugin's emit, a capture after `> T` shows `state=stale`. Fails if `lastEventAt` does not advance between the two captures (never-fired = broken) or a cut-off plugin stays `ok`. **Evidence:** two `/health` captures I apart with advancing `lastEventAt` + a third capture showing `state=stale` after emit cut.
 - **AC-CORE-6 (CLI serve + query round-trip).** `supergraph serve` binds `127.0.0.1:7788`; in a second shell `supergraph query '{ __typename }'` prints JSON containing `"Query"` and exits 0; binding a second `serve` fails with a clear "address in use" error (not a silent success). **Evidence:** terminal capture of both commands' stdout + exit codes.
-- **AC-CORE-7 (Install idempotent, OS-detected).** On Linux, `supergraph install` writes a `systemd --user` unit and enables it (requires a live user session / lingering); on macOS it writes a launchd plist. Running `install` twice both exit 0 and leave exactly one unit/plist (no duplicate, no error on second run); `uninstall` removes it. Fails if the second run errors or a duplicate unit appears. **Evidence:** captured on **macOS (dev box): `launchctl list | grep supergraph`**; on **Linux spike boxes (hetzner-agents, langwatch-dev): `systemctl --user status supergraph`** — before/after two installs, quoted, per OS.
+- **AC-CORE-7a (Install idempotent, Linux/systemd).** On Linux, `supergraph install` writes a `systemd --user` unit and enables it (requires a live user session / lingering). Running `install` twice both exit 0 and leave exactly one unit (no duplicate, no error on second run); `uninstall` removes it. Fails if the second run errors or a duplicate unit appears. **Evidence:** captured on **Linux spike boxes (hetzner-agents, langwatch-dev): `systemctl --user status supergraph`** — before/after two installs, quoted.
+- **AC-CORE-7b (Install idempotent, macOS/launchd).** On macOS, `supergraph install` writes a launchd plist. Running `install` twice both exit 0 and leave exactly one plist (no duplicate, no error on second run); `uninstall` removes it. Fails if the second run errors or a duplicate plist appears. **Evidence:** captured on **macOS (dev box): `launchctl list | grep supergraph`** — before/after two installs, quoted.
 - **AC-CORE-8 (Local subscription push).** A websocket GraphQL subscription client subscribed to **`templateEvents`** on `127.0.0.1:7788/graphql` receives a pushed message < 1s after a matching event is `emit`ted; closing the socket stops delivery with no server error. Fails if no message arrives within 1s or the server logs an error on client disconnect. **Evidence:** CLI/client capture of subscribe(`templateEvents`) → emit → received-payload with timestamps.
 - **AC-CORE-9 (.feature runner red/green).** `go test ./features/...` executes `.feature` scenarios via godog; a scenario with all steps satisfied reports pass; a scenario with one deliberately-unmet step makes `go test` exit non-zero and names the failing step. Fails if an unmet scenario is reported green or skipped. **Evidence:** two `go test ./features/...` runs — one exit 0, one exit ≠ 0 with the failing step name quoted.
 - **AC-CORE-10 (S5 — zero core edit).** After adding the template plugin (new files under `plugins/template/` + `graph/plugins_import.go` + regenerated `graph/`), `git diff --stat core/` reports **0 files changed**, and the running binary serves `_health` for `template`. Fails if any file under `core/` appears in the diff. **Evidence:** `git diff --stat core/` output (empty) + `/health` screenshot showing `template`.
