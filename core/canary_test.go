@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 )
@@ -28,7 +29,7 @@ func TestCanaryPositiveFire(t *testing.T) {
 	for {
 		select {
 		case e := <-sub:
-			if e.Type == "canary" && e.Source == "template" && e.Key == "canary:template" {
+			if e.Type == "canary" && e.Source == "template" && e.Key == "canary:template@h" {
 				return // observed positive fire
 			}
 		case <-deadline:
@@ -114,4 +115,35 @@ func TestCanaryStopThenStale(t *testing.T) {
 
 	sv.StopCanary("template") // no more emits -> lag climbs past 50ms
 	waitForState(t, h, "template", HealthStale)
+}
+
+// AC-CORE-5: the canary Key carries the box identity like every other key, so a
+// canary from one box in a mesh never collides with the same plugin's canary from
+// another box.
+func TestCanaryKeyCarriesHostID(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	plug := newFake("template", false, &recorder{})
+	cfg := Config{HostID: "box-7", DataDir: t.TempDir(), LagThresholdSeconds: 300}
+	bus := NewBus()
+	sv := NewSupervisor(cfg, map[string]Factory{"template": factoryFor(plug)}, NewHealthAggregator(cfg.LagThresholdSeconds), bus)
+
+	sv.startAll(ctx)
+	defer sv.Stop()
+	<-plug.emitted
+
+	sub := bus.Subscribe(ctx)
+	if err := sv.fireCanary(ctx, "template"); err != nil {
+		t.Fatalf("fireCanary: %v", err)
+	}
+
+	select {
+	case e := <-sub:
+		if !strings.HasSuffix(e.Key, "@"+cfg.HostID) {
+			t.Fatalf("canary Key %q does not end with @%s", e.Key, cfg.HostID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("no canary envelope observed on the bus")
+	}
 }

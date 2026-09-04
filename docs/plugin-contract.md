@@ -163,7 +163,7 @@ A plugin does **not** implement a `Health()` method. Core derives every field of
 
 ## Canary / heartbeat
 
-Core emits a synthetic `canary` event envelope per plugin on a periodic interval, sent through the normal `emit()` path. Plugins receive no alert injection code; alerting is an external poller of the `_health` endpoint.
+Core emits a synthetic `canary` event envelope per plugin on a periodic interval, sent through the normal `emit()` path. Plugins receive no alert injection code; alerting is an external poller of the `_health` endpoint. The envelope `Key` is `"canary:" + name + "@" + hostId`, matching every other key's `@host` suffix.
 
 ## Tests
 

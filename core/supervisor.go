@@ -207,7 +207,7 @@ func (sv *Supervisor) fireCanary(ctx context.Context, name string) error {
 		Source: name,
 		Type:   "canary",
 		V:      1,
-		Key:    "canary:" + name,
+		Key:    "canary:" + name + "@" + sv.cfg.HostID,
 	}
 	return sv.emitFor(name, store)(ctx, e)
 }
