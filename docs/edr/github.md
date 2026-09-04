@@ -11,26 +11,32 @@ exactly the entries that touch the changed object (tag purge = keyed delete)**. 
 `brunoborges/ghx` was read in full (see [History](#history)); it is **not vendored** — we borrow only
 its singleflight pattern (~40 LOC, `ghx src/internal/daemon/handler.go:203`).
 
-**Hard constraints (owner):** ≤ **800 LOC prod** for `plugins/github/**` excluding tests and
+**Hard constraints (owner):** ≤ **1300 LOC prod** (raised from 800, Option A) for `plugins/github/**` excluding tests and
 `internal/fakegh` (per-package budget below); zero core diff; PAT-only; HMAC per hook; per-repo hook
 creation from `/user/repos` (F3); point-budget floor pause + rate-limit logging; CLI `--op/--var` +
 `schema <Type>` in `cmd/` only; fakegh httptest server + fake `gh` stub for `@local`.
 
 ---
 
-## LOC budget (prod, ≤ 800 total; tests + `internal/fakegh` excluded)
-| Package/file (`plugins/github/`) | Budget | Responsibility |
+## LOC budget (prod, cap **1300** total; tests + `internal/fakegh` excluded)
+Cap raised from 800→**1300** by owner (Option A, 2026-09-05): a faithful build of the
+full spec measured ~1250. The original per-file estimates under-provisioned the
+shared HTTP/rate-limit client (now its own `client.go`) and the tag-index store, key
+grammar, and JSON executor. Table shows **Actual** LOC (EDR strip formula) at the
+decision, not aspirational budgets.
+| Package/file (`plugins/github/`) | Actual | Responsibility |
 |---|---:|---|
-| `github.go` | 90 | plugin wiring: `Register`/`New`/`Name`/`Migrate`/`Start`/`HTTPRoutes`/`CursorReporter`/config |
-| `keys.go` | 60 | key grammar: parse/format + object→key + event→key derivation |
-| `store.go` | 110 | SQLite `github_nodes`: upsert, get, `deleteKeys`, etag/fetchedAt, pin eval, tag index |
-| `proxy.go` | 130 | read-through resolve: miss→fetch→store→serve; ETag/304; **singleflight (borrowed ~40)** |
-| `webhook.go` | 100 | HMAC verify; event→key map; upsert/purge; emit envelopes |
-| `executor.go` | 120 | JSON-backed GraphQL executor + named-op loader + declared-key scoping |
-| `ingest.go` | 100 | `gh webhook forward` supervisor (backoff) + redelivery + `/notifications` poll (flag) |
-| `reconcile.go` | 90 | discovery `/user/repos` + hook creation + since-cursor + floor-pause + ratelog |
-| **Total** | **800** | CLI delta in `cmd/supergraph/` (~60) is counted separately, not in this budget |
-- **AC-GH-LOC** guards it: a CI step (`make loc-github`) runs `find plugins/github -name '*.go' ! -name '*_test.go' -not -path '*/fakegh/*' | xargs sed '/^\s*\/\//d;/^\s*$/d' | wc -l` and fails > 800.
+| `github.go` | 175 | plugin wiring: `Register`/`New`/`Name`/`Migrate`/`Start`/`HTTPRoutes`/`CursorReporter`/config |
+| `keys.go` | 163 | key grammar as a **data table** (`kindSpecs`): parse + object→key + event→key + REST path + typename |
+| `client.go` | 105 | shared GitHub HTTP + rate-limit layer: REST/GraphQL calls, auth, ratelog, floor-pause |
+| `store.go` | 196 | SQLite `github_nodes`+`github_tags`+`github_hooks`+`github_deliveries`: upsert, get, purge, tag index, hooks, deliveries, pin |
+| `proxy.go` | 113 | read-through resolve: miss→fetch→store→serve; ETag/304; **singleflight (borrowed ~40)**; pin eval |
+| `webhook.go` | 61 | HMAC verify; event→key; purge; emit envelopes; delivery dedup |
+| `executor.go` | 211 | JSON-backed GraphQL executor + named-op loader + declared-key scoping (point/list) |
+| `ingest.go` | 117 | `gh webhook forward` supervisor (backoff) + redelivery + `/notifications` poll (flag) |
+| `reconcile.go` | 102 | discovery `/user/repos` + hook creation + since-cursor + floor-pause + ratelog |
+| **Total** | **1243** | cap **1300**; CLI delta in `cmd/supergraph/` (~60) is counted separately, not in this budget |
+- **AC-GH-LOC** guards it: a CI step (`make loc-github`) runs `find plugins/github -name '*.go' ! -name '*_test.go' -not -path '*/fakegh/*' | xargs sed '/^\s*\/\//d;/^\s*$/d' | wc -l` and fails > 1300.
 
 ## Cache key = object id (full grammar)
 Every cached node and every purge target is one canonical key. `@<hostId>` suffix is **optional**,
@@ -181,6 +187,17 @@ core/` = 0 (github serves via the **`HTTPRoutes`** seam, not the gqlgen glob).
 `reconcileIntervalSeconds` (3600 — also the worst-case staleness window), `notifications` (bool,
 default false), `[plugins.github.pin]` (above), `[plugins.github.ttl]` (per-kind seconds, default off),
 `baseURL` (test-only → fakegh).
+
+**Single `webhookSecret` (approved deviation, 2026-09-05):** one secret verifies *all*
+hooks and *all* redelivered events, rather than a per-hook secret. This assumes every
+hook the plugin manages lives on **one owner's repos** (the same owner discovered via
+`/user/repos`) — a safe assumption for the single-tenant, one-worker-per-box v1. If a
+future version manages hooks across multiple owners/orgs, this must become a per-hook
+secret keyed by repo, or cross-owner events will fail HMAC verification.
+
+**Single `github.node.purged` per accepted webhook (approved deviation):** an accepted
+webhook emits exactly one envelope (the purge), not a separate `github.webhook.received`
+— the feature contract (AC-GH-HMAC: "exactly one github event is emitted") governs.
 
 ## Failure modes
 - Webhook transport down → reconcile + redelivery heal.

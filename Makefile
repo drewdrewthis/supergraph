@@ -47,13 +47,13 @@ features-github:
 
 # loc-github guards the plugins/github/** LOC budget (docs/edr/github.md): prod
 # code only (no _test.go, no internal/fakegh), comments/blank lines stripped,
-# fails when the total exceeds 800 (AC-GH-LOC).
+# fails when the total exceeds 1300 (AC-GH-LOC; cap raised from 800 by owner, Option A).
 loc-github:
 	@files=$$(find plugins/github -name '*.go' ! -name '*_test.go' -not -path '*/fakegh/*' 2>/dev/null); \
 	if [ -z "$$files" ]; then count=0; else count=$$(echo "$$files" | xargs sed '/^\s*\/\//d;/^\s*$$/d' | wc -l | tr -d ' '); fi; \
 	echo "plugins/github prod LOC: $$count"; \
-	if [ "$$count" -gt 800 ]; then \
-		echo "loc-github: $$count LOC exceeds the 800 budget" >&2; \
+	if [ "$$count" -gt 1300 ]; then \
+		echo "loc-github: $$count LOC exceeds the 1300 budget" >&2; \
 		exit 1; \
 	fi
 

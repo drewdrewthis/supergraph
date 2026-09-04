@@ -1,12 +1,8 @@
 package github
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
-	"io"
-	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -14,11 +10,6 @@ import (
 
 	"github.com/drewdrewthis/supergraph/core"
 )
-
-// floorThresholdGQL is the GraphQL-points remaining at or below which a read pauses
-// to resetAt rather than risking a hard rate-limit failure (EDR §"Rate-limit
-// discipline"). REST pauses only at 0 (exhausted).
-const floorThresholdGQL = 10
 
 // flight is one in-flight fetch that concurrent misses on the same key share.
 type flight struct {
@@ -113,186 +104,6 @@ func (p *Plugin) emitUpdated(ctx context.Context, n *node) {
 		TS: n.UpdatedAt, Source: "github", Type: "github.node.updated", V: 1,
 		Key: n.Key, Payload: payload,
 	})
-}
-
-// httpGET issues a conditional GET against the REST base, logs the rate-limit
-// headers, and floor-pauses when REST quota is exhausted.
-func (p *Plugin) httpGET(ctx context.Context, path, etag string) (int, []byte, string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.cfg.baseURL+path, nil)
-	if err != nil {
-		return 0, nil, "", err
-	}
-	p.authorize(req)
-	if etag != "" {
-		req.Header.Set("If-None-Match", etag)
-	}
-	resp, err := p.hc.Do(req)
-	if err != nil {
-		return 0, nil, "", err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	body, _ := io.ReadAll(resp.Body)
-	p.logRESTRate(resp.Header)
-	return resp.StatusCode, body, resp.Header.Get("ETag"), nil
-}
-
-// httpGraphQL runs a GraphQL document against the configured endpoint.
-func (p *Plugin) httpGraphQL(ctx context.Context, query string, vars map[string]any) (map[string]any, error) {
-	return p.graphqlAt(ctx, p.cfg.graphqlURL, query, vars)
-}
-
-// graphqlAt runs a GraphQL document against an explicit URL (reconcile appends a
-// ?since= cursor), logs and floor-pauses on the rateLimit block, and returns the
-// decoded data object.
-func (p *Plugin) graphqlAt(ctx context.Context, url, query string, vars map[string]any) (map[string]any, error) {
-	reqBody, _ := json.Marshal(map[string]any{"query": query, "variables": vars})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(reqBody))
-	if err != nil {
-		return nil, err
-	}
-	p.authorize(req)
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := p.hc.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	raw, _ := io.ReadAll(resp.Body)
-	var out struct {
-		Data map[string]any `json:"data"`
-	}
-	_ = json.Unmarshal(raw, &out)
-	p.logGraphQLRate(ctx, out.Data)
-	return out.Data, nil
-}
-
-// httpPOST issues a JSON POST (hook creation, redelivery attempts) and returns the
-// status and body.
-func (p *Plugin) httpPOST(ctx context.Context, path string, body any) (int, []byte, error) {
-	b, _ := json.Marshal(body)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.cfg.baseURL+path, bytes.NewReader(b))
-	if err != nil {
-		return 0, nil, err
-	}
-	p.authorize(req)
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := p.hc.Do(req)
-	if err != nil {
-		return 0, nil, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	rb, _ := io.ReadAll(resp.Body)
-	p.logRESTRate(resp.Header)
-	return resp.StatusCode, rb, nil
-}
-
-func (p *Plugin) authorize(req *http.Request) {
-	if p.cfg.token != "" {
-		req.Header.Set("Authorization", "token "+p.cfg.token)
-	}
-}
-
-// logRESTRate logs the x-ratelimit-* headers and floor-pauses when exhausted
-// (AC-GH-RATELOG / AC-GH-FLOOR).
-func (p *Plugin) logRESTRate(h http.Header) {
-	rem := h.Get("X-RateLimit-Remaining")
-	reset := h.Get("X-RateLimit-Reset")
-	if rem == "" {
-		return
-	}
-	log.Printf("github: rate rest remaining=%s reset=%s", rem, reset)
-}
-
-// logGraphQLRate logs rateLimit{remaining,resetAt} and pauses to resetAt near the
-// points floor.
-func (p *Plugin) logGraphQLRate(ctx context.Context, data map[string]any) {
-	rl, ok := data["rateLimit"].(map[string]any)
-	if !ok {
-		return
-	}
-	rem := toInt(rl["remaining"])
-	resetAt, _ := time.Parse(time.RFC3339, fmt.Sprint(rl["resetAt"]))
-	log.Printf("github: rate graphql remaining=%d resetAt=%s", rem, resetAt.Format(time.RFC3339))
-	p.floorPause(ctx, rem, resetAt, floorThresholdGQL)
-}
-
-// floorPause blocks until reset when remaining is at or below threshold, so the
-// plugin backs off instead of hard-failing (AC-GH-FLOOR). The injected sleeper lets
-// tests drive it without real time.
-func (p *Plugin) floorPause(ctx context.Context, remaining int, reset time.Time, threshold int) {
-	if remaining > threshold {
-		return
-	}
-	d := reset.Sub(p.now())
-	if d <= 0 {
-		return
-	}
-	log.Printf("github: floor pause %s until %s", d, reset.Format(time.RFC3339))
-	p.sleep(ctx, d)
-}
-
-// restPath maps a canonical key to its REST GET path.
-func restPath(key string) string {
-	kind := kindOf(key)
-	rest := stripHost(key)[len(kind)+1:]
-	if kind == "user" {
-		return "/users/" + rest
-	}
-	owner, tail, _ := strings.Cut(rest, "/")
-	switch kind {
-	case "repo":
-		return "/repos/" + owner + "/" + tail
-	case "issue":
-		r, num := cutHash(tail)
-		return "/repos/" + owner + "/" + r + "/issues/" + num
-	case "pr":
-		r, num := cutHash(tail)
-		return "/repos/" + owner + "/" + r + "/pulls/" + num
-	case "checkRun":
-		r, id, _ := strings.Cut(tail, "/")
-		return "/repos/" + owner + "/" + r + "/check-runs/" + id
-	case "review":
-		r, rem := cutHash(tail)
-		num, id, _ := strings.Cut(rem, "/")
-		return "/repos/" + owner + "/" + r + "/pulls/" + num + "/reviews/" + id
-	case "comment":
-		r, rem := cutHash(tail)
-		_, id, _ := strings.Cut(rem, "/")
-		return "/repos/" + owner + "/" + r + "/issues/comments/" + id
-	case "label":
-		r, name, _ := strings.Cut(tail, "/")
-		return "/repos/" + owner + "/" + r + "/labels/" + name
-	case "release":
-		r, t, _ := strings.Cut(tail, "/")
-		return "/repos/" + owner + "/" + r + "/releases/tags/" + t
-	case "commit":
-		r, sha, _ := strings.Cut(tail, "/")
-		return "/repos/" + owner + "/" + r + "/commits/" + sha
-	case "ref":
-		r, name, _ := strings.Cut(tail, "/")
-		return "/repos/" + owner + "/" + r + "/git/refs/" + name
-	}
-	return "/repos/" + owner + "/" + tail
-}
-
-// cutHash splits "repo#number" into ("repo", "number").
-func cutHash(tail string) (string, string) {
-	r, num, _ := strings.Cut(tail, "#")
-	return r, num
-}
-
-// typenames maps a key kind to its GraphQL typename, stamped on stored nodes.
-var typenames = map[string]string{
-	"issue": "Issue", "pr": "PullRequest", "repo": "Repository",
-	"checkRun": "CheckRun", "review": "PullRequestReview", "comment": "IssueComment",
-	"label": "Label", "release": "Release", "commit": "Commit", "ref": "Ref", "user": "User",
-}
-
-func typenameFor(key string) string {
-	if t, ok := typenames[kindOf(key)]; ok {
-		return t
-	}
-	return "Node"
 }
 
 // evalPin classifies a node as immutable per the pin policy (EDR §"Immutable pin

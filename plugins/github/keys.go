@@ -1,7 +1,6 @@
 package github
 
 import (
-	"fmt"
 	"strings"
 )
 
@@ -10,10 +9,52 @@ import (
 //	key   := <kind>":"<scope>[ "#"<number> | "/"<id> ] [ "@"<hostId> ]
 //	scope := <owner>"/"<repo>   (except user/org kinds)
 //
-// Every key is one canonical string. keys.go parses it into its parts, derives
-// the tags a purge keys on, and maps a webhook event to the key it touches.
+// Every kind is ONE ROW in kindSpecs below — its key format, REST path, GraphQL
+// typename, and the webhook events that address it. Adding a kind is a new row, not
+// new code: parseKey/restPath/typenameFor/eventKey all read the table.
+type kindSpec struct {
+	kind     string   // leading token, e.g. "issue"
+	typename string   // GraphQL typename stamped on stored nodes
+	keyfmt   string   // key template, e.g. "issue:{owner}/{repo}#{disc}"
+	rest     string   // REST GET path template, e.g. "/repos/{owner}/{repo}/issues/{disc}"
+	events   []string // webhook X-GitHub-Event names that map to this kind ("" = none)
+	obj      string   // webhook payload object carrying the discriminator
+	field    string   // field in obj giving the discriminator (number/id/name/tag_name)
+}
 
-// kindOf returns the leading kind token ("issue", "pr", "checkRun", ...).
+// kindSpecs is the single source of truth for the key grammar and the webhook
+// event→key map. {disc} is the primary discriminator (issue/pr number, check-run
+// id, label name, ...); {subid} the second (review/comment id); {sub} a slash-
+// bearing tail (a ref name); {login} the user kind's sole segment.
+var kindSpecs = []kindSpec{
+	{kind: "issue", typename: "Issue", keyfmt: "issue:{owner}/{repo}#{disc}", rest: "/repos/{owner}/{repo}/issues/{disc}", events: []string{"issues", "issue_comment"}, obj: "issue", field: "number"},
+	{kind: "pr", typename: "PullRequest", keyfmt: "pr:{owner}/{repo}#{disc}", rest: "/repos/{owner}/{repo}/pulls/{disc}", events: []string{"pull_request", "pull_request_review", "pull_request_review_comment"}, obj: "pull_request", field: "number"},
+	{kind: "checkRun", typename: "CheckRun", keyfmt: "checkRun:{owner}/{repo}/{disc}", rest: "/repos/{owner}/{repo}/check-runs/{disc}", events: []string{"check_run"}, obj: "check_run", field: "id"},
+	{kind: "review", typename: "PullRequestReview", keyfmt: "review:{owner}/{repo}#{disc}/{subid}", rest: "/repos/{owner}/{repo}/pulls/{disc}/reviews/{subid}"},
+	{kind: "comment", typename: "IssueComment", keyfmt: "comment:{owner}/{repo}#{disc}/{subid}", rest: "/repos/{owner}/{repo}/issues/comments/{subid}"},
+	{kind: "label", typename: "Label", keyfmt: "label:{owner}/{repo}/{disc}", rest: "/repos/{owner}/{repo}/labels/{disc}", events: []string{"label"}, obj: "label", field: "name"},
+	{kind: "release", typename: "Release", keyfmt: "release:{owner}/{repo}/{disc}", rest: "/repos/{owner}/{repo}/releases/tags/{disc}", events: []string{"release"}, obj: "release", field: "tag_name"},
+	{kind: "commit", typename: "Commit", keyfmt: "commit:{owner}/{repo}/{disc}", rest: "/repos/{owner}/{repo}/commits/{disc}"},
+	{kind: "ref", typename: "Ref", keyfmt: "ref:{owner}/{repo}/{sub}", rest: "/repos/{owner}/{repo}/git/refs/{sub}"},
+	{kind: "repo", typename: "Repository", keyfmt: "repo:{owner}/{repo}", rest: "/repos/{owner}/{repo}"},
+	{kind: "user", typename: "User", keyfmt: "user:{login}", rest: "/users/{login}"},
+}
+
+var (
+	specByKind  = map[string]kindSpec{}
+	specByEvent = map[string]kindSpec{}
+)
+
+func init() {
+	for _, s := range kindSpecs {
+		specByKind[s.kind] = s
+		for _, e := range s.events {
+			specByEvent[e] = s
+		}
+	}
+}
+
+// kindOf returns the leading kind token ("issue", "pr", ...).
 func kindOf(key string) string {
 	if i := strings.IndexByte(key, ':'); i >= 0 {
 		return key[:i]
@@ -29,25 +70,76 @@ func stripHost(key string) string {
 	return key
 }
 
+// parseKey decomposes a key into the named parts the templates reference
+// (owner, repo, disc, subid, sub, login), driven only by the grammar's separators.
+func parseKey(key string) map[string]string {
+	kind := kindOf(key)
+	rest := stripHost(key)
+	if i := strings.IndexByte(rest, ':'); i >= 0 {
+		rest = rest[i+1:]
+	}
+	p := map[string]string{}
+	if kind == "user" {
+		p["login"] = rest
+		return p
+	}
+	owner, tail, _ := strings.Cut(rest, "/")
+	p["owner"] = owner
+	ri := strings.IndexAny(tail, "#/")
+	if ri < 0 {
+		p["repo"] = tail
+		return p
+	}
+	p["repo"] = tail[:ri]
+	rem := tail[ri:]
+	if rem[0] == '#' {
+		rem = rem[1:]
+		if si := strings.IndexByte(rem, '/'); si >= 0 {
+			p["disc"], p["subid"] = rem[:si], rem[si+1:]
+		} else {
+			p["disc"] = rem
+		}
+		return p
+	}
+	rem = rem[1:] // leading '/'
+	p["sub"] = rem
+	if si := strings.IndexByte(rem, '/'); si >= 0 {
+		p["disc"] = rem[:si]
+	} else {
+		p["disc"] = rem
+	}
+	return p
+}
+
+// fill substitutes {token} placeholders present in parts, leaving others intact.
+func fill(template string, parts map[string]string) string {
+	return placeholderRe.ReplaceAllStringFunc(template, func(m string) string {
+		if v, ok := parts[m[1:len(m)-1]]; ok {
+			return v
+		}
+		return m
+	})
+}
+
+// restPath maps a canonical key to its REST GET path via the table.
+func restPath(key string) string { return fill(specByKind[kindOf(key)].rest, parseKey(key)) }
+
+// typenameFor maps a key kind to its GraphQL typename via the table.
+func typenameFor(key string) string {
+	if s, ok := specByKind[kindOf(key)]; ok {
+		return s.typename
+	}
+	return "Node"
+}
+
 // scopePrefix returns the "repo:<owner>/<repo>" prefix a key lives under, or "" for
-// user/org kinds that have no repo scope. It is the coarse half of a list result's
-// covering tag.
+// user/org kinds that have no repo scope.
 func scopePrefix(key string) string {
-	body := stripHost(key)
-	i := strings.IndexByte(body, ':')
-	if i < 0 {
+	p := parseKey(key)
+	if p["owner"] == "" || p["repo"] == "" {
 		return ""
 	}
-	rest := body[i+1:]
-	parts := strings.SplitN(rest, "/", 3)
-	if len(parts) < 2 {
-		return "" // user:<login> — no repo scope
-	}
-	repo := parts[1]
-	if h := strings.IndexByte(repo, '#'); h >= 0 {
-		repo = repo[:h] // owner/repo#number → strip the number
-	}
-	return "repo:" + parts[0] + "/" + repo
+	return "repo:" + p["owner"] + "/" + p["repo"]
 }
 
 // composite is the tag a LIST result is stored under: its scope prefix joined with
@@ -62,57 +154,27 @@ func composite(key string) string {
 	return sp + "|" + kindOf(key)
 }
 
-// purgeTags are the tags a purge of key deletes on: the exact key (the node itself)
-// and its composite (every list result whose scope covers it).
-func purgeTags(key string) []string {
-	tags := []string{key}
-	if c := composite(key); c != "" {
-		tags = append(tags, c)
-	}
-	return tags
-}
-
 // listKey names a stored list result for op over scope prefix (e.g.
 // "list:openIssues:repo:o/r"). It is distinct from any object key.
 func listKey(op, scope string) string { return "list:" + op + ":" + scope }
 
-// eventKey maps a webhook X-GitHub-Event + action + payload to the object key it
-// touches. Returns ok=false when the event carries no addressable object. Every
-// mapped event is treated as an invalidation: the key is purged, forcing the next
-// read to refetch (event-invalidated proxy).
+// eventKey maps a webhook X-GitHub-Event + payload to the object key it touches,
+// via the table. Every mapped event is an invalidation: the key is purged, forcing
+// the next read to refetch (event-invalidated proxy).
 func eventKey(event string, payload map[string]any) (string, bool) {
+	s, ok := specByEvent[event]
+	if !ok {
+		return "", false
+	}
 	owner, repo := repoFullName(payload)
 	if owner == "" || repo == "" {
 		return "", false
 	}
-	scope := owner + "/" + repo
-	switch event {
-	case "issues", "issue_comment":
-		if n, ok := numberField(payload, "issue"); ok {
-			return fmt.Sprintf("issue:%s#%d", scope, n), true
-		}
-	case "pull_request", "pull_request_review", "pull_request_review_comment":
-		if n, ok := numberField(payload, "pull_request"); ok {
-			return fmt.Sprintf("pr:%s#%d", scope, n), true
-		}
-	case "check_run":
-		if id, ok := idField(payload, "check_run"); ok {
-			return fmt.Sprintf("checkRun:%s/%s", scope, id), true
-		}
-	case "label":
-		if lbl, ok := payload["label"].(map[string]any); ok {
-			if name, ok := lbl["name"].(string); ok {
-				return fmt.Sprintf("label:%s/%s", scope, name), true
-			}
-		}
-	case "release":
-		if rel, ok := payload["release"].(map[string]any); ok {
-			if tag, ok := rel["tag_name"].(string); ok {
-				return fmt.Sprintf("release:%s/%s", scope, tag), true
-			}
-		}
+	disc, ok := discField(payload, s.obj, s.field)
+	if !ok {
+		return "", false
 	}
-	return "", false
+	return fill(s.keyfmt, map[string]string{"owner": owner, "repo": repo, "disc": disc}), true
 }
 
 // repoFullName pulls owner/repo from the standard webhook "repository" block.
@@ -135,33 +197,17 @@ func repoFullName(payload map[string]any) (string, string) {
 	return "", name
 }
 
-// numberField reads payload[obj]["number"] as an int (GitHub numbers arrive as JSON
-// floats).
-func numberField(payload map[string]any, obj string) (int, bool) {
-	m, ok := payload[obj].(map[string]any)
-	if !ok {
-		return 0, false
-	}
-	switch n := m["number"].(type) {
-	case float64:
-		return int(n), true
-	case int:
-		return n, true
-	}
-	return 0, false
-}
-
-// idField reads payload[obj]["id"] as a string (numbers coerced).
-func idField(payload map[string]any, obj string) (string, bool) {
+// discField reads payload[obj][field] as a string discriminator (JSON numbers
+// coerced to their integer form).
+func discField(payload map[string]any, obj, field string) (string, bool) {
 	m, ok := payload[obj].(map[string]any)
 	if !ok {
 		return "", false
 	}
-	switch id := m["id"].(type) {
-	case float64:
-		return fmt.Sprintf("%d", int64(id)), true
-	case string:
-		return id, id != ""
+	v, ok := m[field]
+	if !ok || v == nil {
+		return "", false
 	}
-	return "", false
+	s := coerce(v)
+	return s, s != ""
 }
