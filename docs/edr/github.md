@@ -5,6 +5,86 @@ contract](../plugin-contract.md) leave to the plugin. Act-doc: decisions + steps
 Owner decisions 2026-09-05: **no GitHub App**, **PAT only**, **webhook-push ingest**, **vendored
 GitHub SDL served as whole JSON nodes**.
 
+> **2026-09-05 owner reframe — event-invalidated caching proxy.** Drop the "model GitHub" posture:
+> no eager baseline, no whole-SDL vendoring. Be a lazy read-through cache in front of GitHub REST +
+> GraphQL: coalesce concurrent misses, honor ETag/304 (free reads), pin immutable nodes, and let
+> **webhook events purge exactly the cached entries that touch the changed object (purge by tag)**.
+> This supersedes items **3/4/5/6** below (see one-line markers). Still valid: PAT-only, `gh webhook
+> forward` ingress, `/notifications` as a free secondary, point-budget awareness, named operations.
+
+## Options (2026-09-05 reframe)
+
+### Prior art read: brunoborges/ghx (MIT, go1.26.2), evidence
+Cloned + read (not guessed). **What it actually is:** a cache of the **`gh` CLI's stdout**, not an
+HTTP/REST/GraphQL proxy. It shells out to `gh` and memoizes the subprocess output. Key facts w/ cites:
+- **Cache key (REST *and* GraphQL, identical path):** `sha256(host,repo,branch,tokenHash,argv)` —
+  `src/internal/context/resolve.go:101-110`. **The GraphQL key is the raw `gh api graphql -f query=…`
+  argv hashed** — no query normalization, no per-node keying. `gh api graphql` classifies as
+  `ResourceAPI`, opaque (`src/internal/allowlist/allowlist.go:216-234`).
+- **Storage:** in-memory LRU (`container/list`+map), process-lifetime, **no disk/sqlite persistence**
+  (`src/internal/cache/cache.go:29-92`). Bounded by `MaxCacheEntries`.
+- **TTL / ETag / 304:** per-command TTL only (`handler.go:179`, `cache.go:25`). **No ETag, no
+  conditional requests, no 304 handling anywhere** (grep: zero hits). The reframe's "304s are free" is
+  **not** in ghx.
+- **Invalidation:** entry carries only `{Host,Repo,Resource}` — **no object id/number**
+  (`cache.go:11-22`). `InvalidateNamespace(host,repo,resource)` purges a whole coarse namespace
+  (`cache.go:94-111`) and is called **only** internally when a *local* mutating `gh` command is seen
+  (`handler.go:136-144`). **The socket exposes only whole-cache `flush`** (`protocol.go:40-46`,
+  `handler.go:232`) — **no purge-by-tag/namespace command, no per-object purge**.
+- **Singleflight / batching:** singleflight per cache key (`handler.go:203-224`); one in-flight `gh`
+  exec per key, waiters coalesced. No request batching (it can only run one `gh` per distinct argv).
+- **Daemon:** unix-domain socket (`ipc_unix.go`; Windows named pipe), length-prefixed JSON, 10 MB cap
+  (`protocol.go:57-98`); auto-launch (`cmd/ghx/main.go:70,183`; `Setsid`, `proc_unix.go:24`),
+  single-instance guard (`server.go:71`). **Per-request PAT passthrough** over IPC
+  (`authenv.go:11-31`, `handler.go:124,137,216`) — PAT never persisted.
+- **GraphQL depth:** none beyond "it's a `gh api` call" — opaque.
+- **Size / coverage / cadence:** **~3,800 LOC prod, ~1,878 test, 14 test files**; deps = go-winio +
+  yaml.v3 only; last commit **2026-09-04** but cadence sparse (multi-week/month gaps).
+
+### Tag-purge gap under ghx's keying
+A webhook "issue #N in repo R changed" cannot be turned into an exact purge under ghx:
+- ghx never extracts N; it can only purge the **whole `(R, issue)` namespace** — every `issue
+  list`/`issue view *` entry for R (over-purge) — **and still miss** entries in other namespaces that
+  mention #N: `search issues` (`Resource=search`) and **every `gh api graphql` result
+  (`Resource=api`, opaque)**. For supergraph, whose read path *is* GraphQL, that means **ghx's
+  invalidation cannot target our reads by object at all** — flush-everything or nothing.
+- **LOC to add tag-index + purge to ghx:** tag store on Set/evict ~120-180; a **response-body parser**
+  to derive object tags from opaque `gh` stdout per resource shape ~200-300; `TypePurge` protocol +
+  handler + CLI ~60-100. **≈400-600 LOC, brittle** — it fights the opaque-stdout design.
+- In supergraph's own model the same gap is **~0**: nodes are parsed JSON keyed
+  `issue:<owner>/<repo>#<n>`, so purge-by-tag is a keyed delete/upsert; named ops give each query a
+  **known object scope**, so even GraphQL results purge by object (ghx's opaque argv cannot).
+
+### Options (integration vs the LOCKED core: HTTPRoutes seam · SQLite Store · envelopes · /health)
+| # | Option | Integration w/ locked core | LOC we write | Tag-purge gap | Maint. risk | Proves S3/F1/F2/F3/F7 |
+|---|---|---|---|---|---|---|
+| **A** | Adopt ghx as read path (bin/lib) + our plugin = webhook receiver purging ghx by tag + emitting envelopes | Poor: ghx cache is in-mem/process-local, keyed by client **git branch+cwd** (wrong for a cwd-less daemon); no envelopes, no SQLite, no GraphQL model. We still build webhook+emit+graphql, **then graft tag-purge into a foreign opaque cache** | ~900+ (webhook/HMAC/emit ~250, graphql-serve ~200, **ghx tag-purge graft ~500**, argv-driver adapter ~150) | **Large** (~500, brittle) | **High** — pinned to a CLI-cache design that fights our node model; sparse upstream | Weak: ghx neither emits nor stores queryable nodes (S3/F1 built anyway); singleflight helps F7 only |
+| **B** | Fork ghx into `plugins/github` | Strip gh-shim/daemon/download/dashboard → **~200 LOC reusable** (cache.go + singleflight); classifier (~230) is gh-argv-specific, low reuse. Rewrite keying→node keys, add SQLite, tags, purge, envelopes, graphql | ~200 kept + ~700 rewrite (≈ a rewrite seeded from a file) | Medium (you build it) | **Medium** — you own it, but inherit in-mem-LRU vs the EDR's SQLite Store (dup cache tier) | Same substance as C (you rewrite it) |
+| **C** | Own lean event-invalidated proxy (this EDR, minus superseded weight) | **Native:** SQLite `github_nodes` *is* the cache; webhook = keyed upsert/delete = exact tag-purge; read-through+ETag/304 = "free reads"; HTTPRoutes graphql; envelopes + /health already specced; **zero core edit** | ~600-800 total (webhook+HMAC+emit ~250, read-through+304 ~180, graphql-over-named-ops ~200, **singleflight ~40 borrowed from ghx `handler.go:203`**, purge-by-key ~30, discovery/reconcile ~120) | **~0** (keys object-scoped; named ops scope GraphQL) | **Low** — own it, aligned to locked core | Clean: S3/F1 webhook→upsert→queryable (paired logs); F2 read-through+reconcile heal; F3 discovery zero-config; F7 **304 + singleflight + point-budget** |
+
+**Recommendation: C — own a lean event-invalidated proxy; borrow only ghx's singleflight pattern
+(~40 LOC) and its mutation→resource classifier idea for read-through TTL.** ghx solves a *different*
+problem — memoizing `gh` CLI stdout keyed by argv, in-memory, with no HTTP/ETag/GraphQL model and a
+coarse namespace-invalidate that is never exposed as a purge API. The one artifact worth reusing (a
+~160-LOC in-memory LRU) is both the cheapest thing to hand-write and the *wrong storage tier* for our
+SQLite-backed Store, while the expensive part the owner actually wants — per-object / GraphQL
+tag-purge — is precisely what ghx's opaque-argv keying makes **harder** (~400-600 brittle LOC), not
+easier. supergraph already keys parsed nodes by object and scopes GraphQL through named operations, so
+webhook purge-by-tag falls out of the existing model for near-zero LOC. Adopt/fork buys a cache we'd
+rather not own and a gap we'd still have to close.
+
+### features/github.feature — changes required under C (do NOT rewrite yet)
+- **Remove/replace** the eager-baseline scenario (old F2 "full baseline backfill from empty <60 min")
+  → F2 becomes **drop-heal by reconcile** + **read-through populates on first query**.
+- **Remove** vendored-full-SDL / `AC-GH-SCHEMA-SUBSET` scenarios → replace with a **lean schema**
+  covering only the types the named ops touch.
+- **Add:** cache-hit serves with **no** GitHub call; **ETag/304 read-through costs zero quota**;
+  **webhook purge-by-tag evicts exactly the keyed entries** and a re-query refetches; **immutable node
+  (closed issue / merged PR) is pinned / never expires**; **singleflight coalesces concurrent misses
+  to one upstream call**.
+- **Keep tag-for-tag:** HMAC, forward-supervisor, redeliver, notify-304, ratelimit-floor, overlap,
+  cursor, namedop, ratelog, zerocore.
+
 ## What it watches
 Repos owned by the PAT account (`drewdrewthis`, a **User** — `type:User`, `/orgs/...` 404s → use
 `/user*`/`/users/{u}/*`). Discovery = anchored `GET /user/repos?affiliation=owner&per_page=100`
@@ -39,6 +119,8 @@ Type, upsert the node JSON, emit, 200.
    owners' orgs) and as a cheap reconcile signal; a 200 feeds the same cursor/store.
 
 ## Storage = whole JSON node, three tiers
+> **SUPERSEDED (items 4+5, 2026-09-05 reframe):** whole-node store kept as the cache substrate, but
+> **tier (a) eager per-repo baseline is dropped** — read-through on miss + webhook upsert only.
 Store each object as the **complete JSON node as fetched** (no field curation) and serve it back
 whole. Tiers:
 - **(a) Baseline at boot, per repo** — one paginated anchored GraphQL fetch each for open issues,
@@ -69,6 +151,8 @@ queried with a **60 s overlap** (`since-60s`) so a same-second edit is not skipp
 `CursorReporter.Cursor()` returns a compact summary (in-memory).
 
 ## Schema = vendored GitHub SDL (no Github* prefix)
+> **SUPERSEDED (item 3, 2026-09-05 reframe):** do **not** vendor the full 64k-line SDL. Serve a **lean
+> schema** covering only the types the named ops touch; the subset CI check is dropped with it.
 Vendor `octokit/graphql-schema`'s `schema.graphql` (measured: 64k lines, 1636 types), **strip the
 Mutation root** (read-only plugin), keep GitHub's own type names (`Issue`, `PullRequest`, `CheckRun`,
 …) — **no `Github*` prefix**. Our additions ONLY via `extend type` (`origin`, `fetchedAt`, and
@@ -76,6 +160,9 @@ Mutation root** (read-only plugin), keep GitHub's own type names (`Issue`, `Pull
 upstream (no invented fields on GitHub types).
 
 ## Executor decision — JSON-backed dynamic resolver (measured)
+> **SUPERSEDED (item 6, 2026-09-05 reframe):** JSON-backed dynamic executor stays; the **whole-SDL
+> codegen measurement is now moot** (no full SDL to codegen). Bench table retained below as an
+> **appendix** — it still justifies "no gqlgen codegen," which the lean schema only reinforces.
 Bench in `/tmp/sg-sdl-bench` (deduped SDL, 1636 types, this box, go1.26):
 
 | Approach | Codegen | Generated source | Build/binary | Startup |
