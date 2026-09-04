@@ -38,6 +38,14 @@ type DirectiveRoot struct {
 }
 
 type ComplexityRoot struct {
+	GithubEvent struct {
+		Key     func(childComplexity int) int
+		Payload func(childComplexity int) int
+		Ts      func(childComplexity int) int
+		Type    func(childComplexity int) int
+		V       func(childComplexity int) int
+	}
+
 	Health struct {
 		Cursor      func(childComplexity int) int
 		LagSeconds  func(childComplexity int) int
@@ -53,8 +61,9 @@ type ComplexityRoot struct {
 	}
 
 	Subscription struct {
-		PluginLag      func(childComplexity int, thresholdSeconds float64) int
-		TemplateEvents func(childComplexity int) int
+		CheckRunUpdated func(childComplexity int) int
+		PluginLag       func(childComplexity int, thresholdSeconds float64) int
+		TemplateEvents  func(childComplexity int) int
 	}
 
 	TemplateEvent struct {
@@ -77,6 +86,7 @@ type QueryResolver interface {
 }
 type SubscriptionResolver interface {
 	PluginLag(ctx context.Context, thresholdSeconds float64) (<-chan core.HealthStatus, error)
+	CheckRunUpdated(ctx context.Context) (<-chan model.GithubEvent, error)
 	TemplateEvents(ctx context.Context) (<-chan model.TemplateEvent, error)
 }
 
@@ -97,6 +107,37 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 	ec := newExecutionContext(nil, e, nil)
 	_ = ec
 	switch typeName + "." + field {
+
+	case "GithubEvent.key":
+		if e.ComplexityRoot.GithubEvent.Key == nil {
+			break
+		}
+
+		return e.ComplexityRoot.GithubEvent.Key(childComplexity), true
+	case "GithubEvent.payload":
+		if e.ComplexityRoot.GithubEvent.Payload == nil {
+			break
+		}
+
+		return e.ComplexityRoot.GithubEvent.Payload(childComplexity), true
+	case "GithubEvent.ts":
+		if e.ComplexityRoot.GithubEvent.Ts == nil {
+			break
+		}
+
+		return e.ComplexityRoot.GithubEvent.Ts(childComplexity), true
+	case "GithubEvent.type":
+		if e.ComplexityRoot.GithubEvent.Type == nil {
+			break
+		}
+
+		return e.ComplexityRoot.GithubEvent.Type(childComplexity), true
+	case "GithubEvent.v":
+		if e.ComplexityRoot.GithubEvent.V == nil {
+			break
+		}
+
+		return e.ComplexityRoot.GithubEvent.V(childComplexity), true
 
 	case "Health.cursor":
 		if e.ComplexityRoot.Health.Cursor == nil {
@@ -149,6 +190,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Query.TemplatePing(childComplexity), true
 
+	case "Subscription.checkRunUpdated":
+		if e.ComplexityRoot.Subscription.CheckRunUpdated == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Subscription.CheckRunUpdated(childComplexity), true
 	case "Subscription.pluginLag":
 		if e.ComplexityRoot.Subscription.PluginLag == nil {
 			break
@@ -314,6 +361,24 @@ type Subscription {
   pluginLag(thresholdSeconds: Float!): Health!
 }
 `, BuiltIn: false},
+	{Name: "../plugins/github/schema/github.graphqls", Input: `# github plugin's GraphQL contribution (S5 zero-core-edit seam): a subscription
+# that fans out the plugin's own envelopes (Source "github") to core's gqlgen
+# websocket, so S3 can measure webhook-receipt to subscription-push p95 over the
+# same Bus every plugin already emits onto — no edit under core/.
+extend type Subscription {
+  checkRunUpdated: GithubEvent!
+}
+
+# GithubEvent mirrors core.Envelope (Payload flattened to a string), matching the
+# TemplateEvent shape so the resolver stays a plain envelope->model mapping.
+type GithubEvent {
+  ts: Time!
+  type: String!
+  v: Int!
+  key: String!
+  payload: String!
+}
+`, BuiltIn: false},
 	{Name: "../plugins/template/schema/template.graphqls", Input: `# template plugin's GraphQL contribution. Adding this file (plus the blank import
 # in graph/plugins_import.go) is the whole S5 zero-core-edit seam in action.
 extend type Query {
@@ -340,6 +405,22 @@ var parsedSchema = gqlparser.MustLoadSchema(sources...)
 // childFields_* functions provide shared child field context lookups.
 // Each function is generated once per unique object type, deduplicating the
 // switch statements that were previously inlined in every fieldContext_* function.
+
+func (ec *executionContext) childFields_GithubEvent(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "ts":
+		return ec.fieldContext_GithubEvent_ts(ctx, field)
+	case "type":
+		return ec.fieldContext_GithubEvent_type(ctx, field)
+	case "v":
+		return ec.fieldContext_GithubEvent_v(ctx, field)
+	case "key":
+		return ec.fieldContext_GithubEvent_key(ctx, field)
+	case "payload":
+		return ec.fieldContext_GithubEvent_payload(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type GithubEvent", field.Name)
+}
 
 func (ec *executionContext) childFields_Health(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
@@ -576,6 +657,121 @@ func (ec *executionContext) field___Type_fields_args(ctx context.Context, rawArg
 // endregion ***************************** args.gotpl *****************************
 
 // region    **************************** field.gotpl *****************************
+
+func (ec *executionContext) _GithubEvent_ts(ctx context.Context, field graphql.CollectedField, obj *model.GithubEvent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_GithubEvent_ts(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Ts, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v time.Time) graphql.Marshaler {
+			return ec.marshalNTime2timeᚐTime(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_GithubEvent_ts(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("GithubEvent", field, false, false, errors.New("field of type Time does not have child fields"))
+}
+
+func (ec *executionContext) _GithubEvent_type(ctx context.Context, field graphql.CollectedField, obj *model.GithubEvent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_GithubEvent_type(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Type, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_GithubEvent_type(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("GithubEvent", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _GithubEvent_v(ctx context.Context, field graphql.CollectedField, obj *model.GithubEvent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_GithubEvent_v(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.V, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_GithubEvent_v(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("GithubEvent", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _GithubEvent_key(ctx context.Context, field graphql.CollectedField, obj *model.GithubEvent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_GithubEvent_key(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Key, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_GithubEvent_key(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("GithubEvent", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _GithubEvent_payload(ctx context.Context, field graphql.CollectedField, obj *model.GithubEvent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_GithubEvent_payload(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Payload, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_GithubEvent_payload(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("GithubEvent", field, false, false, errors.New("field of type String does not have child fields"))
+}
 
 func (ec *executionContext) _Health_plugin(ctx context.Context, field graphql.CollectedField, obj *core.HealthStatus) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
@@ -886,6 +1082,38 @@ func (ec *executionContext) fieldContext_Subscription_pluginLag(ctx context.Cont
 	if fc.Args, err = ec.field_Subscription_pluginLag_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
 		ec.Error(ctx, err)
 		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Subscription_checkRunUpdated(ctx context.Context, field graphql.CollectedField) (ret func(ctx context.Context) graphql.Marshaler) {
+	return graphql.ResolveFieldStream(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Subscription_checkRunUpdated(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.Subscription().CheckRunUpdated(ctx)
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v model.GithubEvent) graphql.Marshaler {
+			return ec.marshalNGithubEvent2githubᚗcomᚋdrewdrewthisᚋsupergraphᚋgraphᚋmodelᚐGithubEvent(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Subscription_checkRunUpdated(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Subscription",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_GithubEvent(ctx, field)
+		},
 	}
 	return fc, nil
 }
@@ -2104,6 +2332,64 @@ func (ec *executionContext) fieldContext___Type_isOneOf(_ context.Context, field
 
 // region    **************************** object.gotpl ****************************
 
+var githubEventImplementors = []string{"GithubEvent"}
+
+func (ec *executionContext) _GithubEvent(ctx context.Context, sel ast.SelectionSet, obj *model.GithubEvent) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, githubEventImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("GithubEvent")
+		case "ts":
+			out.Values[i] = ec._GithubEvent_ts(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "type":
+			out.Values[i] = ec._GithubEvent_type(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "v":
+			out.Values[i] = ec._GithubEvent_v(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "key":
+			out.Values[i] = ec._GithubEvent_key(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "payload":
+			out.Values[i] = ec._GithubEvent_payload(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
 var healthImplementors = []string{"Health"}
 
 func (ec *executionContext) _Health(ctx context.Context, sel ast.SelectionSet, obj *core.HealthStatus) graphql.Marshaler {
@@ -2298,6 +2584,8 @@ func (ec *executionContext) _Subscription(ctx context.Context, sel ast.Selection
 	switch fields[0].Name {
 	case "pluginLag":
 		return ec._Subscription_pluginLag(ctx, fields[0])
+	case "checkRunUpdated":
+		return ec._Subscription_checkRunUpdated(ctx, fields[0])
 	case "templateEvents":
 		return ec._Subscription_templateEvents(ctx, fields[0])
 	default:
@@ -2785,6 +3073,10 @@ func (ec *executionContext) marshalNFloat2float64(ctx context.Context, sel ast.S
 		}
 	}
 	return graphql.WrapContextMarshaler(ctx, res)
+}
+
+func (ec *executionContext) marshalNGithubEvent2githubᚗcomᚋdrewdrewthisᚋsupergraphᚋgraphᚋmodelᚐGithubEvent(ctx context.Context, sel ast.SelectionSet, v model.GithubEvent) graphql.Marshaler {
+	return ec._GithubEvent(ctx, sel, &v)
 }
 
 func (ec *executionContext) marshalNHealth2githubᚗcomᚋdrewdrewthisᚋsupergraphᚋcoreᚐHealthStatus(ctx context.Context, sel ast.SelectionSet, v core.HealthStatus) graphql.Marshaler {

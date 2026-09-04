@@ -41,6 +41,13 @@ func (s *Server) handleGraphQL(w http.ResponseWriter, r *http.Request) {
 	case "openIssues", "issue", "issueComments", "checkRunsForPR", "prWithChecks", "repoLabels":
 		data["repository"] = s.repositoryData(op, owner, repo, req.Variables)
 	}
+	if strings.Contains(req.Query, "__type") {
+		if t := introspectType(req.Variables); t != nil {
+			data["__type"] = t
+		} else {
+			data["__type"] = nil
+		}
+	}
 	s.mu.Unlock()
 
 	w.Header().Set("Content-Type", "application/json")
@@ -125,4 +132,44 @@ func parseOpName(query string) string {
 		}
 	}
 	return ""
+}
+
+// introspectType answers the `schema <Type>` command's __type(name:) query for the
+// handful of object types the plugin surfaces (mirroring what real GitHub GraphQL
+// returns), so @local can prove `supergraph schema Issue` without a live API. An
+// unknown name yields nil so the CLI reports "unknown type".
+func introspectType(vars map[string]any) map[string]any {
+	name, _ := vars["name"].(string)
+	fields, ok := introspectFields[name]
+	if !ok {
+		return nil
+	}
+	return map[string]any{"name": name, "kind": "OBJECT", "description": "", "fields": fields}
+}
+
+// introspectFields maps a GraphQL object type to a minimal, stable field listing.
+var introspectFields = map[string][]map[string]any{
+	"Issue": {
+		scalarField("number", "Int"),
+		scalarField("title", "String"),
+		scalarField("state", "String"),
+	},
+	"PullRequest": {
+		scalarField("number", "Int"),
+		scalarField("title", "String"),
+		scalarField("state", "String"),
+	},
+	"CheckRun": {
+		scalarField("name", "String"),
+		scalarField("status", "String"),
+		scalarField("conclusion", "String"),
+	},
+}
+
+// scalarField builds one introspection field entry wrapping a named scalar.
+func scalarField(name, scalar string) map[string]any {
+	return map[string]any{
+		"name": name,
+		"type": map[string]any{"name": scalar, "kind": "SCALAR", "ofType": nil},
+	}
 }

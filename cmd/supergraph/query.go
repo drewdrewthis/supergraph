@@ -101,19 +101,21 @@ func runQuery(endpoint, query string) error {
 	return printGraphQLResult(raw)
 }
 
-// runNamedQuery loads plugins/github/queries/<op>.graphql, parses --var
-// key=value pairs into GraphQL variables, and posts the operation to the
-// github plugin's endpoint.
+// runNamedQuery validates the op exists on the client's search path, parses
+// --var key=value pairs into GraphQL variables, and posts the operation to the
+// github plugin's endpoint by name as {op, variables}. Posting the op name (not
+// the raw query text) drives the plugin's runOp/extractAndStore path, which is
+// what stores each returned node under its own key (AC-GH-NAMEDOP-KEYS); a raw
+// {query} body is proxied straight to upstream and never keyed.
 func runNamedQuery(endpoint, op string, varArgs []string, queriesDir string) error {
-	queryText, err := loadNamedQuery(op, queriesDir)
-	if err != nil {
+	if _, err := loadNamedQuery(op, queriesDir); err != nil {
 		return err
 	}
 	variables, err := parseVars(varArgs)
 	if err != nil {
 		return err
 	}
-	body, err := json.Marshal(map[string]any{"query": queryText, "variables": variables})
+	body, err := json.Marshal(map[string]any{"op": op, "variables": variables})
 	if err != nil {
 		return fmt.Errorf("encode request: %w", err)
 	}

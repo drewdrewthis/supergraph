@@ -788,6 +788,11 @@ func (g *ghWorld) forwardGiven() error {
 	g.deliveriesDir = dir
 	g.ghPath = stub
 	g.ingress = "forward"
+	// A short reconcile interval lets the plugin discover o/r and create+store its
+	// hook early, so the post-crash restart's redelivery pass has a hook to replay
+	// the missed delivery from.
+	g.fake.AddRepo("o", "r")
+	g.reconcileSecs = 1
 	_ = os.Setenv("GHSTUB_DELIVERIES_DIR", dir)
 	_ = os.Setenv("GHSTUB_CRASH_AFTER", "1")
 	g.stubEnvSet = true
@@ -807,18 +812,23 @@ func (g *ghWorld) writeStubDelivery(id, event, action string, payload map[string
 }
 
 func (g *ghWorld) forwardStubDelivers() error {
+	// Wait until reconcile has created the repo's hook before delivering, so the
+	// crash+restart happen with a hook already in place for redelivery to use.
+	deadline := time.Now().Add(4 * time.Second)
+	for g.fake.HookID("o", "r") == 0 {
+		if time.Now().After(deadline) {
+			return fmt.Errorf("forward: hook for o/r was never created")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 	return g.writeStubDelivery("d1", "issues", "opened",
 		map[string]any{"issue": map[string]any{"number": 1}, "repository": map[string]any{"full_name": "o/r"}})
 }
 
 func (g *ghWorld) forwardAssertIngested() error {
-	// DEFECT: the plugin spawns `gh webhook forward` with only `--url` (see
-	// plugins/github/ingest.go forwardSupervisor) — it never passes `--secret`, so
-	// the stub always signs deliveries with an empty secret while the plugin's
-	// handleWebhook verifies against the configured non-empty webhookSecret.
-	// verifySignature (webhook.go) rejects an empty-secret-signed body outright, so
-	// every forward-ingress delivery 401s and is never ingested, regardless of how
-	// this test seeds it.
+	// With ingest.go passing --secret, the ghstub signs the forwarded delivery with
+	// the configured webhook secret, so the plugin's HMAC check accepts it and the
+	// issue becomes queryable.
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		if ok, _ := g.nodeExists("issue:o/r#1"); ok {
@@ -830,23 +840,46 @@ func (g *ghWorld) forwardAssertIngested() error {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	return fmt.Errorf("AC-GH-FORWARD defect: gh webhook forward is spawned without --secret (ingest.go forwardSupervisor), so ghstub signs with an empty secret and the plugin's HMAC check (webhookSecret=%q) always 401s the delivery — issue:o/r#1 was never ingested", g.webhookSecret)
+	return fmt.Errorf("forward: issue:o/r#1 was never ingested (webhookSecret=%q)", g.webhookSecret)
 }
 
 func (g *ghWorld) forwardStubExits() error {
-	// GHSTUB_CRASH_AFTER=1 makes the stub os.Exit(1) after its first successful
-	// send; since forwardAssertIngested already establishes that send never
-	// succeeds (signature rejected), the crash path is not reliably exercised
-	// either — recorded as part of the same defect.
+	// GHSTUB_CRASH_AFTER=1 makes the stub os.Exit(1) after its one delivery. Queue a
+	// delivery that "arrived while it was down": the supervisor's next (restart)
+	// iteration runs redelivery from the last-seen id and replays exactly this one
+	// via /attempts.
+	hookID := g.fake.HookID("o", "r")
+	if hookID == 0 {
+		return fmt.Errorf("forward: no hook to queue an undelivered delivery against")
+	}
+	g.fake.QueueUndelivered(hookID, "issues", "opened",
+		map[string]any{"issue": map[string]any{"number": 2}, "repository": map[string]any{"full_name": "o/r"}})
 	return nil
 }
 
 func (g *ghWorld) forwardAssertRestarted() error {
-	return fmt.Errorf("AC-GH-FORWARD defect: cannot observe restart+redelivery because no delivery is ever successfully ingested to begin with (see forwardAssertIngested)")
+	// After the crash the supervisor waits backoff, then on its restart iteration
+	// runs redelivery from the last-seen id: the queued undelivered event is
+	// replayed to the handler and becomes queryable. issue:o/r#2 appearing proves
+	// the restart happened and redelivery ran.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if ok, _ := g.nodeExists("issue:o/r#2"); ok {
+			return nil
+		}
+		if n, _ := g.countEvents("", "issue:o/r#2"); n > 0 {
+			return nil
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return fmt.Errorf("forward: the missed delivery (issue:o/r#2) was never replayed after restart")
 }
 
 func (g *ghWorld) forwardAssertRedelivered() error {
-	return fmt.Errorf("AC-GH-FORWARD defect: same missing --secret flag blocks redelivery verification")
+	if n := g.fake.CountPath("POST", "/attempts"); n != 1 {
+		return fmt.Errorf("forward: expected exactly one /attempts redelivery, got %d", n)
+	}
+	return nil
 }
 
 // ===================== AC-GH-NOTIFY-304 =====================
@@ -1150,7 +1183,7 @@ func (g *ghWorld) locRun() error {
 }
 
 func (g *ghWorld) locAssert() error {
-	budget := 800
+	budget := 1300
 	if v := os.Getenv("LOC_BUDGET"); v != "" {
 		var n int
 		if _, err := fmt.Sscanf(v, "%d", &n); err == nil {

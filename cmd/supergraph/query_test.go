@@ -92,7 +92,7 @@ func TestLoadNamedQuery_ErrorsWhenNotFoundAnywhere(t *testing.T) {
 	}
 }
 
-func TestRunNamedQuery_PostsQueryAndVariablesToPluginEndpoint(t *testing.T) {
+func TestRunNamedQuery_PostsOpAndVariablesToPluginEndpoint(t *testing.T) {
 	dir := t.TempDir()
 	queryFile := "query openIssues($owner:String!,$repo:String!){ x }"
 	if err := os.WriteFile(filepath.Join(dir, "openIssues.graphql"), []byte(queryFile), 0o600); err != nil {
@@ -117,8 +117,11 @@ func TestRunNamedQuery_PostsQueryAndVariablesToPluginEndpoint(t *testing.T) {
 	if gotPath != "/plugins/github/graphql" {
 		t.Errorf("posted to %q, want /plugins/github/graphql", gotPath)
 	}
-	if gotBody["query"] != queryFile {
-		t.Errorf("posted query = %v, want %q", gotBody["query"], queryFile)
+	if gotBody["op"] != "openIssues" {
+		t.Errorf("posted op = %v, want %q", gotBody["op"], "openIssues")
+	}
+	if _, hasQuery := gotBody["query"]; hasQuery {
+		t.Errorf("posted body carried a raw query field; want op-only body: %v", gotBody)
 	}
 	vars, _ := gotBody["variables"].(map[string]any)
 	if vars["owner"] != "acme" || vars["repo"] != "widgets" {

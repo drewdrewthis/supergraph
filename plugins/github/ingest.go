@@ -41,8 +41,13 @@ func (p *Plugin) forwardSupervisor(ctx context.Context) {
 		}
 		// ghPath is an operator-configured binary (tests point it at the stub), not
 		// attacker input — the same trust boundary as the operator's config file.
+		// --secret makes `gh webhook forward` (and the ghstub) sign each forwarded
+		// delivery with the plugin's configured webhook secret, so handleWebhook's
+		// HMAC check accepts it (AC-GH-FORWARD); without it deliveries are signed
+		// with an empty secret and always 401.
 		cmd := exec.CommandContext(ctx, p.cfg.ghPath, "webhook", "forward", //nolint:gosec // operator-configured gh binary path, not attacker input
-			"--url", p.cfg.selfURL+"/plugins/github/webhook")
+			"--url", p.cfg.selfURL+"/plugins/github/webhook",
+			"--secret", p.cfg.webhookSecret)
 		if err := cmd.Run(); err != nil {
 			log.Printf("github: gh webhook forward exited: %v", err)
 		}

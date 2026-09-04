@@ -241,3 +241,16 @@ func deliveryJSON(d *Delivery) map[string]any {
 		"delivered_at": time.Now().UTC().Format(time.RFC3339),
 	}
 }
+
+// HookID returns the id of the hook created for owner/repo, or 0 if none exists
+// yet — the test uses it to queue an undelivered delivery against the right hook.
+func (s *Server) HookID(owner, repo string) int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, h := range s.hooks {
+		if h.Owner == owner && h.Repo == repo {
+			return h.ID
+		}
+	}
+	return 0
+}
