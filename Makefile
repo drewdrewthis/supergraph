@@ -44,7 +44,7 @@ features-pending:
 # hand-edited .dev/config.toml is never clobbered.
 $(DEV_CONFIG):
 	mkdir -p $(DEV_DIR)
-	printf 'hostId = "dev"\nlisten = "%s"\ndataDir = "%s/data"\ncanaryIntervalSeconds = 5\nlagThresholdSeconds = 30\n' "$(LISTEN)" "$(DEV_DIR)" > $(DEV_CONFIG)
+	printf 'hostId = "dev"\nlisten = "%s"\ndataDir = "%s/data"\nlagThresholdSeconds = 30\n' "$(LISTEN)" "$(DEV_DIR)" > $(DEV_CONFIG)
 
 dev: build-harness $(DEV_CONFIG)
 	$(BIN) --config $(DEV_CONFIG) serve

@@ -85,7 +85,7 @@ func TestHealthServeHTTPShape(t *testing.T) {
 	}
 }
 
-// AC-CORE-4: a panic mark is sticky — a stray event (e.g. an in-flight canary) must
+// AC-CORE-4: a panic mark is sticky — a stray event (e.g. a late in-flight emit) must
 // not resurrect a crashed plugin to ok; only an explicit (re)start clears it.
 func TestHealthPanicSticky(t *testing.T) {
 	base := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)

@@ -161,9 +161,9 @@ A plugin does **not** implement a `Health()` method. Core derives every field of
 - `Cursor`: pulled from the plugin's optional `CursorReporter.Cursor()`; empty if the
   plugin does not implement it.
 
-## Canary / heartbeat
+## Liveness
 
-Core emits a synthetic `canary` event envelope per plugin on a periodic interval, sent through the normal `emit()` path. Plugins receive no alert injection code; alerting is an external poller of the `_health` endpoint.
+Core emits **no** synthetic heartbeat. Every `HealthStatus` field derives only from a plugin's real `emit()` calls: a plugin that emits nothing keeps `lastEventAt` at its last real event (or `null` if it never emitted) and, once lag passes the threshold, shows `stale`. That `stale` is the intended liveness signal — a silent plugin is a stale plugin. Alerting is an external poller of the `_health` endpoint.
 
 ## Tests
 

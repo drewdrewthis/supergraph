@@ -5,7 +5,7 @@
 // (AC-CORE-4) is provable end to end: when the template plugin panics in Start,
 // a live server must still report a DIFFERENT plugin as "ok". It carries no data
 // source and contributes no GraphQL schema — it just emits a heartbeat on a short
-// interval so its /health entry reads "ok" independent of the canary. It is built
+// interval so its /health entry reads "ok" on its own. It is built
 // only under the `harness` tag so it never ships in a production binary.
 package fakeok
 
@@ -19,8 +19,8 @@ import (
 )
 
 // tickInterval is the heartbeat cadence. It is short and fixed (not configurable)
-// so fakeok stays "ok" on its own, without depending on the canary — the panic
-// scenario deliberately runs the canary at a long interval.
+// so fakeok stays "ok" on its own by emitting real events, independent of any other
+// plugin's state.
 const tickInterval = time.Second
 
 func init() {
