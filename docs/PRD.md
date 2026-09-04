@@ -29,8 +29,10 @@ shell, its cache went a month stale unnoticed, and it only covers one repo at a 
 
 **First consumer:** an always-on worker. Any new open GitHub issue in the `drewdrewthis` org
 (no label needed) → orchardist sees it sub-second → claims it (assignee/`grinding` label, for
-dedup only) → launches the `ship` skill → review-clerk + tests gate before the PR is marked
-ready → PR driven to green → owner pinged on Telegram.
+dedup only) → launches the `ship` skill. The **ship worker** owns the PR from there: it
+subscribes to `checkRunUpdated` and drives its own PR to green (review-clerk + tests gate
+before ready). The **orchardist** only dispatches and watches slots — it does not drive CI.
+Owner pinged on Telegram when the PR is ready.
 
 The owner keeps hitting **GitHub API rate limits**. The supergraph fixes this with webhooks,
 anchored lookups, and caching — that's the quota fix.
@@ -40,7 +42,8 @@ joins** — issue ↔ task ↔ email ↔ running session ↔ PR — in one query
 
 ## 4. Assumptions
 
-- Go stays the implementation language.
+- Go stays the implementation language. **One Go binary, cross-compiled, OS-detected at
+  start; the laptop is a normal peer. Only the two spike boxes are Linux.**
 - A GitHub org-level App webhook covers new repos automatically.
 - Mesh networking (WireGuard/Tailscale) already exists between boxes.
 - SQLite per plugin is fast enough for this workload.
@@ -116,7 +119,32 @@ High-level only — full design goes in a future EDR under `docs/edr/`.
   not as "all clear."
 - **Versioning**: event payload carries `v` + upcasters (never rewrite the log); schema changes
   are add-only with `@deprecated`; envelope path is versioned; schema-diff check runs in CI.
-- Ship a plugin contract doc, a template plugin, and a one-command local dev harness.
+- Ship a [plugin contract doc](docs/plugin-contract.md) (stub, written in the core tier of the
+  spike), a template plugin, and a one-command local dev harness.
+- **CLI + install**:
+
+  ```
+  supergraph serve                 # foreground, logs to stdout (dev)
+  supergraph install | uninstall   # writes systemd --user unit (Linux) or launchd plist (macOS)
+  supergraph start | stop | restart | status
+  supergraph query '<graphql>'     # against local endpoint
+  ```
+
+  Local endpoint `http://127.0.0.1:7788/graphql`; `_health` at `/health`; peer endpoint bound
+  to the mesh IP only. Logs: `journalctl --user -u supergraph` (Linux) /
+  `log show --predicate 'process == "supergraph"'` (macOS). Config:
+  `~/.config/supergraph/config.toml` (hostId, peers, tokens); per-plugin SQLite under
+  `~/.local/share/supergraph/<plugin>.db`. **Upgrade**: `install` is idempotent; `restart`
+  after replacing the binary.
+- **Schema sketch** (illustrative, not final — the EDR owns the real schema):
+  ```graphql
+  type Issue { repo, number, title, state, labels, updatedAt, hostId, source, staleSince }
+  type Session { hostId, name, worktree, branch, issueNumber, lastSeenAt, staleSince }
+  type Slot { hostId, kind, free: Boolean, staleSince }
+  type Query { issue(repo, number), issues(repo, state), sessions(hostId), slots(hostId), touching(issueNumber): [Node] }
+  type Subscription { issueOpened(org), checkRunUpdated(repo, prNumber), pluginLag(threshold) }
+  type Health { plugin, lastEventAt, cursor, lagSeconds, state }
+  ```
 - **Plugin isolation**: each plugin runs in its own goroutine with `recover()`; a panic marks
   the plugin `stale`, binary and other plugins keep serving.
 - **Auth**: per-box bearer token (env) for peer subscribe; HMAC on the GitHub webhook. mTLS
@@ -125,8 +153,8 @@ High-level only — full design goes in a future EDR under `docs/edr/`.
 - **First cross-plugin join key**: issue number ↔ branch/worktree. Full node taxonomy deferred.
 - **Backfill**: org-wide first boot is measured in the spike; hourly reconcile must complete
   inside one hour or the design fails.
-- **Logs**: structured to journald with rotation. **Alerts**: Telegram, named bot + chat id
-  (to be filled).
+- **Logs**: structured to journald with rotation. **Alerts**: Telegram, named bot + chat id —
+  **day-1 blocker, owner: drewdrewthis, needed before spike test (b)**.
 - **Tests (BDD)**: every plugin ships `.feature` files; the scenario ↔ e2e bijection from
   ADR-009 is the contract, carried forward, not retired. S1–S6 and F1–F8 (§5) are the first
   scenarios to write.
@@ -134,8 +162,9 @@ High-level only — full design goes in a future EDR under `docs/edr/`.
   server, `_health`, dev harness, `.feature` test runner. Then plugins fan out in parallel —
   github, sessions, peer, telegram alert — each against its own `.feature` files. Lead manages
   the build, coders implement, review-clerk gates PRs before ready.
-- **Spike boxes**: hetzner-agents + langwatch-dev (Linux/systemd). macOS confirmed not in v1 —
-  a laptop is a later peer, not now.
+- **Spike boxes**: hetzner-agents + langwatch-dev (Linux/systemd) — the only two Linux boxes
+  in the spike. **One Go binary, cross-compiled, OS-detected at start; the laptop is a normal
+  peer**, not a special case.
 - **"Sub-second"** = p95, warm cache, against a seeded db of realistic size.
 
 ## 7. Open questions
@@ -144,7 +173,8 @@ None open — resolved by owner 2026-09-04:
 
 - **Queue trigger**: new open issue, no label gate (§3). Assignee/`grinding` label stays as the
   claim mechanism, for dedup only.
-- **macOS/laptop**: not in v1. Linux-only for v1; laptop is a later peer.
+- **macOS/laptop**: **one Go binary, cross-compiled, OS-detected at start; the laptop is a
+  normal peer. Only the two spike boxes are Linux.**
 - **Concurrency cap**: 1 concurrent ship worker, hard cap. Telegram ping on every worker launch.
 
 ## 8. What we're not doing
