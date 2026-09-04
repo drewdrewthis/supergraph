@@ -67,6 +67,21 @@ On a query that resolves to key K:
 3. **Singleflight** coalesces N concurrent misses on K into **one** upstream fetch (borrowed pattern;
    AC singleflight).
 
+## Freshness contract (honest)
+This is a cache, not a mirror — freshness is **event-driven, not time-driven**. A **non-pinned mutable
+node** (open issue/PR, check run, label, ref) is **served from cache until an event purges it**: a
+webhook, a `/notifications` change (if enabled), or a since-cursor reconcile. Between events the node
+**can be stale**, and that is by design.
+- **Worst-case staleness window = the reconcile interval** (`reconcileIntervalSeconds`, default **3600
+  s / 1 h**) — the guaranteed upper bound when webhooks and notifications both miss. Webhooks/redelivery
+  normally purge in sub-second (S3/F1); reconcile is the floor.
+- **Optional per-kind TTL** (`[plugins.github.ttl]`, e.g. `checkRun = 30`, default **off**) caps
+  staleness for a churny kind by expiring it early so the next read conditionally refetches (ETag/304,
+  cheap). Off by default so steady-state stays at zero quota (F7).
+- **Pinned nodes** (immutable, §below) are exempt — never stale in a way that matters.
+The negative control **AC-GH-STALE** proves this honestly: a node mutated upstream with **no event
+arriving** is served stale until reconcile heals it.
+
 ## Immutable pin list (config, explicit defaults)
 Pinned nodes are **never TTL-expired and never conditionally refetched** (a webhook can still force-evict
 them). `[plugins.github.pin]`:
@@ -131,6 +146,15 @@ Handler verifies `X-Hub-Signature-256` (`sha256=`+hex HMAC-SHA256) with **`hmac.
 - **F2 heal window:** a dropped webhook is guaranteed present after the **next since-cursor reconcile
   (≤ one reconcile interval)**; redelivery and (if enabled) `/notifications` heal it sooner.
 
+## Cold start — no baseline (owner: NO backfill)
+There is **no bulk backfill**. An empty cache means **every first read is a read-through miss served by
+one anchored fetch** (§Read-through), then cached. Cold start is therefore bounded by **per-read
+latency**, not a 60-minute bulk job: first read of each named op completes in **< 2 s** against fakegh
+and **populates exactly that op's declared keys** — nothing more (AC-GH-COLDSTART).
+> **PRD delta (owner/peer to apply):** PRD F2's "**full baseline backfill from empty db < 60 min**"
+> clause is obsolete under the caching-proxy design and should be **reworded** to "cold cache serves
+> each read via one read-through fetch; no bulk backfill." Tracked here; PRD edit is owner/peer's.
+
 ## Discovery (F3)
 `GET /user/repos?affiliation=owner&per_page=100` (paginated). A repo appearing after boot is picked up
 next reconcile with **zero config** and gets a hook created (forward/tunnel).
@@ -154,7 +178,8 @@ core/` = 0 (github serves via the **`HTTPRoutes`** seam, not the gqlgen glob).
 
 ## Config keys `[plugins.github]`
 `token` (or env), `ingress` (`forward`|`tunnel`), `tunnelURL`, `webhookSecret`, `owner`,
-`reconcileIntervalSeconds` (3600), `notifications` (bool, default false), `[plugins.github.pin]` (above),
+`reconcileIntervalSeconds` (3600 — also the worst-case staleness window), `notifications` (bool,
+default false), `[plugins.github.pin]` (above), `[plugins.github.ttl]` (per-kind seconds, default off),
 `baseURL` (test-only → fakegh).
 
 ## Failure modes
@@ -170,12 +195,25 @@ core/` = 0 (github serves via the **`HTTPRoutes`** seam, not the gqlgen glob).
 
 ## Acceptance criteria
 PRD ACs (verbatim, github scope, p95 over N≥20 where stated) + plugin ACs are the BDD contract in
-`features/github.feature`. Summary: **S3, F1, F2, F3, F7** (PRD) + **cache-hit-no-upstream-call,
+`features/github.feature`. Summary: **S3, F1, F2, F3, F7** (PRD) + **cache-hit-no-upstream-call (etag-checked),
+stale-until-reconcile (negative control), cold-start-no-baseline,
 ETag-304-zero-quota, purge-by-tag-evicts-exact-keys, immutable-pinned-never-refetched,
 singleflight-coalesces-N-into-1, HMAC-401, forward-child-restart-with-redelivery,
 notifications-304-behind-flag, floor-pause, ratelog, named-op-scoped-keys, cursor-persist,
 LOC-budget, zerocore**. `@local` runs against fakegh + fake `gh` stub; live proofs are `@live
 @pending`.
+
+## AC review: applied
+Prior ac-reviewer Must-Fixes folded in:
+1. **Honest freshness contract** — added §Freshness contract: non-pinned mutable nodes are served from
+   cache until an event purges them; worst-case staleness = reconcile interval (default 1 h); optional
+   per-kind `ttlSeconds` (default off). Added negative-control **AC-GH-STALE** (a node mutated upstream
+   with no event is served stale until reconcile) and made **AC-GH-CACHE-HIT falsifiable** (asserts
+   zero upstream calls **and** served etag == stored etag).
+2. **Cold start, no baseline** — reinterpreted PRD F2's "backfill < 60 min": no bulk backfill; empty
+   cache → every read is one read-through fetch. Added **AC-GH-COLDSTART** (first read of each named op
+   < 2 s, populates exactly the declared keys) and a PRD-delta note (owner/peer reword PRD F2).
+Earlier App-based AC items remain superseded by the PAT/webhook/caching-proxy design.
 
 ---
 
@@ -228,3 +266,17 @@ The lean-schema reframe only reinforces the JSON-backed pick: far fewer types, s
 ## Handoff
 - ACs ready for ac-reviewer (see `features/github.feature`, rewritten to the cache-proxy contract).
 - Implementation → coder per the two-wave plan above; proxy.go (Wave 1 step 3) is the judgment-heavy core.
+
+---
+
+## AC review
+
+**Must-Fix**
+1. **No negative-control / bounded-staleness AC, and no TTL defined for non-pinned mutable nodes.** `github_nodes` has no `ttl`/`maxAge` config key — only pin grace windows + `reconcileIntervalSeconds`. So "fresh" in read-through step 1 and in AC-GH-CACHE-HIT ("already in the store, fresh") is **not falsifiable**. The honest downside of a caching proxy is unstated: with no webhook and no reconcile yet, a query serves a node **stale vs GitHub up to one reconcile interval**. Define the freshness window (a TTL, or "always 304-revalidate non-pinned"), then add a negative-control scenario: node cached, no event arrives, query serves the stale node until reconcile/webhook — asserting the accepted bound.
+2. **F2 drops the PRD's second measurable clause.** PRD §5 F2 = dropped-webhook heal **and** "org backfill from empty db completes < 60 min" (§6: "must complete inside one hour or the design fails"). No AC covers cold-start backfill timing. Add a measurable backfill-from-empty-db AC (p95/max < 60 min).
+
+**Should-Fix**
+3. **F7 has no local proof.** Only @live @pending; cache-hit/304 is F7's mechanism but no local quota-accounting AC (N reads → M upstream calls). Add one against fakegh.
+4. **Bijection break.** F2/F3/AC-GH-FORWARD/AC-GH-NOTIFY-304/AC-GH-RATELOG each carry both a @local and @live scenario under one tag — two scenarios per AC. Use distinct tags (e.g. `@F2-LIVE`) or state the local+live pairing convention.
+5. **AC-GH-NAMEDOP-KEYS bundles** the unrelated `supergraph schema Issue` print assertion — split it out.
+6. **S3/F1 evidence names "journald"** but the @local godog harness emits log lines, not journald — align the evidence shape.

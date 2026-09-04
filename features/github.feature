@@ -48,12 +48,33 @@ Feature: GitHub plugin — event-invalidated caching proxy
   # ---------- Caching-proxy plugin ACs ----------
 
   @github @local @AC-GH-CACHE-HIT
-  Scenario: A cached node is served with no upstream call
+  Scenario: A cached node is served with no upstream call and the stored etag
     Given a supergraph server started with the github plugin and data dir <tmp>
-    And issue `issue:o/r#5` is already in the store, fresh
+    And issue `issue:o/r#5` is already in the store, fresh, with etag `W/"abc"`
     When `issue` is queried for `o/r#5`
     Then the complete stored node is served
-    And no request is made to the fake GitHub server
+    And the served node's etag equals the stored etag `W/"abc"`
+    And the fake GitHub server records zero requests during the query
+
+  @github @local @AC-GH-STALE
+  Scenario: A node mutated upstream with no event arriving is served stale until reconcile
+    Given a supergraph server started with the github plugin and data dir <tmp>
+    And issue `issue:o/r#5` is in the store, fresh, with title "old"
+    And the fake GitHub server's `o/r#5` is changed to title "new" with no webhook, notification, or reconcile
+    When `issue` is queried for `o/r#5`
+    Then the stale cached node with title "old" is served, by design
+    When the since-cursor reconcile runs once
+    Then `issue:o/r#5` is purged and the next query returns title "new"
+    And evidence is captured: "worst-case staleness is bounded by the reconcile interval, via a log"
+
+  @github @local @AC-GH-COLDSTART
+  Scenario: Cold start has no baseline — first read of each named op is one read-through
+    Given a supergraph server started with the github plugin and an empty data dir <tmp>
+    Then no bulk backfill runs
+    When the first read of each named op runs against the fake GitHub server
+    Then each op completes in under 2 seconds
+    And each op populates exactly the keys it declares in its `# keys`/`# scope` directive and nothing more
+    And evidence is captured: "cold cache serves each read via one read-through fetch, no backfill, via a log and a timer"
 
   @github @local @AC-GH-ETAG-304
   Scenario: A conditional read-through that 304s costs zero quota
