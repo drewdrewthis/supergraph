@@ -44,10 +44,11 @@ joins** — issue ↔ task ↔ email ↔ running session ↔ PR — in one query
 
 - Go stays the implementation language. **One Go binary, cross-compiled, OS-detected at
   start; the laptop is a normal peer. Only the two spike boxes are Linux.**
-- A GitHub org-level App webhook covers new repos automatically.
+- A GitHub account-level App webhook, installed on all repositories, covers new repos automatically.
 - Mesh networking (WireGuard/Tailscale) already exists between boxes.
 - SQLite per plugin is fast enough for this workload.
 - gqlgen subscriptions over the mesh are sufficient for peer mirroring. **UNVERIFIED — spike must prove.**
+- **Canary dropped**: a dead feed is noticed because the orchardist stops picking up issues; no synthetic heartbeat.
 
 ## 5. User stories
 
@@ -65,7 +66,7 @@ joins** — issue ↔ task ↔ email ↔ running session ↔ PR — in one query
 - **S3** — p95 < 1 s from check-run webhook receipt to subscription push. Evidence: paired journald lines (webhook-in ts, push-out ts).
 - **S4** — one query for issue #N returns ≥ 1 row each from github + claude (`ClaudeSession`) with source tags; an absent source shows an explicit stale marker, never omission. Evidence: query result screenshot.
 - **S5** — template plugin compiles in and serves `_health` with `git diff --stat core/` = 0 files. Evidence: diff output + `_health` screenshot.
-- **S6** — `/health` shows `state: stale` and growing `lagSeconds` within 60 s of a plugin stalling. Evidence: `/health` screenshots + lag log.
+- **S6** — `/health` reports last real event time and lag per plugin: `state: stale` and growing `lagSeconds` within 60 s of a plugin stalling. Evidence: `/health` screenshots + lag log.
 
 ### Failure-surface ACs
 
@@ -74,7 +75,7 @@ joins** — issue ↔ task ↔ email ↔ running session ↔ PR — in one query
 - **F3 New repo** — a repo created in the org after boot appears in the graph with zero config within one reconcile. Evidence: query screenshot.
 - **F4 Double-dispatch** — two orchestrators racing on one new issue (claim via assignee/`grinding` label) yield exactly one ship run; the loser sees the claim. Evidence: two logs + one PR.
 - **F5 Panic isolation** — a plugin that panics (e.g. the claude plugin) shows `stale`; `_health` and the other plugins (including tmux) keep answering. Evidence: `_health` screenshot after induced panic.
-- **F6 Alert positive-fire** — positive control: a healthy plugin shows `lagSeconds` < 60 on `/health`. Evidence: `/health` screenshot.
+- **F6** — removed (canary dropped).
 - **F7 Quota** — GitHub API calls stay under 500/hour at steady state with 20 repos. Evidence: rate-limit header log.
 - **F8 Stale peer** — a stopped box shows `stale since T` on its peers (tmux + claude data included) < 30 s after stop; no peer-of-peer rows exist. Evidence: query screenshot + grep.
 
@@ -83,9 +84,8 @@ claude plugin → subscriptions + health → drewdrewthis worker → todoist.
 
 **Spike pass/fail:**
 (a) cross-box free-slot query meets **S2** (p95 < 1 s warm, seeded realistic db);
-(b) canary/lag reporting meets **S6** and passes **F6** (see §5);
 (c) a stopped peer box meets **F8** (`stale since T` within 30 s, no peer-of-peer rows).
-**Kill criterion:** if (b) fails → stop.
+**Kill criterion:** if (c) fails → single-box fallback.
 
 ## 6. User interaction & design
 
@@ -106,8 +106,9 @@ High-level only — full design goes in a future EDR under `docs/edr/`.
   `lastSeenAt`. Data is duplicated per box on purpose — it's a cache, not a shared source of
   truth. A down box reads as **stale since T** (from `lastSeenAt`), never as empty.
 - **GitHub plugin**: the hourly `since`-cursor reconcile is the **primary correctness path** —
-  it is what guarantees no issue is ever missed. Webhooks (org-level GitHub App push + boot
-  redelivery) are a **latency optimization only**, not a correctness dependency. Webhook
+  it is what guarantees no issue is ever missed. Webhooks (account-level GitHub App, installed
+  on all repositories, push + boot redelivery) are a **latency optimization only**, not a
+  correctness dependency. Webhook
   ingress lands on the **hetzner-agents box** (the only box with a public IP) and is an
   **accepted single point of failure**; the hourly reconcile covers its downtime.
 - **Subscriptions**: the binary pushes events like "issue opened" to actors (e.g. orchardist). Actors own all side effects — the supergraph never does.
@@ -115,10 +116,9 @@ High-level only — full design goes in a future EDR under `docs/edr/`.
   self / add `grinding` label) and re-check, not just trust ingest dedup. Ingest-level
   idempotency alone is not enough — a prior double-dispatch incident got through on ingest
   idempotency.
-- **Canary**: every plugin writes a heartbeat through the normal ingest path on a timer. Core
-  `/health` reports per-plugin `lastEventAt`, `lagSeconds`, `state`. **Alerting is out of scope
-  for the binary** — an external poller of `/health` (cron, uptime-kuma, or the other box's
-  `peer` plugin) does it.
+- **No canary.** Core `/health` reports per-plugin `lastEventAt`, `lagSeconds`, `state`, derived
+  from real events only — no synthetic heartbeat. **Alerting is out of scope for the binary** —
+  an external poller of `/health` (cron, uptime-kuma, or the other box's `peer` plugin) does it.
 - **Versioning**: event payload carries `v` + upcasters (never rewrite the log); schema changes
   are add-only with `@deprecated`; envelope path is versioned; schema-diff check runs in CI.
 - Ship a [plugin contract doc](docs/plugin-contract.md) (stub, written in the core tier of the
