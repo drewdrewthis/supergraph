@@ -1,271 +1,230 @@
-# EDR: GitHub plugin
+# EDR: GitHub plugin — event-invalidated caching proxy
 
 Engineering Design Record. Owns internals the [PRD](../PRD.md) §6 and [plugin
 contract](../plugin-contract.md) leave to the plugin. Act-doc: decisions + steps, not prose.
-Owner decisions 2026-09-05: **no GitHub App**, **PAT only**, **webhook-push ingest**, **vendored
-GitHub SDL served as whole JSON nodes**.
 
-> **2026-09-05 owner reframe — event-invalidated caching proxy.** Drop the "model GitHub" posture:
-> no eager baseline, no whole-SDL vendoring. Be a lazy read-through cache in front of GitHub REST +
-> GraphQL: coalesce concurrent misses, honor ETag/304 (free reads), pin immutable nodes, and let
-> **webhook events purge exactly the cached entries that touch the changed object (purge by tag)**.
-> This supersedes items **3/4/5/6** below (see one-line markers). Still valid: PAT-only, `gh webhook
-> forward` ingress, `/notifications` as a free secondary, point-budget awareness, named operations.
+**Live design (2026-09-05 owner reframe + GO on Option C).** The github plugin is a **lazy,
+event-invalidated caching proxy** in front of GitHub REST + GraphQL — **not** a model of GitHub. No
+eager baseline, no vendored full SDL. It fetches on miss, caches parsed JSON nodes keyed by **object
+id**, honors **ETag/304** (free reads), **pins immutable nodes**, and lets **webhook events purge
+exactly the entries that touch the changed object (tag purge = keyed delete)**. Prior art
+`brunoborges/ghx` was read in full (see [History](#history)); it is **not vendored** — we borrow only
+its singleflight pattern (~40 LOC, `ghx src/internal/daemon/handler.go:203`).
 
-## Options (2026-09-05 reframe)
+**Hard constraints (owner):** ≤ **800 LOC prod** for `plugins/github/**` excluding tests and
+`internal/fakegh` (per-package budget below); zero core diff; PAT-only; HMAC per hook; per-repo hook
+creation from `/user/repos` (F3); point-budget floor pause + rate-limit logging; CLI `--op/--var` +
+`schema <Type>` in `cmd/` only; fakegh httptest server + fake `gh` stub for `@local`.
 
-### Prior art read: brunoborges/ghx (MIT, go1.26.2), evidence
-Cloned + read (not guessed). **What it actually is:** a cache of the **`gh` CLI's stdout**, not an
-HTTP/REST/GraphQL proxy. It shells out to `gh` and memoizes the subprocess output. Key facts w/ cites:
-- **Cache key (REST *and* GraphQL, identical path):** `sha256(host,repo,branch,tokenHash,argv)` —
-  `src/internal/context/resolve.go:101-110`. **The GraphQL key is the raw `gh api graphql -f query=…`
-  argv hashed** — no query normalization, no per-node keying. `gh api graphql` classifies as
-  `ResourceAPI`, opaque (`src/internal/allowlist/allowlist.go:216-234`).
-- **Storage:** in-memory LRU (`container/list`+map), process-lifetime, **no disk/sqlite persistence**
-  (`src/internal/cache/cache.go:29-92`). Bounded by `MaxCacheEntries`.
-- **TTL / ETag / 304:** per-command TTL only (`handler.go:179`, `cache.go:25`). **No ETag, no
-  conditional requests, no 304 handling anywhere** (grep: zero hits). The reframe's "304s are free" is
-  **not** in ghx.
-- **Invalidation:** entry carries only `{Host,Repo,Resource}` — **no object id/number**
-  (`cache.go:11-22`). `InvalidateNamespace(host,repo,resource)` purges a whole coarse namespace
-  (`cache.go:94-111`) and is called **only** internally when a *local* mutating `gh` command is seen
-  (`handler.go:136-144`). **The socket exposes only whole-cache `flush`** (`protocol.go:40-46`,
-  `handler.go:232`) — **no purge-by-tag/namespace command, no per-object purge**.
-- **Singleflight / batching:** singleflight per cache key (`handler.go:203-224`); one in-flight `gh`
-  exec per key, waiters coalesced. No request batching (it can only run one `gh` per distinct argv).
-- **Daemon:** unix-domain socket (`ipc_unix.go`; Windows named pipe), length-prefixed JSON, 10 MB cap
-  (`protocol.go:57-98`); auto-launch (`cmd/ghx/main.go:70,183`; `Setsid`, `proc_unix.go:24`),
-  single-instance guard (`server.go:71`). **Per-request PAT passthrough** over IPC
-  (`authenv.go:11-31`, `handler.go:124,137,216`) — PAT never persisted.
-- **GraphQL depth:** none beyond "it's a `gh api` call" — opaque.
-- **Size / coverage / cadence:** **~3,800 LOC prod, ~1,878 test, 14 test files**; deps = go-winio +
-  yaml.v3 only; last commit **2026-09-04** but cadence sparse (multi-week/month gaps).
+---
 
-### Tag-purge gap under ghx's keying
-A webhook "issue #N in repo R changed" cannot be turned into an exact purge under ghx:
-- ghx never extracts N; it can only purge the **whole `(R, issue)` namespace** — every `issue
-  list`/`issue view *` entry for R (over-purge) — **and still miss** entries in other namespaces that
-  mention #N: `search issues` (`Resource=search`) and **every `gh api graphql` result
-  (`Resource=api`, opaque)**. For supergraph, whose read path *is* GraphQL, that means **ghx's
-  invalidation cannot target our reads by object at all** — flush-everything or nothing.
-- **LOC to add tag-index + purge to ghx:** tag store on Set/evict ~120-180; a **response-body parser**
-  to derive object tags from opaque `gh` stdout per resource shape ~200-300; `TypePurge` protocol +
-  handler + CLI ~60-100. **≈400-600 LOC, brittle** — it fights the opaque-stdout design.
-- In supergraph's own model the same gap is **~0**: nodes are parsed JSON keyed
-  `issue:<owner>/<repo>#<n>`, so purge-by-tag is a keyed delete/upsert; named ops give each query a
-  **known object scope**, so even GraphQL results purge by object (ghx's opaque argv cannot).
+## LOC budget (prod, ≤ 800 total; tests + `internal/fakegh` excluded)
+| Package/file (`plugins/github/`) | Budget | Responsibility |
+|---|---:|---|
+| `github.go` | 90 | plugin wiring: `Register`/`New`/`Name`/`Migrate`/`Start`/`HTTPRoutes`/`CursorReporter`/config |
+| `keys.go` | 60 | key grammar: parse/format + object→key + event→key derivation |
+| `store.go` | 110 | SQLite `github_nodes`: upsert, get, `deleteKeys`, etag/fetchedAt, pin eval, tag index |
+| `proxy.go` | 130 | read-through resolve: miss→fetch→store→serve; ETag/304; **singleflight (borrowed ~40)** |
+| `webhook.go` | 100 | HMAC verify; event→key map; upsert/purge; emit envelopes |
+| `executor.go` | 120 | JSON-backed GraphQL executor + named-op loader + declared-key scoping |
+| `ingest.go` | 100 | `gh webhook forward` supervisor (backoff) + redelivery + `/notifications` poll (flag) |
+| `reconcile.go` | 90 | discovery `/user/repos` + hook creation + since-cursor + floor-pause + ratelog |
+| **Total** | **800** | CLI delta in `cmd/supergraph/` (~60) is counted separately, not in this budget |
+- **AC-GH-LOC** guards it: a CI step (`make loc-github`) runs `find plugins/github -name '*.go' ! -name '*_test.go' -not -path '*/fakegh/*' | xargs sed '/^\s*\/\//d;/^\s*$/d' | wc -l` and fails > 800.
 
-### Options (integration vs the LOCKED core: HTTPRoutes seam · SQLite Store · envelopes · /health)
-| # | Option | Integration w/ locked core | LOC we write | Tag-purge gap | Maint. risk | Proves S3/F1/F2/F3/F7 |
-|---|---|---|---|---|---|---|
-| **A** | Adopt ghx as read path (bin/lib) + our plugin = webhook receiver purging ghx by tag + emitting envelopes | Poor: ghx cache is in-mem/process-local, keyed by client **git branch+cwd** (wrong for a cwd-less daemon); no envelopes, no SQLite, no GraphQL model. We still build webhook+emit+graphql, **then graft tag-purge into a foreign opaque cache** | ~900+ (webhook/HMAC/emit ~250, graphql-serve ~200, **ghx tag-purge graft ~500**, argv-driver adapter ~150) | **Large** (~500, brittle) | **High** — pinned to a CLI-cache design that fights our node model; sparse upstream | Weak: ghx neither emits nor stores queryable nodes (S3/F1 built anyway); singleflight helps F7 only |
-| **B** | Fork ghx into `plugins/github` | Strip gh-shim/daemon/download/dashboard → **~200 LOC reusable** (cache.go + singleflight); classifier (~230) is gh-argv-specific, low reuse. Rewrite keying→node keys, add SQLite, tags, purge, envelopes, graphql | ~200 kept + ~700 rewrite (≈ a rewrite seeded from a file) | Medium (you build it) | **Medium** — you own it, but inherit in-mem-LRU vs the EDR's SQLite Store (dup cache tier) | Same substance as C (you rewrite it) |
-| **C** | Own lean event-invalidated proxy (this EDR, minus superseded weight) | **Native:** SQLite `github_nodes` *is* the cache; webhook = keyed upsert/delete = exact tag-purge; read-through+ETag/304 = "free reads"; HTTPRoutes graphql; envelopes + /health already specced; **zero core edit** | ~600-800 total (webhook+HMAC+emit ~250, read-through+304 ~180, graphql-over-named-ops ~200, **singleflight ~40 borrowed from ghx `handler.go:203`**, purge-by-key ~30, discovery/reconcile ~120) | **~0** (keys object-scoped; named ops scope GraphQL) | **Low** — own it, aligned to locked core | Clean: S3/F1 webhook→upsert→queryable (paired logs); F2 read-through+reconcile heal; F3 discovery zero-config; F7 **304 + singleflight + point-budget** |
+## Cache key = object id (full grammar)
+Every cached node and every purge target is one canonical key. `@<hostId>` suffix is **optional**,
+elided for `github.com`, present only for GHES.
+```
+key      := <kind>":"<scope>[ "#"<number> | "/"<id> ] [ "@"<hostId> ]
+scope    := <owner>"/"<repo>            # except user/org kinds
+issue    := "issue:"   <owner>/<repo> "#" <number>
+pr       := "pr:"      <owner>/<repo> "#" <number>
+checkRun := "checkRun:"<owner>/<repo> "/" <checkRunId>
+review   := "review:"  <owner>/<repo> "#" <prNumber> "/" <reviewId>
+comment  := "comment:" <owner>/<repo> "#" <number> "/" <commentId>
+label    := "label:"   <owner>/<repo> "/" <name>
+ref      := "ref:"     <owner>/<repo> "/" <refName>
+release  := "release:" <owner>/<repo> "/" <tag>
+commit   := "commit:"  <owner>/<repo> "/" <sha>
+repo     := "repo:"    <owner>/<repo>
+user     := "user:"    <login>
+```
+- **Tag index.** Every stored entry (single node OR a named-op list result) carries a **tag set**:
+  its own key plus its **scope prefix** (`repo:<owner>/<repo>`) and **kind** (`issue`,`pr`,…). Purge
+  takes a key and deletes (a) the exact-key entry and (b) any list-result entry whose declared scope
+  covers that key's `(scopePrefix, kind)`. This makes webhook `issue:o/r#5` evict the `#5` node **and**
+  every cached `openIssues(repo=o/r)` result — exactly, no over-purge across kinds, no miss on lists.
 
-**Recommendation: C — own a lean event-invalidated proxy; borrow only ghx's singleflight pattern
-(~40 LOC) and its mutation→resource classifier idea for read-through TTL.** ghx solves a *different*
-problem — memoizing `gh` CLI stdout keyed by argv, in-memory, with no HTTP/ETag/GraphQL model and a
-coarse namespace-invalidate that is never exposed as a purge API. The one artifact worth reusing (a
-~160-LOC in-memory LRU) is both the cheapest thing to hand-write and the *wrong storage tier* for our
-SQLite-backed Store, while the expensive part the owner actually wants — per-object / GraphQL
-tag-purge — is precisely what ghx's opaque-argv keying makes **harder** (~400-600 brittle LOC), not
-easier. supergraph already keys parsed nodes by object and scopes GraphQL through named operations, so
-webhook purge-by-tag falls out of the existing model for near-zero LOC. Adopt/fork buys a cache we'd
-rather not own and a gap we'd still have to close.
+## Read-through + ETag/304 (per node)
+Each `github_nodes` row stores `node_json`, **`etag`**, `fetched_at`, `updated_at`, and `pinned`.
+On a query that resolves to key K:
+1. **Hit, fresh/pinned** → serve stored node, **no upstream call** (F7 mechanism; AC cache-hit).
+2. **Miss / expired (and not pinned)** → **one anchored fetch** (REST `GET` by id, or the op's GraphQL)
+   sending `If-None-Match: <stored etag>` when we have one:
+   - **304** → serve stored node, bump `fetched_at`, **zero quota** (AC ETag-304).
+   - **200** → store `node_json`+`etag`+`fetched_at`, emit `github.node.updated`, serve.
+3. **Singleflight** coalesces N concurrent misses on K into **one** upstream fetch (borrowed pattern;
+   AC singleflight).
 
-### features/github.feature — changes required under C (do NOT rewrite yet)
-- **Remove/replace** the eager-baseline scenario (old F2 "full baseline backfill from empty <60 min")
-  → F2 becomes **drop-heal by reconcile** + **read-through populates on first query**.
-- **Remove** vendored-full-SDL / `AC-GH-SCHEMA-SUBSET` scenarios → replace with a **lean schema**
-  covering only the types the named ops touch.
-- **Add:** cache-hit serves with **no** GitHub call; **ETag/304 read-through costs zero quota**;
-  **webhook purge-by-tag evicts exactly the keyed entries** and a re-query refetches; **immutable node
-  (closed issue / merged PR) is pinned / never expires**; **singleflight coalesces concurrent misses
-  to one upstream call**.
-- **Keep tag-for-tag:** HMAC, forward-supervisor, redeliver, notify-304, ratelimit-floor, overlap,
-  cursor, namedop, ratelog, zerocore.
+## Immutable pin list (config, explicit defaults)
+Pinned nodes are **never TTL-expired and never conditionally refetched** (a webhook can still force-evict
+them). `[plugins.github.pin]`:
+```
+commits            = true   # commit:*  — immutable by sha
+releases           = true   # release:* — immutable by tag
+mergedPRsAfterDays  = 7     # pr:*  closed/merged  > 7d ago  → pinned
+closedIssuesAfterDays = 30  # issue:* closed        > 30d ago → pinned
+```
+Proposed defaults above; `mergedPRsAfterDays`/`closedIssuesAfterDays` give recently-closed objects a
+grace window (late edits/comments) before pinning.
 
-## What it watches
-Repos owned by the PAT account (`drewdrewthis`, a **User** — `type:User`, `/orgs/...` 404s → use
-`/user*`/`/users/{u}/*`). Discovery = anchored `GET /user/repos?affiliation=owner&per_page=100`
-(paginated). A repo appearing here after boot is picked up next reconcile with zero config → **F3**.
+## Named operations scope every GraphQL read to object ids
+`plugins/github/queries/*.graphql` (~10: `openIssues`, `issue`, `prWithChecks`, `prsAwaitingReview`,
+`myClaimed`, `openPRs`, `checkRunsForPR`, `issueComments`, `repoLabels`, `paneForBranch` **@pending**).
+Each op **declares the keys it touches** in a header directive the executor parses:
+```graphql
+# op: openIssues
+# scope: repo:{owner}/{repo}      # list op → result tagged with this prefix + kind issue
+# keys:  issue:{owner}/{repo}#{number}
+query openIssues($owner:String!,$repo:String!){ ... }
 
-## Auth
-**PAT only**, env `GITHUB_TOKEN` or `[plugins.github].token` (scope `repo`; 5000 REST req/h,
-5000 GraphQL points/h confirmed). No App, no JWT, no installation token.
+# op: issue
+# keys:  issue:{owner}/{repo}#{number}   # point op → exactly one key
+query issue($owner:String!,$repo:String!,$number:Int!){ ... }
+```
+- **Point op** (`# keys:` resolves to concrete keys from vars) → executor resolves each key via
+  read-through (§above) and serves the stored nodes; result is uncached or tagged by its keys.
+- **List op** (`# scope:`) → executor runs the op's GraphQL against GitHub on miss, stores each node it
+  returns, caches the **list result** tagged with the scope prefix; a later webshook purge covering that
+  scope evicts the list result too. **AC named-op-scoped-keys** proves a purge of one contained id
+  evicts the list result.
 
-## Ingest = webhooks (push), never polling
-Primary freshness is webhook push. Reachability without a public IP, two configurable modes:
-- **`forward` (default):** the plugin supervises a `gh webhook forward` subprocess
-  (`cli/gh-webhook`; flags `-E/--events`, `-R/--repo`, `-U/--url`, `-S/--secret`, `-H/--github-host`).
-  It creates the hook and streams deliveries over an **outbound websocket**, POSTing each to our
-  local `--url` (`http://127.0.0.1:7788/plugins/github/webhook`) — no inbound ingress. Plugin
-  restarts it on exit (supervised).
-- **`tunnel`:** operator points a Cloudflare/Tailscale-Funnel URL at the same handler; plugin
-  creates the repo hook itself via `POST /repos/{o}/{r}/hooks`. One hook per discovered repo, each
-  with its own HMAC secret.
+## Envelopes emitted (`{TS,Source:"github",Type,V:1,Key,Payload}`)
+These are what `/health` `lastEventAt` derives from and what tmux/claude join on:
+- **`github.node.updated`** — `Payload={key,etag,typename}` — a node was upserted (webhook or read-through 200).
+- **`github.node.purged`** — `Payload={key}` — a node/entry evicted by tag purge.
+- **`github.webhook.received`** — `Payload={delivery,event,action}` — raw receipt; drives S3 timing and `/health` `lastEventAt`.
+Cross-plugin joins key on `github.node.updated.Key` (e.g. `issue:o/r#5`).
 
-Webhook handler verifies `X-Hub-Signature-256` (`sha256=`+hex HMAC-SHA256, UTF-8) with **`hmac.Equal`**
-against that hook's secret; bad/absent → **401**, no emit; good → map `X-GitHub-Event`+`action` to a
-Type, upsert the node JSON, emit, 200.
+## Auth — PAT only
+Env `GITHUB_TOKEN` or `[plugins.github].token` (scope `repo`; 5000 REST/h, 5000 GraphQL points/h). No
+App, no JWT. PAT never persisted; passed to fetches in-process.
+
+## Ingest = webhooks (push), supervised
+- **`forward` (default):** the plugin supervises a **`gh webhook forward` child process** with
+  **exponential backoff restart**. It streams deliveries over an outbound websocket, POSTing each to
+  `http://127.0.0.1:7788/plugins/github/webhook` — no inbound ingress. On start/restart it runs
+  **redelivery from the last-seen delivery id** (`GET /repos/{o}/{r}/hooks/{id}/deliveries` →
+  `POST .../deliveries/{id}/attempts`), deduped by `X-GitHub-Delivery`.
+- **`tunnel`:** operator points a Funnel URL at the same handler; plugin creates one repo hook per
+  discovered repo (`POST /repos/{o}/{r}/hooks`), each with its own HMAC secret.
+Handler verifies `X-Hub-Signature-256` (`sha256=`+hex HMAC-SHA256) with **`hmac.Equal`**; bad/absent →
+**401**, no emit. Good → map `X-GitHub-Event`+`action` to a node key, **upsert or purge**, emit, 200.
 
 ## Correctness paths (webhooks are latency-only)
-1. **Hourly since-cursor reconcile** — GraphQL pull per repo, advances `since`. Primary guarantee.
-2. **Boot redelivery** — per repo `GET /repos/{o}/{r}/hooks/{id}/deliveries` (**PAT-ok**, verified;
-   `repo`/`read:repo_hook` scope), replay undelivered/failed past the stored delivery id via
-   `POST .../deliveries/{id}/attempts`, dedupe by `X-GitHub-Delivery` in `github_deliveries`.
-3. **`/notifications` poll (secondary)** — `GET /notifications` with `If-Modified-Since`; **304 =
-   zero quota**, poll at the server's `X-Poll-Interval`. Used for repos we cannot hook (other
-   owners' orgs) and as a cheap reconcile signal; a 200 feeds the same cursor/store.
+1. **Since-cursor reconcile** (default hourly) — GraphQL pull per repo, advances `since` with a **60 s
+   overlap** (`since-60s`). Primary drop-heal guarantee.
+2. **Boot/restart redelivery** — replays undelivered/failed delivery ids (above). Faster heal.
+3. **`/notifications` secondary, behind `notifications = true`** — `GET /notifications` with
+   `If-Modified-Since`; **304 = zero quota**, poll at `X-Poll-Interval`. Off by default.
+- **F2 heal window:** a dropped webhook is guaranteed present after the **next since-cursor reconcile
+  (≤ one reconcile interval)**; redelivery and (if enabled) `/notifications` heal it sooner.
 
-## Storage = whole JSON node, three tiers
-> **SUPERSEDED (items 4+5, 2026-09-05 reframe):** whole-node store kept as the cache substrate, but
-> **tier (a) eager per-repo baseline is dropped** — read-through on miss + webhook upsert only.
-Store each object as the **complete JSON node as fetched** (no field curation) and serve it back
-whole. Tiers:
-- **(a) Baseline at boot, per repo** — one paginated anchored GraphQL fetch each for open issues,
-  open PRs, checks, reviews, comments, labels, refs, project items. **Shallow:** issues/PRs with
-  scalars+labels+assignees, one page each; nested connections come later via read-through/webhooks.
-  Measured against one hour → **F2**.
-- **(b) Webhooks** keep nodes current.
-- **(c) Read-through on miss** for the long tail — one anchored fetch, store, serve; **TTL** for
-  churny no-webhook fields (e.g. Actions logs).
+## Discovery (F3)
+`GET /user/repos?affiliation=owner&per_page=100` (paginated). A repo appearing after boot is picked up
+next reconcile with **zero config** and gets a hook created (forward/tunnel).
 
-## GitHub GraphQL limits (govern the baseline)
-100 nodes/page, 500k nodes/query, **5000 points/h (~1 point / 100 nodes)**. Every query reads
-`rateLimit{remaining,resetAt}`; backfill **pauses near the floor** until `resetAt`, never hard-fails.
-Shallow baseline keeps point cost low; F2 measures the full baseline inside one hour.
+## Rate-limit discipline (F7)
+Every response's REST `x-ratelimit-*` and GraphQL `rateLimit{remaining,resetAt}` are **logged**. Near
+the points floor the reconcile/read-through **pauses until `resetAt`**, never hard-fails; `/health`
+shows no forced-stale. Cache hits + 304s keep steady-state usage under budget.
 
-## Event types emitted (Type; whole node in Payload, V:1)
-`issue.opened|edited|closed`, `pr.opened|edited|closed|synchronize`, `checkRun.updated`,
-`review.submitted`, `comment.created`. Envelope `{TS,Source:"github",Type,V:1,Key,Payload=nodeJSON}`.
+## CLI (`cmd/` only, core untouched)
+`cmd/supergraph/query.go`: add `--op` (load named `.graphql`) + repeatable `--var k=v`, target
+`/plugins/github/graphql`; add `schema <Type>` subcommand printing the served type. `git diff --stat
+core/` = 0 (github serves via the **`HTTPRoutes`** seam, not the gqlgen glob).
 
-## Entities & keys
-- issue: `issue:<owner>/<repo>#<n>@<hostId>` · pr: `pr:<owner>/<repo>#<n>@<hostId>`
-- checkRun: `checkRun:<owner>/<repo>@<checkRunId>@<hostId>`
+## SQLite state (add-only, `IF NOT EXISTS`)
+- `github_nodes(key TEXT PK, typename, owner, repo, number, node_json, etag, pinned INT, fetched_at, updated_at)`
+- `github_tags(tag TEXT, key TEXT, PK(tag,key))`   — tag index for scope/kind purge
+- `github_hooks(owner,repo,hook_id,secret, PK(owner,repo))`
+- `github_deliveries(delivery_id, seen_at, PK(delivery_id))`
+- cursors live in core's `cursors` table (`since:<o>/<r>`, `notif:lastModified`, `hook:<o>/<r>:lastDeliveryId`).
 
-## Cursor semantics
-Per-repo `since` = newest `updatedAt` ingested, in core's `cursors` table (`since:<owner>/<repo>`),
-queried with a **60 s overlap** (`since-60s`) so a same-second edit is not skipped.
-`notif:lastModified` and per-repo `hook:<o>/<r>:lastDeliveryId` also live in core cursors.
-`CursorReporter.Cursor()` returns a compact summary (in-memory).
+## Config keys `[plugins.github]`
+`token` (or env), `ingress` (`forward`|`tunnel`), `tunnelURL`, `webhookSecret`, `owner`,
+`reconcileIntervalSeconds` (3600), `notifications` (bool, default false), `[plugins.github.pin]` (above),
+`baseURL` (test-only → fakegh).
 
-## Schema = vendored GitHub SDL (no Github* prefix)
-> **SUPERSEDED (item 3, 2026-09-05 reframe):** do **not** vendor the full 64k-line SDL. Serve a **lean
-> schema** covering only the types the named ops touch; the subset CI check is dropped with it.
-Vendor `octokit/graphql-schema`'s `schema.graphql` (measured: 64k lines, 1636 types), **strip the
-Mutation root** (read-only plugin), keep GitHub's own type names (`Issue`, `PullRequest`, `CheckRun`,
-…) — **no `Github*` prefix**. Our additions ONLY via `extend type` (`origin`, `fetchedAt`, and
-`Tmux*`/`Claude*` joins later). **CI check:** our served schema is a strict **subset** of the vendored
-upstream (no invented fields on GitHub types).
+## Failure modes
+- Webhook transport down → reconcile + redelivery heal.
+- HMAC mismatch → 401, logged, no emit.
+- GraphQL points floor → pause to `resetAt`, never hard-fail.
+- `gh webhook forward` exits → backoff restart + redelivery.
+- `/notifications` 304 spam → honor `X-Poll-Interval`, zero quota (only when enabled).
+- `since` clock skew → 60 s overlap.
+- Repos we cannot hook → `/notifications` path only (if enabled) + reconcile.
 
-## Executor decision — JSON-backed dynamic resolver (measured)
-> **SUPERSEDED (item 6, 2026-09-05 reframe):** JSON-backed dynamic executor stays; the **whole-SDL
-> codegen measurement is now moot** (no full SDL to codegen). Bench table retained below as an
-> **appendix** — it still justifies "no gqlgen codegen," which the lean schema only reinforces.
-Bench in `/tmp/sg-sdl-bench` (deduped SDL, 1636 types, this box, go1.26):
+---
+
+## Acceptance criteria
+PRD ACs (verbatim, github scope, p95 over N≥20 where stated) + plugin ACs are the BDD contract in
+`features/github.feature`. Summary: **S3, F1, F2, F3, F7** (PRD) + **cache-hit-no-upstream-call,
+ETag-304-zero-quota, purge-by-tag-evicts-exact-keys, immutable-pinned-never-refetched,
+singleflight-coalesces-N-into-1, HMAC-401, forward-child-restart-with-redelivery,
+notifications-304-behind-flag, floor-pause, ratelog, named-op-scoped-keys, cursor-persist,
+LOC-budget, zerocore**. `@local` runs against fakegh + fake `gh` stub; live proofs are `@live
+@pending`.
+
+---
+
+## Coder step plan — two file-partitioned waves (no shared-file contention)
+
+**Wave 1 — proxy + plugin + CLI** (fakegh first; each file owned by one coder task):
+1. `plugins/github/internal/fakegh/` — httptest GitHub: GraphQL (paginated + `rateLimit`), REST
+   `/user/repos`, `/repos/*/hooks`+`/deliveries`+`/attempts`, `/notifications` (304), ETag/`If-None-Match`
+   echo, settable rate fields; **fake `gh` stub binary** (`internal/fakegh/cmd/gh`). *Everything tests against it.*
+2. `plugins/github/keys.go` + `store.go` + `Migrate` (the four tables) — key grammar + node/tag store.
+3. `plugins/github/proxy.go` — read-through + ETag/304 + singleflight (borrow `ghx handler.go:203`) + pin eval.
+4. `plugins/github/webhook.go` — HMAC + event→key + upsert/purge + emit envelopes.
+5. `plugins/github/executor.go` — JSON-backed executor + named-op loader (`# op/# scope/# keys`) + key scoping.
+6. `plugins/github/ingest.go` + `reconcile.go` — forward supervisor+backoff, redelivery, `/notifications`
+   (flag); discovery, hook create, since-cursor, floor-pause, ratelog.
+7. `plugins/github/github.go` — wiring (`Register`/`Start`/`HTTPRoutes`/`CursorReporter`); blank import in
+   `graph/plugins_import.go`; `plugins/github/queries/*.graphql`.
+8. `cmd/supergraph/query.go` — `--op`/`--var` + `schema <Type>` (cmd/ only).
+9. `make loc-github` CI step (AC-GH-LOC) + `git diff --stat core/`=0 check (AC-GH-ZEROCORE).
+
+**Wave 2 — godog steps** (wires `features/github.feature` to wave-1 code; own files):
+10. `features/steps_github_test.go` — Given/When/Then over fakegh + signed webhook POST + forward stub;
+    p95 harness for S3/F1 (N≥20); LOC-budget step; purge/singleflight/304/pin assertions.
+11. `features/prd.feature` edit (remove github-owned S3/F2/F3/F7; F1→claude-only) already applied.
+
+Wave 1 tasks 2–8 are file-disjoint and parallelizable after task 1; task 3 (proxy) is the judgment-heavy
+core. Wave 2 depends on Wave 1 compiling.
+
+---
+
+## History (superseded 2026-09-05 by the caching-proxy reframe)
+Kept for provenance; **do not implement**:
+- **Vendored full GitHub SDL (64k lines, 1636 types) served as whole nodes** — replaced by a **lean
+  schema** covering only the types named ops touch; the subset-CI check is dropped.
+- **Whole-node store with a three-tier baseline** — the whole-JSON-node store **substrate stays**, but
+  the **eager per-repo baseline (tier a) is dropped**: read-through on miss + webhook upsert only.
+- **`gqlgen` codegen measurement** — moot without a full SDL; the JSON-backed dynamic executor stays.
+- Earlier App-based ingest ideas — superseded by PAT-only + `gh webhook forward` (still current).
+
+### Appendix — executor bench (retained; still justifies "no gqlgen codegen")
+Bench in `/tmp/sg-sdl-bench` (deduped SDL, 1636 types, go1.26):
 
 | Approach | Codegen | Generated source | Build/binary | Startup |
 |---|---|---|---|---|
-| **gqlgen codegen** | **FAILS on stock SDL** (`merging type systems failed: unable to bind to interface … Query does not satisfy Node`) after emitting **46,089 lines / 1.71 MB of models alone** in ~5.2 s | 1.7 MB models + full exec + ~1600 resolver stubs to hand-fill | multi-MB binary delta; ~1600 methods to maintain | n/a |
-| **JSON-backed (gqlparser AST + one dynamic executor)** | none | **zero generated code** | **+3.26 MB** dep footprint | **~29 ms** to load+validate the full SDL |
+| **gqlgen codegen** | **FAILS on stock SDL** (`… Query does not satisfy Node`) after emitting **46,089 lines / 1.71 MB of models** in ~5.2 s | 1.7 MB models + ~1600 resolver stubs | multi-MB binary delta | n/a |
+| **JSON-backed (gqlparser AST + one dynamic executor)** | none | **zero generated code** | **+3.26 MB** dep | **~29 ms** to load+validate the full SDL |
 
-**Pick: JSON-backed.** gqlgen does not even complete on GitHub's real SDL without manual model
-bindings/surgery, and its 46k-line model dump + per-type resolvers fight decision #4 ("whole node,
-no curation"). A single `gqlparser`-validated dynamic executor serves stored JSON nodes directly.
-**Core-fit — no core change:** github does **not** join the `gqlgen.yml` glob
-(`plugins/*/schema/*.graphqls`) — dumping 1636 types there would break core codegen. Instead github
-serves its own `/plugins/github/graphql` via the existing **`HTTPRoutes`** seam (zero core edit;
-`git diff --stat core/` = 0). The glob stays for small `extend`-only plugins.
-
-## Named operations + CLI
-`plugins/github/queries/*.graphql` (~10): `openIssues`, `issue`, `prWithChecks`, `prsAwaitingReview`,
-`myClaimed`, `openPRs`, `checkRunsForPR`, `issueComments`, `repoLabels`, `paneForBranch`
-(**@pending** — needs the tmux plugin). Run via `supergraph query --op NAME --var k=v`; introspect via
-`supergraph schema <Type>`. **CLI lives in `cmd/` (not core):** `cmd/supergraph/query.go` today takes a
-raw query string and POSTs `/graphql`. Changes (cmd/ only): add `--op` (load the named `.graphql`) +
-repeatable `--var k=v`, target the github route `/plugins/github/graphql`, and add a `schema <Type>`
-subcommand that prints the vendored type. Core untouched.
-
-## SQLite state tables (add-only, `IF NOT EXISTS`)
-- `github_nodes(id,typename,owner,repo,number,node_json,fetched_at,updated_at, PK(id))`
-- `github_hooks(owner,repo,hook_id,secret, PK(owner,repo))`
-- `github_deliveries(delivery_id,seen_at, PK(delivery_id))`
-
-## Config keys `[plugins.github]`
-`token` (or env `GITHUB_TOKEN`), `ingress` (`"forward"`|`"tunnel"`), `tunnelURL` (tunnel mode),
-`webhookSecret` (or env; per-hook secrets derived), `owner` (="drewdrewthis"),
-`reconcileIntervalSeconds` (3600), `readThroughTTLSeconds`, `baseURL` (test-only → fake server).
-
-## Failure modes
-- Webhook transport down → reconcile + boot redelivery heal.
-- HMAC mismatch → 401, logged, no emit.
-- GraphQL points floor → pause to `resetAt`, never hard-fail.
-- `gh webhook forward` subprocess exits → supervised restart.
-- `/notifications` 304 spam → honor `X-Poll-Interval`, zero quota.
-- `since` clock skew → 60 s overlap.
-- Repos in other owners' orgs (no hook rights) → `/notifications` path only.
-
-## Acceptance criteria
-
-### PRD ACs (verbatim; github scope; p95 over N≥20)
-- **S3** — p95 < 1 s from check-run webhook receipt to subscription push (N≥20 signed webhooks). Evidence: paired journald lines.
-- **F1 (github half)** — p95 ingest-to-queryable < 1 s for github events (N≥20). Evidence: paired log timestamps.
-- **F2** — a dropped webhook is present after the next hourly reconcile; **full baseline backfill from empty completes < 60 min**. Evidence: log + timer.
-- **F3** — a repo created after boot appears in the graph with zero config within one reconcile. Evidence: query screenshot.
-- **F7** — GitHub API usage stays under budget at steady state, 20 repos (GraphQL points + REST < 500/h). Evidence: rate-limit / `rateLimit` log.
-
-### Plugin-level ACs
-- **AC-GH-HMAC** — bad/absent `X-Hub-Signature-256` → 401, no emit; valid → 200 + one event. `@local`
-- **AC-GH-FORWARD** — the `gh webhook forward` subprocess is supervised and restarted on exit; its deliveries reach the handler. `@local` (fake `gh webhook forward` stub) + `@live @pending`
-- **AC-GH-REDELIVER** — a failed repo-hook delivery past the stored id is replayed via `/attempts` and emitted **exactly once** (deduped by `X-GitHub-Delivery`). `@local` (fake `/repos/*/hooks/*/deliveries`+`/attempts`) + `@live @pending`
-- **AC-GH-NOTIFY-304** — `/notifications` with `If-Modified-Since` returning **304** costs zero quota and triggers no re-fetch; a 200 with changes feeds the cursor/store. `@local` (fake 304 path) + `@live @pending`
-- **AC-GH-RATELIMIT-FLOOR** — near the GraphQL points floor the backfill pauses until `resetAt` and resumes; never hard-fails; `/health` shows no forced-stale. `@local` (fake `rateLimit` floor)
-- **AC-GH-OVERLAP** — an event edited within the `since-60s` window is still ingested. `@local`
-- **AC-GH-CURSOR** — after restart the `since` cursor is unchanged **and** the next fetch carries `since=` equal to it (fake server records the received `since`). `@local`
-- **AC-GH-JSONNODE** — a query for a node not in store triggers one anchored fetch, stores it, and serves the **complete** JSON node. `@local`
-- **AC-GH-SCHEMA-SUBSET** — the served github schema is a strict subset of the vendored upstream SDL (no `Github*` prefix; `extend` adds only `origin`/`fetchedAt`). `@local` (CI test)
-- **AC-GH-NAMEDOP** — `supergraph query --op openIssues` runs the named `.graphql`; `supergraph schema Issue` prints the type. `@local`
-- **AC-GH-RATELOG** — every GitHub response's rate headers / GraphQL `rateLimit{remaining,resetAt}` are logged. `@local` + `@live @pending`
-- **AC-GH-ZEROCORE** — `git diff --stat core/` = 0 (github serves via `HTTPRoutes`, not the gqlgen glob). `@local`
-
-### Live vs local split (mirrors `features/github.feature` tag-for-tag)
-**`@local`:** S3, F1 (N≥20 p95), F2 (drop-heal + fake baseline timing), F3 (fake `/user/repos` gains a
-repo), AC-GH-HMAC, -FORWARD (stub), -REDELIVER, -NOTIFY-304, -RATELIMIT-FLOOR, -OVERLAP, -CURSOR,
--JSONNODE, -SCHEMA-SUBSET, -NAMEDOP, -RATELOG, -ZEROCORE — all against a **fake GitHub `httptest`
-server** (GraphQL + REST hooks/deliveries + `/notifications` 304 + settable `rateLimit`/headers) +
-**synthetic signed webhook POSTs** + a **fake `gh webhook forward` stub**.
-**`@live @pending`:** F2 (live <60 min), F3 (real new repo), F7 (real budget), AC-GH-FORWARD,
--REDELIVER, -NOTIFY-304, -RATELOG (real GitHub) — need env `GITHUB_TOKEN`+`GITHUB_ORG`; `@pending`
-until run against live GitHub.
-
-## AC review: applied
-Prior ac-reviewer Must/Should-Fixes remain folded in (N≥20 p95; rate-limit floor recovery;
-tag-for-tag @live/@local with @live=@pending; F3 local proof; `since-60s`; falsifiable cursor). The
-App-based items are superseded by the PAT/webhook redesign above.
-
-## Step sequence (coder-sized; fake-GitHub server first)
-1. **Fake GitHub `httptest` server** (`plugins/github/internal/fakegh`): GraphQL endpoint (paginated
-   connections + `rateLimit`), REST `/user/repos`, `/repos/*/hooks` + `/deliveries` + `/attempts`,
-   `/notifications` (304 path), settable rate fields. Everything tests against it.
-2. Vendor + strip: `plugins/github/schema/github.graphql` from octokit SDL, Mutation removed; a CI
-   subset check vs upstream.
-3. Scaffold `plugins/github/github.go`: `Register`, `New`, `Name`, `Migrate`, `Start`, `HTTPRoutes`
-   (`webhook` + `graphql`), `CursorReporter`; `baseURL` override.
-4. `Migrate`: the three state tables.
-5. JSON-backed executor: load SDL with `gqlparser`, dynamic field walker serving `github_nodes`;
-   read-through on miss + TTL (covers AC-GH-JSONNODE/-SCHEMA-SUBSET).
-6. Baseline backfill (shallow, paginated, `rateLimit` floor-pause) + hourly since-cursor reconcile
-   with `since-60s` overlap (covers F1/F2/F3/AC-GH-OVERLAP/-CURSOR/-RATELIMIT-FLOOR).
-7. Webhook handler + HMAC (`hmac.Equal`) + node upsert + emit (covers S3/AC-GH-HMAC).
-8. Ingress supervisor: `gh webhook forward` subprocess (restart on exit) / tunnel hook-create;
-   boot redelivery from repo-hook deliveries; `/notifications` If-Modified-Since poll
-   (covers AC-GH-FORWARD/-REDELIVER/-NOTIFY-304).
-9. Named ops `plugins/github/queries/*.graphql`; `cmd/supergraph/query.go` `--op`/`--var` + `schema`
-   subcommand (cmd/ only) (covers AC-GH-NAMEDOP).
-10. `features/steps_github_test.go` wiring the feature to fakegh + signed POST + forward stub; blank
-    import in `graph/plugins_import.go`; verify `git diff --stat core/` = 0 (covers AC-GH-ZEROCORE).
+The lean-schema reframe only reinforces the JSON-backed pick: far fewer types, still zero codegen.
 
 ## Handoff
-- ACs ready for ac-reviewer (see §Acceptance criteria).
-- Implementation → coder; steps 1–2 (fake server, vendor+strip) can start in parallel; step 5 (executor) is the judgment-heavy core.
+- ACs ready for ac-reviewer (see `features/github.feature`, rewritten to the cache-proxy contract).
+- Implementation → coder per the two-wave plan above; proxy.go (Wave 1 step 3) is the judgment-heavy core.

@@ -1,12 +1,17 @@
-Feature: GitHub plugin
+Feature: GitHub plugin — event-invalidated caching proxy
   As the orchardist and ship worker
-  I want github issues, PRs, and check runs ingested via webhooks with sub-second freshness and no missed events
-  So that a new issue reaches a worker and a check run reaches its subscriber without hitting rate limits
+  I want github issues, PRs, and check runs served from a lazy cache that webhooks purge by object id
+  So that reads are fresh and sub-second, stay under the API budget, and never miss an event
 
-  # Ingest is webhook-push (PAT only, no GitHub App). @local runs against a fake GitHub httptest
-  # server (GraphQL + REST hooks/deliveries + /notifications 304 + settable rateLimit) plus synthetic
-  # signed webhook POSTs and a fake `gh webhook forward` stub. @live needs env GITHUB_TOKEN +
-  # GITHUB_ORG and is @pending until run against live GitHub. Tags mirror the EDR split exactly.
+  # The github plugin is a read-through caching proxy (PAT only, no GitHub App). Nodes are keyed by
+  # object id (issue:owner/repo#N, pr:owner/repo#N, checkRun:owner/repo/<id>, repo:owner/repo, ...);
+  # a webhook purges exactly the entries that touch the changed object (tag purge = keyed delete);
+  # ETag/304 makes unchanged reads free; immutable nodes are pinned. @local runs against a fake GitHub
+  # httptest server (GraphQL + REST hooks/deliveries + /notifications 304 + ETag echo + settable
+  # rateLimit) plus synthetic signed webhook POSTs and a fake `gh webhook forward` stub. @live needs
+  # env GITHUB_TOKEN + GITHUB_ORG and is @pending until run against live GitHub.
+
+  # ---------- PRD ACs (verbatim; github scope) ----------
 
   @github @local @S3
   Scenario: S3 — check-run webhook to subscription push p95 under 1 second over 20 samples
@@ -24,20 +29,12 @@ Feature: GitHub plugin
     And evidence is captured: "p95 ingest-to-queryable < 1s over 20 samples, via paired log timestamps"
 
   @github @local @F2
-  Scenario: F2 — a dropped webhook is healed by the next reconcile
+  Scenario: F2 — a dropped webhook is healed within one reconcile window
     Given a supergraph server started with the github plugin and data dir <tmp>
     And the fake GitHub server has an issue that no webhook was delivered for
-    When the reconcile loop runs once
-    Then a query for open issues includes the dropped issue
-    And evidence is captured: "the dropped event is present after reconcile, via a log"
-
-  @github @local @F2
-  Scenario: F2 — the shallow baseline backfill from empty is measured against one hour
-    Given a supergraph server started with the github plugin and an empty data dir <tmp>
-    And the fake GitHub server has 20 repos of open issues, PRs, checks, reviews, comments, labels, and refs
-    When the boot baseline backfill runs to completion
-    Then the elapsed backfill time is recorded and is under 60 minutes
-    And evidence is captured: "baseline completes < 60 min, via a timer"
+    When the since-cursor reconcile runs once
+    Then a query for that issue returns it, healed without a webhook
+    And evidence is captured: "the dropped event is present after the next reconcile window, via a log"
 
   @github @local @F3
   Scenario: F3 — a repo added to the account is discovered by reconcile with zero config
@@ -45,7 +42,53 @@ Feature: GitHub plugin
     And the fake GitHub `/user/repos` listing gains a new repo after boot
     When the reconcile loop runs once
     Then a query for open issues covers the new repo with no config change
+    And a hook is created for the new repo
     And evidence is captured: "the new repo appears in the graph with zero config within one reconcile, via a log"
+
+  # ---------- Caching-proxy plugin ACs ----------
+
+  @github @local @AC-GH-CACHE-HIT
+  Scenario: A cached node is served with no upstream call
+    Given a supergraph server started with the github plugin and data dir <tmp>
+    And issue `issue:o/r#5` is already in the store, fresh
+    When `issue` is queried for `o/r#5`
+    Then the complete stored node is served
+    And no request is made to the fake GitHub server
+
+  @github @local @AC-GH-ETAG-304
+  Scenario: A conditional read-through that 304s costs zero quota
+    Given a supergraph server started with the github plugin and data dir <tmp>
+    And issue `issue:o/r#5` is in the store with a stored etag but marked expired
+    And the fake GitHub server returns 304 for `If-None-Match` matching that etag
+    When `issue` is queried for `o/r#5`
+    Then the read-through sends `If-None-Match` with the stored etag
+    And the fake server returns 304 and the stored node is served with its fetched_at bumped
+    And no GraphQL points or REST quota are spent on the body
+
+  @github @local @AC-GH-PURGE-TAG
+  Scenario: A webhook purges exactly the entries that touch the changed object
+    Given a supergraph server started with the github plugin and data dir <tmp>
+    And these entries are cached: `issue:o/r#5`, an `openIssues(o/r)` list result, and `issue:o/r#6`
+    When a correctly-signed `issue` `edited` webhook for `o/r#5` is received
+    Then `issue:o/r#5` is deleted and the `openIssues(o/r)` list result is deleted
+    And `issue:o/r#6` is still cached
+    And a `github.node.purged` envelope is emitted with key `issue:o/r#5`
+
+  @github @local @AC-GH-PIN
+  Scenario: An immutable node is pinned and never refetched
+    Given a supergraph server started with the github plugin and data dir <tmp>
+    And a merged PR `pr:o/r#9` closed more than the pin grace window ago is in the store
+    When `pr:o/r#9` is queried twice after its TTL would have expired
+    Then it is served from the store both times
+    And no conditional or full fetch is made to the fake GitHub server
+
+  @github @local @AC-GH-SINGLEFLIGHT
+  Scenario: Concurrent misses on one key coalesce into a single upstream fetch
+    Given a supergraph server started with the github plugin and data dir <tmp>
+    And issue `issue:o/r#7` is not in the store
+    When 10 concurrent queries for `issue:o/r#7` arrive
+    Then the fake GitHub server receives exactly one fetch for it
+    And all 10 queries return the same stored node
 
   @github @local @AC-GH-HMAC
   Scenario: A webhook with a bad signature is rejected with 401 and emits nothing
@@ -58,47 +101,51 @@ Feature: GitHub plugin
     And exactly one github event is emitted
 
   @github @local @AC-GH-FORWARD
-  Scenario: The gh webhook forward subprocess is supervised and restarted
+  Scenario: The gh webhook forward child is restarted with backoff and redelivery
     Given a github plugin configured for `forward` ingress with a fake `gh webhook forward` stub
     When the plugin starts and the stub delivers a signed webhook to the handler
     Then the webhook is ingested
-    When the stub subprocess exits
-    Then the plugin restarts it and a subsequent delivery is still ingested
-
-  @github @local @AC-GH-REDELIVER
-  Scenario: A failed repo-hook delivery is replayed exactly once on boot
-    Given a supergraph server started with the github plugin and data dir <tmp>
-    And the fake `/repos/{owner}/{repo}/hooks/{id}/deliveries` has one failed delivery past the stored id
-    When the plugin boots and runs its redelivery step
-    Then the delivery is replayed via `/attempts` and exactly one github event is emitted
-    And a second boot does not re-emit it, deduped by `X-GitHub-Delivery`
+    When the stub child exits
+    Then the plugin restarts it with backoff and runs redelivery from the last-seen delivery id
+    And a delivery missed while it was down is replayed via `/attempts` exactly once
 
   @github @local @AC-GH-NOTIFY-304
-  Scenario: A 304 from /notifications costs zero quota and triggers no re-fetch
+  Scenario: The notifications poll only runs behind the flag and a 304 costs zero quota
     Given a supergraph server started with the github plugin and data dir <tmp>
+    And `notifications` is false by default
+    Then the notifications poll does not run
+    When the server is restarted with `notifications = true`
     And the fake `/notifications` returns 304 for the stored `If-Modified-Since`
-    When the notifications poll runs
-    Then no GraphQL or node fetch is made and no quota is spent
+    And the notifications poll runs
+    Then no node fetch is made and no quota is spent
     When `/notifications` next returns 200 with a changed thread
     Then that change feeds the cursor and store
 
-  @github @local @AC-GH-RATELIMIT-FLOOR
-  Scenario: Near the GraphQL points floor the backfill pauses to resetAt and resumes
+  @github @local @AC-GH-FLOOR
+  Scenario: Near the GraphQL points floor the plugin pauses to resetAt and resumes
     Given a supergraph server started with the github plugin and data dir <tmp>
     And the fake GitHub GraphQL returns `rateLimit` remaining near the floor with a near-future `resetAt`
-    When the baseline backfill hits the floor
+    When a read-through or reconcile hits the floor
     Then the plugin pauses until `resetAt` rather than erroring
-    And the plugin does not panic or exit and `/health` shows no forced-stale for github
+    And it does not panic or exit and `/health` shows no forced-stale for github
     When the fake server restores points after `resetAt`
-    Then the backfill resumes and completes
+    Then the paused work resumes and completes
 
-  @github @local @AC-GH-OVERLAP
-  Scenario: An event edited within the since-60s overlap window is still ingested
+  @github @local @AC-GH-RATELOG
+  Scenario: Rate-limit fields are logged on every GitHub response
     Given a supergraph server started with the github plugin and data dir <tmp>
-    And a reconcile has advanced the `since` cursor for a repo to time T
-    And the fake GitHub server has an issue edited within 60s before T
-    When the reconcile loop runs again with the overlap window applied
-    Then that issue is ingested and not skipped
+    When the plugin makes a request to the fake GitHub server
+    Then the log records the REST `x-ratelimit-*` headers and the GraphQL `rateLimit{remaining,resetAt}`
+
+  @github @local @AC-GH-NAMEDOP-KEYS
+  Scenario: A named op scopes its result to object ids so a purge of one evicts the list
+    Given a supergraph server started with the github plugin and data dir <tmp>
+    When I run `supergraph query --op openIssues --var owner=o --var repo=r`
+    Then the `plugins/github/queries/openIssues.graphql` op runs and its result is tagged with scope `repo:o/r`
+    And each returned issue node is stored under its own key
+    When a correctly-signed `issue` `closed` webhook for `o/r#5` is received
+    Then the `openIssues(o/r)` list result is evicted by the covering scope
+    And I run `supergraph schema Issue` and the `Issue` type definition is printed
 
   @github @local @AC-GH-CURSOR
   Scenario: The per-repo since cursor persists across a restart and drives the next fetch
@@ -106,36 +153,14 @@ Feature: GitHub plugin
     And one reconcile has advanced the `since` cursor for a repo to time T
     When the server is stopped and restarted on the same data dir <tmp>
     Then the `since` cursor for that repo is still T after the restart
-    And the next reconcile's fetch to the fake GitHub server carries `since=` equal to T
+    And the next reconcile's fetch to the fake GitHub server carries `since=` equal to T minus 60s
 
-  @github @local @AC-GH-JSONNODE
-  Scenario: A node not in store is read-through fetched, stored, and served complete
-    Given a supergraph server started with the github plugin and data dir <tmp>
-    And an issue node that is not yet in the store
-    When that issue is queried
-    Then the plugin makes one anchored fetch, stores the node, and serves the complete JSON node
-    And a second query for it makes no further fetch
-
-  @github @local @AC-GH-SCHEMA-SUBSET
-  Scenario: The served github schema is a strict subset of the vendored upstream SDL
-    Given the vendored GitHub SDL with the Mutation root stripped
-    When the served github schema is compared to the upstream SDL
-    Then every github type and field exists in upstream with no `Github` prefix
-    And the only additions are via `extend type` adding `origin` and `fetchedAt`
-
-  @github @local @AC-GH-NAMEDOP
-  Scenario: Named operations run by name and a type can be printed
-    Given a supergraph server started with the github plugin and data dir <tmp>
-    When I run `supergraph query --op openIssues --var repo=drewdrewthis/supergraph`
-    Then the named `plugins/github/queries/openIssues.graphql` operation runs and returns issues
-    When I run `supergraph schema Issue`
-    Then the `Issue` type definition is printed
-
-  @github @local @AC-GH-RATELOG
-  Scenario: Rate-limit fields are logged on every GitHub response
-    Given a supergraph server started with the github plugin and data dir <tmp>
-    When the reconcile loop makes a request to the fake GitHub server
-    Then the log records the REST `x-ratelimit-*` headers and the GraphQL `rateLimit{remaining,resetAt}`
+  @github @local @AC-GH-LOC
+  Scenario: Production LOC for the github plugin stays within the 800-line budget
+    Given the github plugin source under `plugins/github`
+    When `make loc-github` counts non-comment, non-blank prod lines excluding tests and `internal/fakegh`
+    Then the count is 800 or fewer
+    And evidence is captured: "plugins/github prod LOC <= 800, via make loc-github output"
 
   @github @local @AC-GH-ZEROCORE
   Scenario: The github plugin compiles in without touching core
@@ -143,12 +168,15 @@ Feature: GitHub plugin
     When `git diff --stat core/` is run
     Then it reports 0 files changed
 
+  # ---------- Live proofs (honest @pending) ----------
+
   @github @live @pending @F2
-  Scenario: F2 — live baseline backfill from an empty db completes under 60 minutes
-    Given the github plugin started against the live account with an empty data dir <tmp>
-    When the boot baseline backfill runs to completion
-    Then the backfill completes in under 60 minutes
-    And evidence is captured: "backfill completes < 60 min, via a timer"
+  Scenario: F2 — a real dropped delivery is healed by redelivery or reconcile
+    Given the github plugin is running against the live account
+    And a real webhook delivery is dropped
+    When boot redelivery or the next since-cursor reconcile runs
+    Then the dropped object is present in the graph
+    And evidence is captured: "the dropped event is healed within one window, via a log"
 
   @github @live @pending @F3
   Scenario: F3 — a repo created on the account after boot appears within one reconcile
@@ -170,15 +198,9 @@ Feature: GitHub plugin
     When a real event fires on a watched repo
     Then `gh webhook forward` streams it over the outbound websocket to the handler and it is ingested
 
-  @github @live @pending @AC-GH-REDELIVER
-  Scenario: Live repo-hook redelivery replays a real missed delivery on boot
-    Given the github plugin against live GitHub with a real missed delivery
-    When the plugin boots and runs its redelivery step
-    Then the missed delivery is replayed and ingested exactly once
-
   @github @live @pending @AC-GH-NOTIFY-304
   Scenario: Live /notifications honors If-Modified-Since and X-Poll-Interval
-    Given the github plugin polling live `/notifications`
+    Given the github plugin polling live `/notifications` with `notifications = true`
     When there are no changes since the stored `If-Modified-Since`
     Then GitHub returns 304 at the advertised `X-Poll-Interval` and no quota is spent
 
