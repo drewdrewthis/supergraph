@@ -40,12 +40,10 @@ joins** — issue ↔ task ↔ email ↔ running session ↔ PR — in one query
 ## 4. Assumptions
 
 - Go stays the implementation language.
-- gqlgen supports Federation v2. **UNVERIFIED — spike must prove.**
-- A self-hosted router exists that hot-reloads on schema changes. **UNVERIFIED — spike must prove.**
 - A GitHub org-level App webhook covers new repos automatically.
 - Mesh networking (WireGuard/Tailscale) already exists between boxes.
 - SQLite per plugin is fast enough for this workload.
-- One router is enough — no per-box routers needed.
+- gqlgen subscriptions over the mesh are sufficient for peer mirroring. **UNVERIFIED — spike must prove.**
 
 ## 5. User stories
 
@@ -55,36 +53,41 @@ joins** — issue ↔ task ↔ email ↔ running session ↔ PR — in one query
 | As **orchardist**, I want to query free slots across boxes, so that I can dispatch work to any idle machine. | Query returns live slot state in <1s. |
 | As the **ship worker**, I want to subscribe to PR CI status, so that I react the moment a check finishes. | Subscription event fires within 1s of CI state change. |
 | As the **owner**, I want to ask "what is everything touching issue #N" across GitHub/Todoist/email/sessions, so that I get one answer instead of five lookups. | Single query, all sources represented. |
-| As a **developer**, I want to add a new plugin in an afternoon following the contract doc, so that the system grows without core changes. | New plugin registered with zero core edits. |
+| As a **developer**, I want to add a new plugin (a Go package, not a process) in an afternoon following the contract doc, so that the system grows without core changes. | New plugin registered with zero core edits. |
 | As an **operator**, I want to see plugin lag on a health endpoint and get a Telegram alert, so that stale data never goes unnoticed again. | Alert fires before lag exceeds a defined threshold. |
 
 **Milestones:** spike → EDR → core → plugin contract + harness → github plugin → sessions
 plugin → subscriptions + health → drewdrewthis worker → todoist.
 
 **Spike pass/fail:**
-(a) chosen router + gqlgen Fed-v2 subgraph run together without forking either;
-(b) a deliberately stalled plugin trips the lag/canary alert end-to-end;
-(c) one cross-plugin query returns live state sub-second.
-**Kill criterion:** if (a) needs a fork, the only viable router is unmaintained or
-enterprise-licensed, or (b) fails → stop; ship a single-process worker (org webhook + hourly
-reconcile + one SQLite) instead.
+(a) one binary with github + sessions plugins serves a live cross-plugin query sub-second;
+(b) a deliberately stalled plugin trips the canary/lag alert end-to-end;
+(c) a second instance on another box mirrors the first via the `peer` plugin and shows
+`stale since T` when the first is stopped.
+**Kill criterion:** if (b) fails → stop.
 
 ## 6. User interaction & design
 
 High-level only — full design goes in a future EDR under `docs/edr/`.
 
-- **Core** = router (Apollo Router candidate; Cosmo/Bramble as fallbacks — maintenance check
-  pending) + a tiny ingest envelope `{ts, source, type, v, key, payload}` + schema composition CI.
-- **Plugin** = its own process, own subgraph (gqlgen, Federation v2, `@key` includes `hostId` for
-  per-box entities), own listener/poller, **own SQLite file** (state tables + a short auto-pruned
-  event ring + cursors), own migrations at boot, and a `_health` endpoint (lastEventAt, cursor,
-  lag). **Rebuildable:** delete the db, restart, reconcile refills it.
+- **No router, no federation.** One binary per box. Plugins are Go packages compiled into that
+  binary, not separate processes. The binary serves **one GraphQL endpoint** (gqlgen) per box.
+- **Core** = the binary shell + a tiny ingest envelope `{ts, source, type, v, key, payload}`.
+- **Plugin** = a Go package with a fixed contract: same envelope, own listener/poller,
+  **own SQLite file** (state tables + a short auto-pruned event ring + cursors), own migrations
+  at boot, and a `_health` endpoint (lastEventAt, cursor, lag). Entity keys keep `hostId` for
+  per-box identity. **Rebuildable:** delete the db, restart, reconcile refills it.
+- **Multi-box = the `peer` plugin.** To see another box's data, a box runs a `peer` plugin that
+  queries + subscribes to that box's normal GraphQL endpoint over the WireGuard/Tailscale mesh,
+  mirrors what it gets into its own SQLite, and serves it back tagged with `hostId` +
+  `lastSeenAt`. Data is duplicated per box on purpose — it's a cache, not a shared source of
+  truth. A down box reads as **stale since T** (from `lastSeenAt`), never as empty.
 - **GitHub plugin**: the hourly `since`-cursor reconcile is the **primary correctness path** —
   it is what guarantees no issue is ever missed. Webhooks (org-level GitHub App push + boot
   redelivery) are a **latency optimization only**, not a correctness dependency. Webhook
   ingress lands on the **hetzner-agents box** (the only box with a public IP) and is an
   **accepted single point of failure**; the hourly reconcile covers its downtime.
-- **Subscriptions**: the router pushes events like "issue labeled ready" to actors (e.g.
+- **Subscriptions**: the binary pushes events like "issue labeled ready" to actors (e.g.
   orchardist). Actors own all side effects — the supergraph never does.
 - **Actor-level claim**: before acting on a `ready` issue, the worker must claim it (assign
   self / add `grinding` label) and re-check, not just trust ingest dedup. Ingest-level
@@ -95,28 +98,25 @@ High-level only — full design goes in a future EDR under `docs/edr/`.
   not as "all clear."
 - **Versioning**: event payload carries `v` + upcasters (never rewrite the log); schema changes
   are add-only with `@deprecated`; envelope path is versioned; schema-diff check runs in CI.
-- **Multi-box**: one router on the WireGuard/Tailscale mesh; subgraphs bind to the mesh IP only.
-  A down box reads as **unknown**, never as empty (this avoided a past double-dispatch bug).
 - Ship a plugin contract doc, a template plugin, and a one-command local dev harness.
 
 ## 7. Open questions
 
 | Question | Owner | Status |
 |---|---|---|
-| Router choice + maintenance status (Apollo Router vs Cosmo vs Bramble) | drewdrewthis | open |
 | GitHub webhook redelivery retention window | drewdrewthis | open |
-| Auth model — router token + per-plugin ingest secret? | drewdrewthis | open |
+| Auth model — binary-level token + per-plugin ingest secret? | drewdrewthis | open |
 | Event-ring retention length | drewdrewthis | open |
 | How orchardist/ship migrate off orchard-daemon | drewdrewthis | open |
 | Naming of first plugins | drewdrewthis | open |
-| Is federation justified before a second consumer exists, or should v1 be a single process? | drewdrewthis | open — decision needed before spike |
+| Federation vs single process | drewdrewthis | **RESOLVED: single binary + `peer` plugin** |
 
 ## 8. What we're not doing
 
 - Lifecycle ops in the core — no launching or killing sessions.
 - Event sourcing — no keeping events forever.
 - Redis or any shared cache.
-- Per-box routers.
+- An external federation router (Apollo/Cosmo/Bramble) — `peer` plugin instead.
 - Migrating the langwatch fleet in v1.
 - Gmail/Todoist in v1 (Todoist is the first post-MVP plugin).
 - A TUI — consumers are existing tools.
@@ -125,11 +125,10 @@ High-level only — full design goes in a future EDR under `docs/edr/`.
 
 Ranked, one line each:
 
-1. **Complexity as rot vector** — v2 has many more moving parts than the one process that
-   already rotted. Mitigation: kill criterion + single-process fallback.
-2. **Router choice unproven** — no chosen router has been run against gqlgen Fed-v2 yet.
-3. **Freshness alerting unproven** — the canary/lag alert path has never fired for real.
-4. **Webhook ingress SPOF** — GitHub webhook ingress lands on one box (hetzner-agents, the
+1. **Complexity as rot vector** — more moving parts than the one process that already rotted.
+   Mitigation: single-binary decision keeps each box a plain process, no router to run.
+2. **Freshness alerting unproven** — the canary/lag alert path has never fired for real.
+3. **Webhook ingress SPOF** — GitHub webhook ingress lands on one box (hetzner-agents, the
    only public IP).
-5. **Double-dispatch** — ingest-level idempotency alone already failed once; needs an
+4. **Double-dispatch** — ingest-level idempotency alone already failed once; needs an
    actor-level claim.
