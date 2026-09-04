@@ -24,23 +24,11 @@ Feature: Template plugin contract
   Scenario: A panic in one plugin's Start does not take down the server or other plugins
     Given a supergraph server started with the template plugin, a second "fakeok" plugin that never panics, and data dir <tmp>
     When I induce a panic in the template plugin's Start via its panic-inject path
-    And I wait one canary interval
+    And I wait for the panic to be detected
     Then the "template" entry in `/health` has state "stale"
     And `GET /health` still returns HTTP 200
     And the "fakeok" entry in `/health` has state "ok"
     And `supergraph query '{ __typename }'` still returns HTTP 200
-
-  @integration @AC-CORE-5
-  Scenario: The canary positively advances lastEventAt and detects a cut-off plugin
-    Given a supergraph server started with the template plugin and data dir <tmp>, with canary interval I and lag threshold T
-    When I capture `/health` and note "template"'s "lastEventAt"
-    And I wait one canary interval I
-    And I capture `/health` again
-    Then the second "lastEventAt" is later than the first
-    When I cut the template plugin's emit path
-    And I wait more than threshold T
-    And I capture `/health` a third time
-    Then the "template" entry has state "stale"
 
   @unit @AC-CORE-12
   Scenario: A plugin self-registers via init() and duplicate names panic loudly
@@ -63,7 +51,6 @@ Feature: Template plugin contract
 
   # --- AC Coverage Map ---
   # AC-CORE-4: "Panic isolation — F5" → Scenario: A panic in one plugin's Start does not take down the server or other plugins
-  # AC-CORE-5: "Canary positive-fire, named channel" → Scenario: The canary positively advances lastEventAt and detects a cut-off plugin
   # AC-CORE-10: "S5 — zero core edit" → Scenario: Adding the template plugin touches zero files under core/
   # AC-CORE-10b: "Extend seam resolves" → Scenario: The extend-type seam resolves plugin-contributed query and subscription fields
   # AC-CORE-12: "Registry contract" → Scenario: A plugin self-registers via init() and duplicate names panic loudly

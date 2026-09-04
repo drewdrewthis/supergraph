@@ -25,7 +25,6 @@ type Supervisor struct {
 	mu      sync.Mutex
 	stores  map[string]*Store
 	plugins map[string]Plugin
-	stopped map[string]bool // plugins whose canary is suppressed
 }
 
 // NewSupervisor wires a supervisor over an explicit factory map (production passes
@@ -41,7 +40,6 @@ func NewSupervisor(cfg Config, factories map[string]Factory, health *HealthAggre
 		ringCapacity: defaultRingCapacity,
 		stores:       map[string]*Store{},
 		plugins:      map[string]Plugin{},
-		stopped:      map[string]bool{},
 	}
 }
 
@@ -64,7 +62,7 @@ func (sv *Supervisor) Plugins() map[string]Plugin {
 	return out
 }
 
-// emitFor builds the emit closure a plugin (and the canary) uses: persist to the
+// emitFor builds the emit closure a plugin uses: persist to the
 // plugin's ring, stamp health freshness, then fan out to subscribers. It is bound to
 // one plugin's name and Store so the write always lands in the right db.
 func (sv *Supervisor) emitFor(name string, store *Store) Emit {
@@ -142,12 +140,10 @@ func (sv *Supervisor) runPlugin(ctx context.Context, p Plugin, emit Emit) {
 }
 
 // stopDead handles a plugin that has stopped running (panic or Start error): it is
-// marked stale AND its canary is suppressed. Continuing to fire synthetic canary
-// events for a dead plugin would advance its lastEventAt and mask the failure as ok
-// — the exact false-green the PRD §6 canary rule warns against.
+// marked forcedStale so it stays stale until an explicit restart, and no later stray
+// event can launder it back to ok (the PRD §6 false-green rule).
 func (sv *Supervisor) stopDead(name string) {
 	sv.health.MarkStale(name)
-	sv.StopCanary(name)
 }
 
 // Run starts every plugin, blocks until ctx is cancelled, then closes all stores.
@@ -166,48 +162,4 @@ func (sv *Supervisor) Stop() {
 			log.Printf("core: close store %q: %v", name, err)
 		}
 	}
-}
-
-// StopCanary suppresses the canary for one plugin. It is the PRODUCTION path for a
-// dead plugin: stopDead calls it when a plugin panics or its Start returns, so core
-// stops firing synthetic canary events that would otherwise advance the dead
-// plugin's lastEventAt and mask the failure as ok. It is not a test-only hook.
-func (sv *Supervisor) StopCanary(name string) {
-	sv.mu.Lock()
-	defer sv.mu.Unlock()
-	sv.stopped[name] = true
-}
-
-// canaryTargets is the set of running plugins whose canary is not suppressed.
-func (sv *Supervisor) canaryTargets() []string {
-	sv.mu.Lock()
-	defer sv.mu.Unlock()
-	out := make([]string, 0, len(sv.plugins))
-	for name := range sv.plugins {
-		if !sv.stopped[name] {
-			out = append(out, name)
-		}
-	}
-	return out
-}
-
-// fireCanary emits one synthetic envelope for name through the real emit path, so it
-// lands in the ring, updates health, and reaches subscribers exactly like a real
-// event. A suppressed or not-yet-running plugin is a no-op.
-func (sv *Supervisor) fireCanary(ctx context.Context, name string) error {
-	sv.mu.Lock()
-	store := sv.stores[name]
-	suppressed := sv.stopped[name]
-	sv.mu.Unlock()
-	if store == nil || suppressed {
-		return nil
-	}
-	e := Envelope{
-		TS:     sv.health.now(),
-		Source: name,
-		Type:   "canary",
-		V:      1,
-		Key:    "canary:" + name,
-	}
-	return sv.emitFor(name, store)(ctx, e)
 }

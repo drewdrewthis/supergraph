@@ -124,22 +124,11 @@ func InitializeScenario(sc *godog.ScenarioContext) {
 	// --- AC-CORE-4 ---
 	sc.Step(lit(`a supergraph server started with the template plugin, a second "fakeok" plugin that never panics, and data dir <tmp>`), w.ac4Given)
 	sc.Step(lit("I induce a panic in the template plugin's Start via its panic-inject path"), w.ac4Induce)
-	sc.Step(lit("I wait one canary interval"), w.ac4WaitStale)
+	sc.Step(lit("I wait for the panic to be detected"), w.ac4WaitStale)
 	sc.Step(lit(`the "template" entry in `+"`/health`"+` has state "stale"`), w.ac4TemplateStale)
 	sc.Step(lit("`GET /health` still returns HTTP 200"), w.ac4Health200)
 	sc.Step(lit(`the "fakeok" entry in `+"`/health`"+` has state "ok"`), w.ac4FakeokOk)
 	sc.Step(lit("`supergraph query '{ __typename }'` still returns HTTP 200"), w.ac4QueryOk)
-
-	// --- AC-CORE-5 ---
-	sc.Step(lit("a supergraph server started with the template plugin and data dir <tmp>, with canary interval I and lag threshold T"), w.ac5Given)
-	sc.Step(lit("I capture `/health` and note \"template\"'s \"lastEventAt\""), w.ac5Cap1)
-	sc.Step(lit("I wait one canary interval I"), w.ac5Wait1)
-	sc.Step(lit("I capture `/health` again"), w.ac5Cap2)
-	sc.Step(lit(`the second "lastEventAt" is later than the first`), w.ac5Advanced)
-	sc.Step(lit("I cut the template plugin's emit path"), w.ac5Cut)
-	sc.Step(lit("I wait more than threshold T"), w.ac5WaitT)
-	sc.Step(lit("I capture `/health` a third time"), w.ac5Cap3)
-	sc.Step(lit(`the "template" entry has state "stale"`), w.ac5AssertStale)
 
 	// --- AC-CORE-12 ---
 	sc.Step(lit("the template plugin calls `core.Register` from its own `init()`"), w.ac12Given)
@@ -225,7 +214,7 @@ func (w *world) ac1Emit() error {
 		}
 		vf, _ := te["v"].(float64)
 		if int(vf) != 2 {
-			continue // skip canary (v=1)
+			continue // skip any non-v2 frame
 		}
 		s, _ := te["payload"].(string)
 		w.emittedPayload = []byte(s)
@@ -471,7 +460,7 @@ func (w *world) wsEmit() error {
 	// Connection setup/ack already happened in wsOpen; the clock for the <1s
 	// bound starts here, at the emit trigger, not before.
 	w.wsEmitAt = time.Now()
-	return nil // server emits via tick/canary on its own
+	return nil // server emits via the plugin's own tick on its own
 }
 
 func (w *world) wsPushedWithin1s() error {
@@ -528,11 +517,11 @@ func (w *world) ac9Unmet() error {
 // ---------- AC-CORE-11 ----------
 
 func (w *world) ac11Valid() error {
-	return w.writeConfig(cfgOpts{canary: 0.3, lag: 30, templateInterval: 1})
+	return w.writeConfig(cfgOpts{lag: 30, templateInterval: 1})
 }
 
 func (w *world) ac11NoHostID() error {
-	return w.writeConfig(cfgOpts{omitHostID: true, canary: 0.3, lag: 30, templateInterval: 1})
+	return w.writeConfig(cfgOpts{omitHostID: true, lag: 30, templateInterval: 1})
 }
 
 func (w *world) ac11Serve() error {
@@ -815,10 +804,11 @@ func (w *world) ac4Given() error {
 
 func (w *world) ac4Induce() error {
 	// There is no runtime panic injection into a live plugin, so re-launch with the
-	// panic-inject config armed and the canary parked long — otherwise a synthetic
-	// canary event would revive the panicked template before it can be observed.
+	// panic-inject config armed. The template's own tick is parked long, but the panic
+	// fires right after its first emit and marks it forcedStale, so it stays stale
+	// regardless of any later event.
 	w.stopServe()
-	if err := w.writeConfig(cfgOpts{canary: 3600, lag: 30, templateInterval: 3600, templatePanic: true}); err != nil {
+	if err := w.writeConfig(cfgOpts{lag: 30, templateInterval: 3600, templatePanic: true}); err != nil {
 		return err
 	}
 	return w.startServe()
@@ -878,115 +868,6 @@ func (w *world) ac4QueryOk() error {
 		return fmt.Errorf("base query failed after panic exit=%d out=%q err=%q", w.lastExit, w.lastStdout, w.lastStderr)
 	}
 	return nil
-}
-
-// ---------- AC-CORE-5 ----------
-
-func (w *world) ac5Given() error {
-	// short canary drives observable freshness; template's own tick parked long so
-	// the canary is the sole positive-fire source.
-	if err := w.writeConfig(cfgOpts{canary: 1, lag: 30, templateInterval: 3600}); err != nil {
-		return err
-	}
-	return w.startServe()
-}
-
-func (w *world) ac5Cap1() error {
-	rows, _, err := w.getHealth()
-	if err != nil {
-		return err
-	}
-	w.cap1 = rows
-	return nil
-}
-
-func (w *world) ac5Wait1() error {
-	deadline := time.Now().Add(6 * time.Second)
-	t1 := lastEventAt(w.cap1, "template")
-	for time.Now().Before(deadline) {
-		rows, _, err := w.getHealth()
-		if err == nil {
-			if t2 := lastEventAt(rows, "template"); t2 != "" && t2 != t1 {
-				return nil
-			}
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	return fmt.Errorf("template lastEventAt did not advance within 6s (canary never fired)")
-}
-
-func (w *world) ac5Cap2() error {
-	rows, _, err := w.getHealth()
-	if err != nil {
-		return err
-	}
-	w.cap2 = rows
-	return nil
-}
-
-func (w *world) ac5Advanced() error {
-	t1 := lastEventAt(w.cap1, "template")
-	t2 := lastEventAt(w.cap2, "template")
-	if t1 == "" || t2 == "" {
-		return fmt.Errorf("lastEventAt missing: t1=%q t2=%q", t1, t2)
-	}
-	p1, _ := time.Parse(time.RFC3339Nano, t1)
-	p2, _ := time.Parse(time.RFC3339Nano, t2)
-	if !p2.After(p1) {
-		return fmt.Errorf("lastEventAt did not advance (canary never fired): %s -> %s", t1, t2)
-	}
-	return nil
-}
-
-func (w *world) ac5Cut() error {
-	// "cut the emit path": relaunch with canary + tick parked beyond the test window
-	// and a 1s lag threshold, so after the startup hello nothing re-emits and the
-	// plugin crosses into stale purely by elapsed time.
-	w.stopServe()
-	if err := w.writeConfig(cfgOpts{canary: 3600, lag: 1, templateInterval: 3600}); err != nil {
-		return err
-	}
-	return w.startServe()
-}
-
-func (w *world) ac5WaitT() error {
-	deadline := time.Now().Add(6 * time.Second)
-	for time.Now().Before(deadline) {
-		rows, _, err := w.getHealth()
-		if err == nil {
-			if r := findRow(rows, "template"); r != nil && r["state"] == "stale" {
-				return nil
-			}
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	return fmt.Errorf("template did not reach stale within 6s after emit cut")
-}
-
-func (w *world) ac5Cap3() error {
-	rows, _, err := w.getHealth()
-	if err != nil {
-		return err
-	}
-	w.healthRows = rows
-	return nil
-}
-
-func (w *world) ac5AssertStale() error {
-	r := findRow(w.healthRows, "template")
-	if r == nil || r["state"] != "stale" {
-		return fmt.Errorf("template not stale after cut: %v", r)
-	}
-	return nil
-}
-
-func lastEventAt(rows []map[string]any, plugin string) string {
-	r := findRow(rows, plugin)
-	if r == nil {
-		return ""
-	}
-	s, _ := r["lastEventAt"].(string)
-	return s
 }
 
 // ---------- AC-CORE-12 ----------

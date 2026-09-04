@@ -139,7 +139,7 @@ Feature: Core-tier supergraph server
   # AC-CORE-2: "SQLite ring + cursor, use-proof" → Scenario: SQLite ring prunes to capacity and cursor survives restart
   # AC-CORE-3: "Health endpoint shape" → Scenario: Health endpoint and health query return matching shape
   # AC-CORE-4: "Panic isolation — F5" → covered in plugins/template/template.feature
-  # AC-CORE-5: "Canary positive-fire, named channel" → covered in plugins/template/template.feature
+  # AC-CORE-5: removed — synthetic heartbeat dropped (owner decision 2026-09-04); health derives from real emits only
   # AC-CORE-6: "CLI serve + query round-trip" → Scenario: CLI serve binds the port and query round-trips
   # AC-CORE-7a: "Install idempotent, Linux/systemd" → Scenario: Install is idempotent on Linux
   # AC-CORE-7b: "Install idempotent, macOS/launchd" → Scenario: Install is idempotent on macOS

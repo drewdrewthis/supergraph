@@ -11,7 +11,7 @@ const subBuffer = 256
 
 // Bus fans out emitted envelopes to live subscribers. Each subscriber gets its own
 // buffered channel; a full channel drops the event for THAT subscriber only (select
-// with a default) so one slow consumer can never block AppendEvent, the canary, or a
+// with a default) so one slow consumer can never block AppendEvent, an emit, or a
 // sibling subscriber. Dropping is acceptable here because subscriptions are a live
 // tail, not a durable log — the Store is the durable record.
 type Bus struct {

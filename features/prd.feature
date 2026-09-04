@@ -41,10 +41,10 @@ Feature: PRD user-story and failure-surface acceptance criteria
     Then evidence is captured: "`git diff --stat core/` is 0 files, via diff output and a `_health` screenshot"
 
   @pending @plugin-tier @S6
-  Scenario: S6 — /health reports a stalling plugin as stale with growing lag
-    Given the plugin tier for "canary" is implemented
-    When the acceptance criterion is exercised: "a plugin stalls"
-    Then evidence is captured: "within 60s `/health` shows state stale with growing lagSeconds, via `/health` screenshots and a lag log"
+  Scenario: S6 — /health reports each plugin's last real event and marks a stalled one stale
+    Given the plugin tier for "github" is implemented
+    When the acceptance criterion is exercised: "a plugin stops emitting real events"
+    Then evidence is captured: "within 60s `/health` shows state stale with growing lagSeconds derived from the plugin's last real event, via `/health` screenshots and a lag log"
 
   @pending @plugin-tier @F1
   Scenario: F1 Freshness — github and claude events become queryable in under 1 second
@@ -77,10 +77,10 @@ Feature: PRD user-story and failure-surface acceptance criteria
     Then evidence is captured: "it shows stale while `_health` and the other plugins, including tmux, keep answering, via a `_health` screenshot taken after the induced panic"
 
   @pending @plugin-tier @F6
-  Scenario: F6 Alert positive-fire — a healthy plugin reports low lag on /health
-    Given the plugin tier for "canary" is implemented
-    When the acceptance criterion is exercised: "a plugin is healthy"
-    Then evidence is captured: "`/health` shows lagSeconds < 60 for it, via a `/health` screenshot"
+  Scenario: F6 — /health reports each plugin's last real event so a healthy plugin shows low lag
+    Given the plugin tier for "github" is implemented
+    When the acceptance criterion is exercised: "a plugin emits real events at a steady cadence"
+    Then evidence is captured: "`/health` shows lagSeconds < 60 for it, derived from its last real event, via a `/health` screenshot"
 
   @pending @plugin-tier @F7
   Scenario: F7 Quota — GitHub API usage stays under budget at steady state
@@ -100,12 +100,12 @@ Feature: PRD user-story and failure-surface acceptance criteria
   # S3: "Webhook receipt to subscription push p95 < 1s" → Scenario: S3 — check-run webhook reaches a subscription push in under 1 second
   # S4: "One query joins github + claude by issue, source-tagged, stale marker on absence" → Scenario: S4 — one query joins github and claude rows by issue, marking absent sources
   # S5: "Template plugin compiles in, zero core diff" → Scenario: S5 — the template plugin compiles in and serves without touching core
-  # S6: "/health shows stale + growing lag within 60s of stall" → Scenario: S6 — /health reports a stalling plugin as stale with growing lag
+  # S6: "/health reports last real event per plugin; stale + growing lag within 60s of stall" → Scenario: S6 — /health reports each plugin's last real event and marks a stalled one stale
   # F1: "Freshness — ingest-to-queryable p95 < 1s" → Scenario: F1 Freshness — github and claude events become queryable in under 1 second
   # F2: "Reconcile — dropped webhook healed, backfill < 60min" → Scenario: F2 Reconcile — a dropped webhook is healed by the next hourly reconcile
   # F3: "New repo appears with zero config within one reconcile" → Scenario: F3 New repo — a repo created after boot appears in the graph with zero config
   # F4: "Double-dispatch — exactly one ship run, loser sees claim" → Scenario: F4 Double-dispatch — two racing orchestrators yield exactly one ship run
   # F5: "Panic isolation — stale plugin, others keep answering" → Scenario: F5 Panic isolation — a panicking plugin goes stale without taking others down
-  # F6: "Alert positive-fire — healthy plugin lagSeconds < 60" → Scenario: F6 Alert positive-fire — a healthy plugin reports low lag on /health
+  # F6: "/health reports last real event per plugin; healthy plugin lagSeconds < 60" → Scenario: F6 — /health reports each plugin's last real event so a healthy plugin shows low lag
   # F7: "Quota — GitHub API calls < 500/hour at 20 repos" → Scenario: F7 Quota — GitHub API usage stays under budget at steady state
   # F8: "Stale peer — stale since T within 30s, no peer-of-peer rows" → Scenario: F8 Stale peer — a stopped box is marked stale on its peers within 30 seconds

@@ -46,14 +46,12 @@ func runServe() error {
 	health := core.NewHealthAggregator(cfg.LagThresholdSeconds)
 	bus := core.NewBus()
 	sv := core.NewSupervisor(cfg, factories, health, bus)
-	canary := core.NewCanary(sv, cfg.CanaryIntervalSeconds)
 	srv := server.New(cfg, sv)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	go sv.Run(ctx)
-	go canary.Run(ctx)
 
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.ListenAndServe() }()

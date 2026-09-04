@@ -24,8 +24,6 @@ type Config struct {
 	DataDir string `toml:"dataDir"`
 	// LagThresholdSeconds is the event-lag past which a plugin is marked stale.
 	LagThresholdSeconds float64 `toml:"lagThresholdSeconds"`
-	// CanaryIntervalSeconds is how often the canary fires a synthetic event.
-	CanaryIntervalSeconds float64 `toml:"canaryIntervalSeconds"`
 	// Peers lists the mesh peers this host mirrors from (unused in the core spike
 	// beyond carrying the field).
 	Peers []Peer `toml:"peers"`
@@ -45,9 +43,8 @@ type Peer struct {
 
 // Config defaults. Kept as named constants so the loader and any doc stay in sync.
 const (
-	defaultListen                = "127.0.0.1:7788"
-	defaultLagThresholdSeconds   = 300.0
-	defaultCanaryIntervalSeconds = 60.0
+	defaultListen              = "127.0.0.1:7788"
+	defaultLagThresholdSeconds = 300.0
 )
 
 // LoadConfig reads and validates the TOML config at path. A missing or empty
@@ -112,9 +109,6 @@ func (c *Config) applyDefaults() {
 	}
 	if c.LagThresholdSeconds == 0 {
 		c.LagThresholdSeconds = defaultLagThresholdSeconds
-	}
-	if c.CanaryIntervalSeconds == 0 {
-		c.CanaryIntervalSeconds = defaultCanaryIntervalSeconds
 	}
 }
 

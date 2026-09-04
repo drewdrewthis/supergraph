@@ -76,7 +76,6 @@ func (s *serveProc) exited() bool {
 // rather than rejecting an integer literal.
 type cfgOpts struct {
 	omitHostID       bool
-	canary           float64
 	lag              float64
 	templateInterval int
 	templatePanic    bool
@@ -106,10 +105,9 @@ type world struct {
 	ringRows  int
 	cursorVal string
 
-	// AC-CORE-3 / AC-CORE-5 health captures
+	// AC-CORE-3 health captures
 	healthBody []byte
 	healthRows []map[string]any
-	cap1, cap2 []map[string]any
 
 	// AC-CORE-8 / AC-CORE-10b websocket
 	ws       *wsClient
@@ -196,9 +194,6 @@ func (w *world) writeConfig(o cfgOpts) error {
 	if o.lag > 0 {
 		fmt.Fprintf(&b, "lagThresholdSeconds = %f\n", o.lag)
 	}
-	if o.canary > 0 {
-		fmt.Fprintf(&b, "canaryIntervalSeconds = %f\n", o.canary)
-	}
 	b.WriteString("[plugins.template]\n")
 	if o.templateInterval > 0 {
 		fmt.Fprintf(&b, "intervalSeconds = %d\n", o.templateInterval)
@@ -210,10 +205,10 @@ func (w *world) writeConfig(o cfgOpts) error {
 }
 
 // defaultCfg is the config the generic "server started with template" Given uses:
-// a fast canary (sub-second pushes for the subscription ACs) and a generous lag
-// threshold so every plugin reads ok.
+// a fast template tick (sub-second pushes for the subscription ACs) and a generous
+// lag threshold so every plugin reads ok.
 func defaultCfg() cfgOpts {
-	return cfgOpts{canary: 0.3, lag: 30, templateInterval: 1}
+	return cfgOpts{lag: 30, templateInterval: 1}
 }
 
 func (w *world) startServe() error {

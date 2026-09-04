@@ -66,9 +66,6 @@ func TestLoadConfigDefaults(t *testing.T) {
 	if c.LagThresholdSeconds != defaultLagThresholdSeconds {
 		t.Errorf("LagThresholdSeconds = %v, want %v", c.LagThresholdSeconds, defaultLagThresholdSeconds)
 	}
-	if c.CanaryIntervalSeconds != defaultCanaryIntervalSeconds {
-		t.Errorf("CanaryIntervalSeconds = %v, want %v", c.CanaryIntervalSeconds, defaultCanaryIntervalSeconds)
-	}
 	if c.DataDir == "" {
 		t.Error("DataDir default not applied")
 	}

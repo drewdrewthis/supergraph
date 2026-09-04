@@ -61,7 +61,7 @@ func (h *HealthAggregator) MarkStarting(name string) {
 
 // Record stamps a plugin's latest event time. It deliberately does NOT clear a
 // forced-stale mark: once a plugin's Start has crashed it is not running, so any
-// event arriving afterwards (e.g. a stale canary in flight) must not resurrect it to
+// event arriving afterwards (e.g. a late in-flight emit) must not resurrect it to
 // ok. Only an explicit restart via MarkStarting clears the flag.
 func (h *HealthAggregator) Record(name string, at time.Time) {
 	h.mu.Lock()
