@@ -2,8 +2,20 @@
 
 package model
 
+import (
+	"time"
+)
+
 type Query struct {
 }
 
 type Subscription struct {
+}
+
+type TemplateEvent struct {
+	Ts      time.Time `json:"ts"`
+	Type    string    `json:"type"`
+	V       int       `json:"v"`
+	Key     string    `json:"key"`
+	Payload string    `json:"payload"`
 }

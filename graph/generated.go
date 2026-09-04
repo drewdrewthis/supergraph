@@ -15,6 +15,7 @@ import (
 	"github.com/99designs/gqlgen/graphql"
 	"github.com/99designs/gqlgen/graphql/introspection"
 	"github.com/drewdrewthis/supergraph/core"
+	"github.com/drewdrewthis/supergraph/graph/model"
 	gqlparser "github.com/vektah/gqlparser/v2"
 	"github.com/vektah/gqlparser/v2/ast"
 )
@@ -46,12 +47,22 @@ type ComplexityRoot struct {
 	}
 
 	Query struct {
-		Health func(childComplexity int) int
-		Ping   func(childComplexity int) int
+		Health       func(childComplexity int) int
+		Ping         func(childComplexity int) int
+		TemplatePing func(childComplexity int) int
 	}
 
 	Subscription struct {
-		PluginLag func(childComplexity int, thresholdSeconds float64) int
+		PluginLag      func(childComplexity int, thresholdSeconds float64) int
+		TemplateEvents func(childComplexity int) int
+	}
+
+	TemplateEvent struct {
+		Key     func(childComplexity int) int
+		Payload func(childComplexity int) int
+		Ts      func(childComplexity int) int
+		Type    func(childComplexity int) int
+		V       func(childComplexity int) int
 	}
 }
 
@@ -62,9 +73,11 @@ type ComplexityRoot struct {
 type QueryResolver interface {
 	Health(ctx context.Context) ([]core.HealthStatus, error)
 	Ping(ctx context.Context) (string, error)
+	TemplatePing(ctx context.Context) (string, error)
 }
 type SubscriptionResolver interface {
 	PluginLag(ctx context.Context, thresholdSeconds float64) (<-chan core.HealthStatus, error)
+	TemplateEvents(ctx context.Context) (<-chan model.TemplateEvent, error)
 }
 
 // endregion ************************** generated!.gotpl **************************
@@ -129,6 +142,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Query.Ping(childComplexity), true
+	case "Query.templatePing":
+		if e.ComplexityRoot.Query.TemplatePing == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Query.TemplatePing(childComplexity), true
 
 	case "Subscription.pluginLag":
 		if e.ComplexityRoot.Subscription.PluginLag == nil {
@@ -141,6 +160,43 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Subscription.PluginLag(childComplexity, args["thresholdSeconds"].(float64)), true
+	case "Subscription.templateEvents":
+		if e.ComplexityRoot.Subscription.TemplateEvents == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Subscription.TemplateEvents(childComplexity), true
+
+	case "TemplateEvent.key":
+		if e.ComplexityRoot.TemplateEvent.Key == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TemplateEvent.Key(childComplexity), true
+	case "TemplateEvent.payload":
+		if e.ComplexityRoot.TemplateEvent.Payload == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TemplateEvent.Payload(childComplexity), true
+	case "TemplateEvent.ts":
+		if e.ComplexityRoot.TemplateEvent.Ts == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TemplateEvent.Ts(childComplexity), true
+	case "TemplateEvent.type":
+		if e.ComplexityRoot.TemplateEvent.Type == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TemplateEvent.Type(childComplexity), true
+	case "TemplateEvent.v":
+		if e.ComplexityRoot.TemplateEvent.V == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TemplateEvent.V(childComplexity), true
 
 	}
 	return 0, false
@@ -258,6 +314,26 @@ type Subscription {
   pluginLag(thresholdSeconds: Float!): Health!
 }
 `, BuiltIn: false},
+	{Name: "../plugins/template/schema/template.graphqls", Input: `# template plugin's GraphQL contribution. Adding this file (plus the blank import
+# in graph/plugins_import.go) is the whole S5 zero-core-edit seam in action.
+extend type Query {
+  templatePing: String!
+}
+
+extend type Subscription {
+  templateEvents: TemplateEvent!
+}
+
+# TemplateEvent mirrors core.Envelope shape, with Payload flattened to a string so
+# the plugin's resolver stays free of a bespoke payload-decoding type.
+type TemplateEvent {
+  ts: Time!
+  type: String!
+  v: Int!
+  key: String!
+  payload: String!
+}
+`, BuiltIn: false},
 }
 var parsedSchema = gqlparser.MustLoadSchema(sources...)
 
@@ -279,6 +355,22 @@ func (ec *executionContext) childFields_Health(ctx context.Context, field graphq
 		return ec.fieldContext_Health_state(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type Health", field.Name)
+}
+
+func (ec *executionContext) childFields_TemplateEvent(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "ts":
+		return ec.fieldContext_TemplateEvent_ts(ctx, field)
+	case "type":
+		return ec.fieldContext_TemplateEvent_type(ctx, field)
+	case "v":
+		return ec.fieldContext_TemplateEvent_v(ctx, field)
+	case "key":
+		return ec.fieldContext_TemplateEvent_key(ctx, field)
+	case "payload":
+		return ec.fieldContext_TemplateEvent_payload(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type TemplateEvent", field.Name)
 }
 
 func (ec *executionContext) childFields___Directive(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -655,6 +747,29 @@ func (ec *executionContext) fieldContext_Query_ping(_ context.Context, field gra
 	return graphql.NewScalarFieldContext("Query", field, true, true, errors.New("field of type String does not have child fields"))
 }
 
+func (ec *executionContext) _Query_templatePing(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Query_templatePing(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.Query().TemplatePing(ctx)
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Query_templatePing(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("Query", field, true, true, errors.New("field of type String does not have child fields"))
+}
+
 func (ec *executionContext) _Query___type(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -773,6 +888,153 @@ func (ec *executionContext) fieldContext_Subscription_pluginLag(ctx context.Cont
 		return fc, err
 	}
 	return fc, nil
+}
+
+func (ec *executionContext) _Subscription_templateEvents(ctx context.Context, field graphql.CollectedField) (ret func(ctx context.Context) graphql.Marshaler) {
+	return graphql.ResolveFieldStream(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Subscription_templateEvents(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.Subscription().TemplateEvents(ctx)
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v model.TemplateEvent) graphql.Marshaler {
+			return ec.marshalNTemplateEvent2githubᚗcomᚋdrewdrewthisᚋsupergraphᚋgraphᚋmodelᚐTemplateEvent(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Subscription_templateEvents(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Subscription",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_TemplateEvent(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _TemplateEvent_ts(ctx context.Context, field graphql.CollectedField, obj *model.TemplateEvent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_TemplateEvent_ts(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Ts, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v time.Time) graphql.Marshaler {
+			return ec.marshalNTime2timeᚐTime(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_TemplateEvent_ts(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("TemplateEvent", field, false, false, errors.New("field of type Time does not have child fields"))
+}
+
+func (ec *executionContext) _TemplateEvent_type(ctx context.Context, field graphql.CollectedField, obj *model.TemplateEvent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_TemplateEvent_type(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Type, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_TemplateEvent_type(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("TemplateEvent", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _TemplateEvent_v(ctx context.Context, field graphql.CollectedField, obj *model.TemplateEvent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_TemplateEvent_v(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.V, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_TemplateEvent_v(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("TemplateEvent", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _TemplateEvent_key(ctx context.Context, field graphql.CollectedField, obj *model.TemplateEvent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_TemplateEvent_key(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Key, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_TemplateEvent_key(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("TemplateEvent", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _TemplateEvent_payload(ctx context.Context, field graphql.CollectedField, obj *model.TemplateEvent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_TemplateEvent_payload(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Payload, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_TemplateEvent_payload(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("TemplateEvent", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
 func (ec *executionContext) ___Directive_name(ctx context.Context, field graphql.CollectedField, obj *introspection.Directive) (ret graphql.Marshaler) {
@@ -1964,6 +2226,28 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 			}
 
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "templatePing":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_templatePing(ctx, field)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
 		case "__type":
 			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
 				return ec._Query___type(ctx, field)
@@ -2014,9 +2298,69 @@ func (ec *executionContext) _Subscription(ctx context.Context, sel ast.Selection
 	switch fields[0].Name {
 	case "pluginLag":
 		return ec._Subscription_pluginLag(ctx, fields[0])
+	case "templateEvents":
+		return ec._Subscription_templateEvents(ctx, fields[0])
 	default:
 		panic("unknown field " + strconv.Quote(fields[0].Name))
 	}
+}
+
+var templateEventImplementors = []string{"TemplateEvent"}
+
+func (ec *executionContext) _TemplateEvent(ctx context.Context, sel ast.SelectionSet, obj *model.TemplateEvent) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, templateEventImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("TemplateEvent")
+		case "ts":
+			out.Values[i] = ec._TemplateEvent_ts(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "type":
+			out.Values[i] = ec._TemplateEvent_type(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "v":
+			out.Values[i] = ec._TemplateEvent_v(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "key":
+			out.Values[i] = ec._TemplateEvent_key(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "payload":
+			out.Values[i] = ec._TemplateEvent_payload(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
 }
 
 var __DirectiveImplementors = []string{"__Directive"}
@@ -2480,6 +2824,22 @@ func (ec *executionContext) marshalNHealthState2githubᚗcomᚋdrewdrewthisᚋsu
 	return res
 }
 
+func (ec *executionContext) unmarshalNInt2int(ctx context.Context, v any) (int, error) {
+	res, err := graphql.UnmarshalInt(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNInt2int(ctx context.Context, sel ast.SelectionSet, v int) graphql.Marshaler {
+	_ = sel
+	res := graphql.MarshalInt(v)
+	if res == graphql.Null {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+	}
+	return res
+}
+
 func (ec *executionContext) unmarshalNString2string(ctx context.Context, v any) (string, error) {
 	res, err := graphql.UnmarshalString(v)
 	return res, graphql.ErrorOnPath(ctx, err)
@@ -2488,6 +2848,26 @@ func (ec *executionContext) unmarshalNString2string(ctx context.Context, v any) 
 func (ec *executionContext) marshalNString2string(ctx context.Context, sel ast.SelectionSet, v string) graphql.Marshaler {
 	_ = sel
 	res := graphql.MarshalString(v)
+	if res == graphql.Null {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+	}
+	return res
+}
+
+func (ec *executionContext) marshalNTemplateEvent2githubᚗcomᚋdrewdrewthisᚋsupergraphᚋgraphᚋmodelᚐTemplateEvent(ctx context.Context, sel ast.SelectionSet, v model.TemplateEvent) graphql.Marshaler {
+	return ec._TemplateEvent(ctx, sel, &v)
+}
+
+func (ec *executionContext) unmarshalNTime2timeᚐTime(ctx context.Context, v any) (time.Time, error) {
+	res, err := graphql.UnmarshalTime(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNTime2timeᚐTime(ctx context.Context, sel ast.SelectionSet, v time.Time) graphql.Marshaler {
+	_ = sel
+	res := graphql.MarshalTime(v)
 	if res == graphql.Null {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")

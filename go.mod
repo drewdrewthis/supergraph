@@ -4,15 +4,16 @@ go 1.26.2
 
 require (
 	github.com/99designs/gqlgen v0.17.95
+	github.com/coder/websocket v1.8.15
 	github.com/cucumber/godog v0.16.0
 	github.com/pelletier/go-toml/v2 v2.4.3
+	github.com/spf13/cobra v1.10.2
 	github.com/vektah/gqlparser/v2 v2.5.37
 	modernc.org/sqlite v1.58.0
 )
 
 require (
 	github.com/agnivade/levenshtein v1.2.1 // indirect
-	github.com/coder/websocket v1.8.15 // indirect
 	github.com/cucumber/gherkin/go/v42 v42.0.0 // indirect
 	github.com/cucumber/messages/go/v34 v34.2.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
@@ -28,7 +29,6 @@ require (
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/sosodev/duration v1.4.0 // indirect
-	github.com/spf13/cobra v1.10.2 // indirect
 	github.com/spf13/pflag v1.0.10 // indirect
 	github.com/urfave/cli/v3 v3.11.0 // indirect
 	golang.org/x/mod v0.40.0 // indirect

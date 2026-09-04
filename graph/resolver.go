@@ -14,4 +14,9 @@ type Resolver struct {
 	Health func(ctx context.Context) []core.HealthStatus
 	// Lag streams a plugin's health whenever its lag crosses threshold seconds.
 	Lag func(ctx context.Context, threshold float64) <-chan core.HealthStatus
+	// Events streams envelopes emitted by one source (e.g. "template"), filtered
+	// server-side so a plugin's subscription resolver never touches the Bus
+	// directly. Generic across sources so this one field serves every plugin's
+	// event subscription, keeping graph/ free of per-plugin business logic.
+	Events func(ctx context.Context, source string) <-chan core.Envelope
 }

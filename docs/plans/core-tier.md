@@ -1,7 +1,7 @@
 # Core-Tier Implementation Plan — Spike (issue #1)
 
 **Scope:** the core shell that must be **locked before any plugin** (PRD §6, milestone "core").
-Plugins (tmux, claude, github, peer, telegram) are OUT of scope except one **template** plugin
+Plugins (github, tmux, claude, peer) are OUT of scope except one **template** plugin
 that proves S5/F5. Source of truth: [docs/PRD.md](../PRD.md) §5 (ACs) + §6 (design/CLI/build plan).
 
 Greenfield: repo has only `README.md`, `.gitignore`, `docs/PRD.md`. All paths below are **new files**.
@@ -18,9 +18,9 @@ one-command dev harness, a godog `.feature` runner, and a **template plugin** th
 
 ## 2. Non-goals
 
-- Any real data-source plugin (github/tmux/claude/peer/telegram) — template only.
+- Any real data-source plugin (github, tmux, claude, peer) — template only.
 - Peer/mesh mirroring, WireGuard, `hostId` peer taxonomy beyond the field existing on the envelope key.
-- The actual Telegram alert delivery (telegram plugin) — core exposes the canary + lag **signal** only.
+- Any alert sender in the binary — canary = per-plugin heartbeat via normal ingest; `/health` reports lastEventAt/lagSeconds/state; alerting is an external poller of `/health` (out of scope, owner decision 2026-09-04).
 - Final GraphQL schema (the EDR owns it) — core ships only base types + the extend seam.
 - Event sourcing, backfill/reconcile logic, webhook ingress — those are the github plugin's tier.
 

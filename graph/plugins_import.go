@@ -6,5 +6,5 @@ package graph
 // blank import below plus the plugin's own files — never an edit under core/ (S5).
 // Step 12 adds the template plugin's import here.
 import (
-// _ "github.com/drewdrewthis/supergraph/plugins/template"
+	_ "github.com/drewdrewthis/supergraph/plugins/template"
 )
