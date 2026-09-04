@@ -1,0 +1,39 @@
+# gqlgen config for the supergraph core.
+# The schema is GLOBBED across the core base plus every plugin's own schema dir:
+# a plugin contributes GraphQL fields via `extend type Query`/`Subscription` in
+# plugins/<name>/schema/*.graphqls with NO edit under core/ (D2, the S5 seam).
+schema:
+  - core/graph/schema/*.graphqls
+  - plugins/*/schema/*.graphqls
+
+# Exec + resolvers share one package `graph` (outside core/). follow-schema writes
+# one <schemafile>.resolvers.go per schema source and PRESERVES existing method
+# bodies on regen — that preservation is what makes the zero-core-edit seam work.
+exec:
+  filename: graph/generated.go
+  package: graph
+
+model:
+  filename: graph/model/models_gen.go
+  package: model
+
+resolver:
+  layout: follow-schema
+  dir: graph
+  package: graph
+  filename_template: "{name}.resolvers.go"
+
+# Value (not pointer) returns so resolver signatures line up with the injected
+# funcs on Resolver (which deal in core value types), no bridging needed.
+omit_slice_element_pointers: true
+resolvers_always_return_pointers: false
+
+# Bind GraphQL types straight onto core's Go types so there is no duplicate struct
+# and no translation layer between the health snapshot and the API.
+models:
+  Time:
+    model: github.com/99designs/gqlgen/graphql.Time
+  Health:
+    model: github.com/drewdrewthis/supergraph/core.HealthStatus
+  HealthState:
+    model: github.com/drewdrewthis/supergraph/core.HealthState

@@ -1,0 +1,31 @@
+# Core base schema. Plugins EXTEND Query/Subscription from their own schema files;
+# this file owns only the types core itself guarantees.
+
+scalar Time
+
+enum HealthState {
+  starting
+  ok
+  stale
+}
+
+# Health mirrors core.HealthStatus (bound in gqlgen.yml). lastEventAt is nullable:
+# null means "never emitted", distinct from the zero time.
+type Health {
+  plugin: String!
+  lastEventAt: Time
+  cursor: String!
+  lagSeconds: Float!
+  state: HealthState!
+}
+
+type Query {
+  health: [Health!]!
+  # ping is a trivial always-present field so the root Query type is non-empty
+  # even before any plugin extends it.
+  ping: String!
+}
+
+type Subscription {
+  pluginLag(thresholdSeconds: Float!): Health!
+}

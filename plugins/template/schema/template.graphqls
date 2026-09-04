@@ -1,0 +1,19 @@
+# template plugin's GraphQL contribution. Adding this file (plus the blank import
+# in graph/plugins_import.go) is the whole S5 zero-core-edit seam in action.
+extend type Query {
+  templatePing: String!
+}
+
+extend type Subscription {
+  templateEvents: TemplateEvent!
+}
+
+# TemplateEvent mirrors core.Envelope shape, with Payload flattened to a string so
+# the plugin's resolver stays free of a bespoke payload-decoding type.
+type TemplateEvent {
+  ts: Time!
+  type: String!
+  v: Int!
+  key: String!
+  payload: String!
+}

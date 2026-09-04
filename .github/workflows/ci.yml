@@ -1,0 +1,88 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0 # version.mk runs `git describe --tags`
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: gofmt
+        run: |
+          out=$(gofmt -l .)
+          if [ -n "$out" ]; then
+            echo "gofmt needs to run on:"; echo "$out"; exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      # fakeok (the panic-isolation sibling plugin, AC-CORE-4) lives behind the
+      # harness build tag, so it needs its own vet pass to be checked at all.
+      - name: go vet (harness tag)
+        run: go vet -tags harness ./...
+
+      # golangci-lint v2 built with the module's own Go toolchain: the released
+      # v1 binary cannot parse a go1.26 module, so we install v2 by version.
+      - name: golangci-lint
+        run: |
+          go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2
+          "$(go env GOPATH)/bin/golangci-lint" run ./...
+          "$(go env GOPATH)/bin/golangci-lint" run --build-tags harness ./...
+
+      - name: gqlgen generate is in sync
+        run: |
+          go run github.com/99designs/gqlgen generate
+          git diff --exit-code
+
+      - name: go test (race)
+        run: go test -race -count=1 ./...
+
+      - name: godog feature suite (@service excluded by default)
+        run: go test ./features/ -run TestFeatures -count=1
+
+      - name: features-red (AC-CORE-9 runner fails red on an unmet scenario)
+        run: make features-red
+
+      # Lists the PRD scenarios not yet backed by a plugin tier (plugin-tier
+      # bijection). A non-zero exit here is expected/reportable, not a failure,
+      # so it's `|| true`d rather than run as a gating `make features-pending`.
+      - name: features-pending (report only, non-gating)
+        run: FEATURES_TAGS=@pending go test ./features/ -run TestFeatures -count=1 || true
+
+  cross-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: cross-compile cmd/supergraph
+        run: |
+          VERSION=$(git describe --tags --always --dirty)
+          LDFLAGS="-X main.version=$VERSION"
+          GOOS=linux  GOARCH=amd64 go build -ldflags "$LDFLAGS" -o dist/supergraph-linux-amd64  ./cmd/supergraph
+          GOOS=darwin GOARCH=arm64 go build -ldflags "$LDFLAGS" -o dist/supergraph-darwin-arm64 ./cmd/supergraph

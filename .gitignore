@@ -1,0 +1,11 @@
+.worktrees/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+/bin/
+/dist/
+
+# make dev / dev-check throwaway data dir
+.dev/
+bin/
