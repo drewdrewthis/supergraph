@@ -56,7 +56,7 @@ joins** — issue ↔ task ↔ email ↔ running session ↔ PR — in one query
 - As the **ship worker**, I want to subscribe to PR CI status, so that I react the moment a check finishes.
 - As the **owner**, I want to ask "what is everything touching issue #N" across GitHub/Todoist/email/tmux/claude, so that I get one answer instead of five lookups.
 - As a **developer**, I want to add a new plugin (a Go package, not a process) in an afternoon following the contract doc, so that the system grows without core changes.
-- As an **operator**, I want to see plugin lag on a health endpoint and get a Telegram alert, so that stale data never goes unnoticed again.
+- As an **operator**, I want to see plugin lag on a health endpoint and have an external poller alert on staleness, so that stale data never goes unnoticed again.
 
 **Acceptance criteria:**
 
@@ -65,7 +65,7 @@ joins** — issue ↔ task ↔ email ↔ running session ↔ PR — in one query
 - **S3** — p95 < 1 s from check-run webhook receipt to subscription push. Evidence: paired journald lines (webhook-in ts, push-out ts).
 - **S4** — one query for issue #N returns ≥ 1 row each from github + claude (`ClaudeSession`) with source tags; an absent source shows an explicit stale marker, never omission. Evidence: query result screenshot.
 - **S5** — template plugin compiles in and serves `_health` with `git diff --stat core/` = 0 files. Evidence: diff output + `_health` screenshot.
-- **S6** — Telegram alert lands < 60 s after plugin lag crosses 5 min. Evidence: Telegram screenshot + lag log.
+- **S6** — `/health` shows `state: stale` and growing `lagSeconds` within 60 s of a plugin stalling. Evidence: `/health` screenshots + lag log.
 
 ### Failure-surface ACs
 
@@ -74,7 +74,7 @@ joins** — issue ↔ task ↔ email ↔ running session ↔ PR — in one query
 - **F3 New repo** — a repo created in the org after boot appears in the graph with zero config within one reconcile. Evidence: query screenshot.
 - **F4 Double-dispatch** — two orchestrators racing on one new issue (claim via assignee/`grinding` label) yield exactly one ship run; the loser sees the claim. Evidence: two logs + one PR.
 - **F5 Panic isolation** — a plugin that panics (e.g. the claude plugin) shows `stale`; `_health` and the other plugins (including tmux) keep answering. Evidence: `_health` screenshot after induced panic.
-- **F6 Alert positive-fire** — the canary/alert path delivers a real Telegram message when armed (control test), not only on stall. Evidence: screenshot.
+- **F6 Alert positive-fire** — positive control: a healthy plugin shows `lagSeconds` < 60 on `/health`. Evidence: `/health` screenshot.
 - **F7 Quota** — GitHub API calls stay under 500/hour at steady state with 20 repos. Evidence: rate-limit header log.
 - **F8 Stale peer** — a stopped box shows `stale since T` on its peers (tmux + claude data included) < 30 s after stop; no peer-of-peer rows exist. Evidence: query screenshot + grep.
 
@@ -83,7 +83,7 @@ claude plugin → subscriptions + health → drewdrewthis worker → todoist.
 
 **Spike pass/fail:**
 (a) cross-box free-slot query meets **S2** (p95 < 1 s warm, seeded realistic db);
-(b) canary/lag alert meets **S6** and passes **F6** (real Telegram message on a control-armed test, not just on stall);
+(b) canary/lag reporting meets **S6** and passes **F6** (see §5);
 (c) a stopped peer box meets **F8** (`stale since T` within 30 s, no peer-of-peer rows).
 **Kill criterion:** if (b) fails → stop.
 
@@ -110,15 +110,15 @@ High-level only — full design goes in a future EDR under `docs/edr/`.
   redelivery) are a **latency optimization only**, not a correctness dependency. Webhook
   ingress lands on the **hetzner-agents box** (the only box with a public IP) and is an
   **accepted single point of failure**; the hourly reconcile covers its downtime.
-- **Subscriptions**: the binary pushes events like "issue opened" to actors (e.g.
-  orchardist). Actors own all side effects — the supergraph never does.
+- **Subscriptions**: the binary pushes events like "issue opened" to actors (e.g. orchardist). Actors own all side effects — the supergraph never does.
 - **Actor-level claim**: before acting on a new issue, the worker must claim it (assign
   self / add `grinding` label) and re-check, not just trust ingest dedup. Ingest-level
   idempotency alone is not enough — a prior double-dispatch incident got through on ingest
   idempotency.
-- **Canary**: every plugin pushes a synthetic canary event end-to-end on a timer. A missing
-  canary triggers a Telegram alert. A canary alert that never fires is treated as **broken**,
-  not as "all clear."
+- **Canary**: every plugin writes a heartbeat through the normal ingest path on a timer. Core
+  `/health` reports per-plugin `lastEventAt`, `lagSeconds`, `state`. **Alerting is out of scope
+  for the binary** — an external poller of `/health` (cron, uptime-kuma, or the other box's
+  `peer` plugin) does it.
 - **Versioning**: event payload carries `v` + upcasters (never rewrite the log); schema changes
   are add-only with `@deprecated`; envelope path is versioned; schema-diff check runs in CI.
 - Ship a [plugin contract doc](docs/plugin-contract.md) (stub, written in the core tier of the
@@ -149,23 +149,20 @@ High-level only — full design goes in a future EDR under `docs/edr/`.
   type Health { plugin, lastEventAt, cursor, lagSeconds, state }
   ```
   Node naming follows ADR-009's tool-prefix convention (`Tmux*`, `Claude*`, `Github*`).
-- **Plugin isolation**: each plugin runs in its own goroutine with `recover()`; a panic marks
-  the plugin `stale`, binary and other plugins keep serving.
-- **Auth**: per-box bearer token (env) for peer subscribe; HMAC on the GitHub webhook. mTLS
-  deferred.
+- **Plugin isolation**: each plugin runs in its own goroutine with `recover()`; a panic marks the plugin `stale`, binary and other plugins keep serving.
+- **Auth**: per-box bearer token (env) for peer subscribe; HMAC on the GitHub webhook. mTLS deferred.
 - **Peer loop rule**: a `peer` plugin never re-serves peer-tagged rows.
 - **First cross-plugin join key**: issue number ↔ branch/worktree. Full node taxonomy deferred.
-- **Backfill**: org-wide first boot is measured in the spike; hourly reconcile must complete
-  inside one hour or the design fails.
-- **Logs**: structured to journald with rotation. **Alerts**: Telegram, named bot + chat id —
-  **day-1 blocker, owner: drewdrewthis, needed before spike test (b)**.
+- **Backfill**: org-wide first boot is measured in the spike; hourly reconcile must complete inside one hour or the design fails.
+- **Logs**: structured to journald with rotation. **Alerts**: external `/health` poller, sink TBD.
 - **Tests (BDD)**: every plugin ships `.feature` files; the scenario ↔ e2e bijection from ADR-009
   is the contract, carried forward, not retired. S1–S6 and F1–F8 (§5) are the first scenarios.
 - **Build plan**: tiered. Core first — ingest envelope, plugin contract, SQLite base, GraphQL
   server, `_health`, dev harness, `.feature` test runner. Then plugins fan out in parallel — github,
   tmux (`TmuxServer/Session/Window/Pane`, hostId-keyed), claude (`ClaudeSession` durable jsonl-backed;
-  `ClaudeInstance` = pane + pid), peer, telegram alert — each against its own `.feature` files.
-  Lead manages the build, coders implement, review-clerk gates PRs before ready.
+  `ClaudeInstance` = pane + pid), peer — each against its own `.feature` files. Spike plugins:
+  github, tmux, claude, peer. Lead manages the build, coders implement, review-clerk gates PRs
+  before ready.
 - **Spike boxes**: hetzner-agents + langwatch-dev (Linux/systemd) — the only two Linux boxes in
   the spike. One Go binary, cross-compiled, OS-detected at start; the laptop is a normal peer.
 - **"Sub-second"** = p95, warm cache, against a seeded db of realistic size.
@@ -188,6 +185,7 @@ None open — resolved by owner 2026-09-04:
 - Migrating the langwatch fleet in v1.
 - Gmail/Todoist in v1 (Todoist is the first post-MVP plugin).
 - A TUI — consumers are existing tools.
+- An alert sender inside the binary — alerting is an external poller of `/health`.
 
 ## 9. Risks
 
@@ -195,7 +193,7 @@ Ranked, one line each:
 
 1. **Complexity as rot vector** — more moving parts than the one process that already rotted.
    Mitigation: single-binary decision keeps each box a plain process, no router to run.
-2. **Freshness alerting unproven** — the canary/lag alert path has never fired for real.
+2. **External poller must exist and be verified** — a `/health` nobody polls is the old stale cache again.
 3. **Webhook ingress SPOF** — GitHub webhook ingress lands on one box (hetzner-agents, the
    only public IP).
 4. **Double-dispatch** — ingest-level idempotency alone already failed once; needs an
