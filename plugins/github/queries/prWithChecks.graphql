@@ -1,0 +1,8 @@
+# op: prWithChecks
+# keys: pr:{owner}/{repo}#{number}
+query prWithChecks($owner: String!, $repo: String!, $number: Int!) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $number) { number title state id merged }
+  }
+  rateLimit { remaining resetAt cost }
+}

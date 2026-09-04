@@ -6,6 +6,8 @@ package graph
 // blank import below plus the plugin's own files — never an edit under core/ (S5).
 // Harness-only plugins live in plugins_import_harness.go (build tag `harness`).
 import (
+	// github is the event-invalidated caching proxy plugin (S5, EDR docs/edr/github.md).
+	_ "github.com/drewdrewthis/supergraph/plugins/github"
 	// template is the reference plugin (PRD §6 template plugin).
 	_ "github.com/drewdrewthis/supergraph/plugins/template"
 )

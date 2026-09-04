@@ -1,0 +1,11 @@
+# op: openIssues
+# scope: repo:{owner}/{repo}
+# keys: issue:{owner}/{repo}#{number}
+query openIssues($owner: String!, $repo: String!) {
+  repository(owner: $owner, name: $repo) {
+    issues(first: 100, states: OPEN) {
+      nodes { number title state id }
+    }
+  }
+  rateLimit { remaining resetAt cost }
+}

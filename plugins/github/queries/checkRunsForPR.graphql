@@ -1,0 +1,13 @@
+# op: checkRunsForPR
+# scope: repo:{owner}/{repo}
+# keys: checkRun:{owner}/{repo}/{id}
+query checkRunsForPR($owner: String!, $repo: String!, $number: Int!) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $number) {
+      commits(last: 1) { nodes { commit {
+        checkSuites(first: 10) { nodes { checkRuns(first: 50) { nodes { id name status } } } }
+      } } }
+    }
+  }
+  rateLimit { remaining resetAt cost }
+}

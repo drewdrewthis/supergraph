@@ -1,0 +1,9 @@
+# op: myClaimed
+# scope: repo:{owner}/{repo}
+# keys: issue:{owner}/{repo}#{number}
+query myClaimed($owner: String!, $repo: String!, $login: String!) {
+  repository(owner: $owner, name: $repo) {
+    issues(first: 100, filterBy: { assignee: $login }) { nodes { number title state id } }
+  }
+  rateLimit { remaining resetAt cost }
+}

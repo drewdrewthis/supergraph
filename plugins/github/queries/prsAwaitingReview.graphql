@@ -1,0 +1,9 @@
+# op: prsAwaitingReview
+# scope: repo:{owner}/{repo}
+# keys: pr:{owner}/{repo}#{number}
+query prsAwaitingReview($owner: String!, $repo: String!) {
+  repository(owner: $owner, name: $repo) {
+    pullRequests(first: 100, states: OPEN) { nodes { number title state id } }
+  }
+  rateLimit { remaining resetAt cost }
+}

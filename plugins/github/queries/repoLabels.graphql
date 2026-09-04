@@ -1,0 +1,9 @@
+# op: repoLabels
+# scope: repo:{owner}/{repo}
+# keys: label:{owner}/{repo}/{name}
+query repoLabels($owner: String!, $repo: String!) {
+  repository(owner: $owner, name: $repo) {
+    labels(first: 100) { nodes { id name } }
+  }
+  rateLimit { remaining resetAt cost }
+}
