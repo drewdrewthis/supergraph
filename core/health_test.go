@@ -85,6 +85,34 @@ func TestHealthServeHTTPShape(t *testing.T) {
 	}
 }
 
+// AC-CORE-4: a panic mark is sticky — a stray event (e.g. an in-flight canary) must
+// not resurrect a crashed plugin to ok; only an explicit (re)start clears it.
+func TestHealthPanicSticky(t *testing.T) {
+	base := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	clock := base
+	h := NewHealthAggregator(300)
+	h.now = fixedNow(&clock)
+
+	h.MarkStarting("p")
+	h.Record("p", base)
+	if got := snapByName(t, h)["p"].State; got != HealthOK {
+		t.Fatalf("after first event: %s, want ok", got)
+	}
+	h.MarkStale("p")
+	if got := snapByName(t, h)["p"].State; got != HealthStale {
+		t.Fatalf("after panic: %s, want stale", got)
+	}
+	h.Record("p", base) // stray event: must NOT clear the panic mark
+	if got := snapByName(t, h)["p"].State; got != HealthStale {
+		t.Fatalf("stray event resurrected a dead plugin: %s", got)
+	}
+	h.MarkStarting("p") // explicit restart clears it
+	clock = base.Add(time.Second)
+	if got := snapByName(t, h)["p"].State; got != HealthOK {
+		t.Fatalf("restart should clear panic: %s", got)
+	}
+}
+
 // snapByName indexes a snapshot by plugin name for assertions.
 func snapByName(t *testing.T, h *HealthAggregator) map[string]HealthStatus {
 	t.Helper()

@@ -167,12 +167,22 @@ func (sv *Supervisor) runPlugin(ctx context.Context, p Plugin, emit Emit) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("core: plugin %q panicked in Start: %v", p.Name(), r)
-			sv.health.MarkStale(p.Name())
+			sv.stopDead(p.Name())
 		}
 	}()
 	if err := p.Start(ctx, emit); err != nil {
 		log.Printf("core: plugin %q Start returned error: %v", p.Name(), err)
+		sv.stopDead(p.Name())
 	}
+}
+
+// stopDead handles a plugin that has stopped running (panic or Start error): it is
+// marked stale AND its canary is suppressed. Continuing to fire synthetic canary
+// events for a dead plugin would advance its lastEventAt and mask the failure as ok
+// — the exact false-green the PRD §6 canary rule warns against.
+func (sv *Supervisor) stopDead(name string) {
+	sv.health.MarkStale(name)
+	sv.StopCanary(name)
 }
 
 // Run starts every plugin, blocks until ctx is cancelled, then closes all stores.

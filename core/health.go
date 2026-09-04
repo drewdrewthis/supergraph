@@ -49,22 +49,25 @@ func (h *HealthAggregator) entry(name string) *pluginHealth {
 }
 
 // MarkStarting registers a plugin before its first event so it shows as "starting"
-// (rather than being absent) from the moment the supervisor builds it.
+// from the moment the supervisor builds it. It is also the only path that CLEARS a
+// panic mark: a plugin becomes healthy again only by being (re)started, never by a
+// stray event, which is what keeps a crashed plugin from being laundered back to ok.
 func (h *HealthAggregator) MarkStarting(name string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.entry(name)
+	h.entry(name).panicked = false
 }
 
-// Record stamps a plugin's latest event time. It clears any prior panic mark: a
-// fresh event is proof the plugin is emitting again.
+// Record stamps a plugin's latest event time. It deliberately does NOT clear a panic
+// mark: once a plugin's Start has crashed it is not running, so any event arriving
+// afterwards (e.g. a stale canary in flight) must not resurrect it to ok. Only an
+// explicit restart via MarkStarting clears the flag.
 func (h *HealthAggregator) Record(name string, at time.Time) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	p := h.entry(name)
 	t := at
 	p.lastEventAt = &t
-	p.panicked = false
 }
 
 // MarkStale flags a plugin as unhealthy independent of lag — used when its Start
