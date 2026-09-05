@@ -165,6 +165,8 @@ A plugin does **not** implement a `Health()` method. Core derives every field of
 
 Core emits **no** synthetic heartbeat. Every `HealthStatus` field derives only from a plugin's real `emit()` calls: a plugin that emits nothing keeps `lastEventAt` at its last real event (or `null` if it never emitted) and, once lag passes the threshold, shows `stale`. That `stale` is the intended liveness signal — a silent plugin is a stale plugin. Alerting is an external poller of the `_health` endpoint.
 
+An **unconfigured** plugin (no config section, or missing required credentials) must go dormant instead: log once and return from `Start` without spawning any supervisor/poll loop, so it never emits — a plugin with nothing to say should say nothing, not retry-and-log-fail forever (see `plugins/github`'s no-token case).
+
 ## Tests
 
 Every plugin ships `plugins/<name>/<name>.feature` with BDD scenarios. Each scenario defines a complete e2e flow and maps one-to-one with a step in the test harness. Run all scenarios with `go test ./features/...` (godog).

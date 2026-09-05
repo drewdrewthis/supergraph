@@ -112,6 +112,10 @@ func (g *ghWorld) writeConfig() error {
 	fmt.Fprintf(&b, "dataDir = %q\n", g.sw.dataDir)
 	b.WriteString("lagThresholdSeconds = 30.000000\n")
 	b.WriteString("[plugins.github]\n")
+	// A token is required for the plugin to leave dormant mode (Start returns
+	// immediately with no token resolved, config or GITHUB_TOKEN); fakegh itself
+	// never checks auth, so any non-empty value exercises the configured path.
+	fmt.Fprintf(&b, "token = %q\n", "test-token")
 	fmt.Fprintf(&b, "baseURL = %q\n", g.fake.URL)
 	fmt.Fprintf(&b, "graphqlURL = %q\n", g.fake.URL+"/graphql")
 	fmt.Fprintf(&b, "ingress = %q\n", g.ingress)

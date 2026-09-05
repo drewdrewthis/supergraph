@@ -8,6 +8,7 @@ package github
 import (
 	"context"
 	"errors"
+	"log"
 	"net/http"
 	"os"
 	"sync"
@@ -133,8 +134,15 @@ func (p *Plugin) Migrate(ctx context.Context, s *core.Store) error {
 }
 
 // Start captures the emit closure (the only source of it — HTTP handlers read it
-// back under lock) then runs the ingest and reconcile loops until ctx is done.
+// back under lock) then runs the ingest and reconcile loops until ctx is done. With
+// no resolved token it stays dormant: log once, spawn nothing (no forward
+// supervisor spamming "exited: exit status 1" every restart).
 func (p *Plugin) Start(ctx context.Context, emit core.Emit) error {
+	if p.cfg.token == "" {
+		log.Printf("github: not configured (no [plugins.github] token); dormant")
+		return nil
+	}
+
 	p.emitMu.Lock()
 	p.emit = emit
 	p.emitMu.Unlock()
