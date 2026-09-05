@@ -32,10 +32,10 @@ LOC (EDR strip formula), not aspirational budgets.
 | `store.go` | 213 | SQLite `github_nodes`+`github_tags`+`github_hooks`+`github_deliveries`: upsert, get, purge, tag index, hooks, deliveries prune, non-pinned scan, pin |
 | `proxy.go` | 118 | read-through resolve: miss→fetch→store→serve; ETag/304; **singleflight (borrowed ~40)**; pin eval |
 | `webhook.go` | 62 | HMAC verify (1 MiB body cap, S2); event→key; purge; emit envelopes; delivery dedup |
-| `executor.go` | 234 | JSON-backed GraphQL executor + named-op loader + declared-key scoping (point/list) + list read path (U2) + body cap (S2) |
+| `executor.go` | 254 | JSON-backed GraphQL executor + named-op loader + declared-key scoping (point/list) + list read path (U2) + body cap (S2) + parsed introspection allowlist (raw-query guard hardening) |
 | `ingest.go` | 116 | `gh webhook forward` supervisor (backoff) + redelivery + `/notifications` poll (flag) |
 | `reconcile.go` | 110 | discovery `/user/repos` + hook creation + since-cursor + revalidation (P1) + deliveries prune (S3) |
-| **Total** | **1325** | cap **1350**; CLI delta in `cmd/supergraph/` (~60) is counted separately, not in this budget |
+| **Total** | **1345** | cap **1350**; CLI delta in `cmd/supergraph/` (~60) is counted separately, not in this budget |
 - **AC-GH-LOC** guards it: a CI step (`make loc-github`) runs `find plugins/github -name '*.go' ! -name '*_test.go' -not -path '*/fakegh/*' | xargs sed -E '/^[[:space:]]*\/\//d;/^[[:space:]]*$/d' | wc -l` and fails > 1350 (POSIX `[[:space:]]`, portable across GNU/BSD sed).
 
 ## Cache key = object id (full grammar)
