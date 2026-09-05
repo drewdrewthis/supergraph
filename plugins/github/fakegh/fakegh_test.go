@@ -350,7 +350,11 @@ func TestBuildGhStubDelivers(t *testing.T) {
 		_ = cmd.Wait()
 	}()
 
-	waitFor(t, 3*time.Second, func() bool { return cap.count() >= 1 })
+	// First-delivery deadline is generous: under `go test ./...` this package's
+	// process-start-and-deliver window competes with other packages' concurrent
+	// `go build`/test compilation for CPU, so a tight deadline flakes under load
+	// even though the stub itself starts almost instantly in isolation.
+	waitFor(t, 15*time.Second, func() bool { return cap.count() >= 1 })
 	got := cap.reqs[0]
 	if got.event != "issues" || got.delivery != "d-123" {
 		t.Fatalf("stub headers wrong: %+v", got)
