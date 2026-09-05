@@ -1,7 +1,11 @@
 package github
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/drewdrewthis/supergraph/plugins/github/fakegh"
@@ -94,5 +98,37 @@ func TestRunListOp(t *testing.T) {
 	}
 	if n, _ := p.store.get(ctx, "issue:o/r#6"); n == nil {
 		t.Errorf("sibling member was evicted")
+	}
+}
+
+// TestHandleGraphQLRawPassthrough: a raw {query} is rejected unless it is a pure
+// introspection query — a substring match on "__type" false-matches "__typename",
+// so the guard must parse and check top-level selections instead.
+func TestHandleGraphQLRawPassthrough(t *testing.T) {
+	p, _ := newExecPlugin(t)
+
+	cases := []struct {
+		name    string
+		query   string
+		wantErr bool
+	}{
+		{"typename false match", `{__typename}`, true},
+		{"pure __schema", `{__schema{types{name}}}`, false},
+		{"pure __type", `query{__type(name:"Issue"){fields{name}}}`, false},
+		{"mixed with data field", `{repository(owner:"o",name:"r"){id} __schema{types{name}}}`, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			body, _ := json.Marshal(map[string]any{"query": c.query})
+			req := httptest.NewRequest(http.MethodPost, "/plugins/github/graphql", bytes.NewReader(body))
+			w := httptest.NewRecorder()
+			p.handleGraphQL(w, req)
+			if c.wantErr && w.Code != http.StatusBadRequest {
+				t.Errorf("query %q: status = %d, want 400", c.query, w.Code)
+			}
+			if !c.wantErr && w.Code == http.StatusBadRequest {
+				t.Errorf("query %q: status = %d, want non-400", c.query, w.Code)
+			}
+		})
 	}
 }

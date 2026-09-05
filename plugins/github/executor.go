@@ -9,6 +9,9 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/vektah/gqlparser/v2/ast"
+	"github.com/vektah/gqlparser/v2/parser"
 )
 
 //go:embed queries/*.graphql
@@ -26,6 +29,28 @@ type namedOp struct {
 }
 
 var placeholderRe = regexp.MustCompile(`\{([a-zA-Z]+)\}`)
+
+// isIntrospectionOnly reports whether query is a pure introspection document:
+// every top-level selection on every operation is exactly __schema or __type
+// (a substring check false-matches "{__typename}", so this parses instead).
+func isIntrospectionOnly(query string) bool {
+	doc, err := parser.ParseQuery(&ast.Source{Input: query})
+	if err != nil || len(doc.Operations) == 0 {
+		return false
+	}
+	for _, op := range doc.Operations {
+		if len(op.SelectionSet) == 0 {
+			return false
+		}
+		for _, sel := range op.SelectionSet {
+			field, ok := sel.(*ast.Field)
+			if !ok || (field.Name != "__schema" && field.Name != "__type") {
+				return false
+			}
+		}
+	}
+	return true
+}
 
 // loadOps parses every embedded .graphql file's `# op / # scope / # keys` header.
 func loadOps() map[string]namedOp {
@@ -92,7 +117,7 @@ func (p *Plugin) handleGraphQL(w http.ResponseWriter, r *http.Request) {
 	// rejected — except introspection (`supergraph schema <Type>`), the one raw query
 	// that legitimately needs the upstream schema and touches no cache (P2).
 	if req.Op == "" {
-		if !strings.Contains(req.Query, "__schema") && !strings.Contains(req.Query, "__type") {
+		if !isIntrospectionOnly(req.Query) {
 			http.Error(w, `request must set "op": raw {query} passthrough is disabled`, http.StatusBadRequest)
 			return
 		}

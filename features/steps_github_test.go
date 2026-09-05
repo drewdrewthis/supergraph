@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -1162,8 +1163,13 @@ func (g *ghWorld) cursorAssertOverlap() error {
 
 // ===================== AC-GH-LOC =====================
 
+// locOutputRe scans all lines of `make loc-github` output for the prod LOC count,
+// since make's recursive job-control chatter ("Entering/Leaving directory") can
+// surround the line we care about.
+var locOutputRe = regexp.MustCompile(`prod LOC:\s*(\d+)`)
+
 func (g *ghWorld) locRun() error {
-	cmd := exec.Command("make", "loc-github")
+	cmd := exec.Command("make", "--no-print-directory", "loc-github")
 	cmd.Dir = repoRoot
 	out, err := cmd.CombinedOutput()
 	g.sw.lastStdout = string(out)
@@ -1179,21 +1185,18 @@ func (g *ghWorld) locAssert() error {
 			budget = n
 		}
 	}
+	m := locOutputRe.FindStringSubmatch(g.sw.lastStdout)
+	if m == nil {
+		return fmt.Errorf("could not parse loc-github output: %q", g.sw.lastStdout)
+	}
 	var count int
-	if _, err := fmt.Sscanf(strings.TrimSpace(afterColon(g.sw.lastStdout)), "%d", &count); err != nil {
+	if _, err := fmt.Sscanf(m[1], "%d", &count); err != nil {
 		return fmt.Errorf("could not parse loc-github output: %q", g.sw.lastStdout)
 	}
 	if count > budget {
 		return fmt.Errorf("plugins/github prod LOC = %d, exceeds the %d budget (honest red per docs/edr/github.md pending owner decision)", count, budget)
 	}
 	return nil
-}
-
-func afterColon(s string) string {
-	if i := strings.LastIndex(s, ":"); i >= 0 {
-		return s[i+1:]
-	}
-	return s
 }
 
 // ===================== AC-GH-ZEROCORE =====================
