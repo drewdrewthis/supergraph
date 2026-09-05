@@ -41,8 +41,7 @@ func TestInt(t *testing.T) {
 		{"int", map[string]any{"k": 5}, "k", 7, 5},
 		{"int64", map[string]any{"k": int64(5)}, "k", 7, 5},
 		{"float64", map[string]any{"k": float64(5)}, "k", 7, 5},
-		{"numeric-string", map[string]any{"k": "5"}, "k", 7, 5},
-		{"padded-string", map[string]any{"k": " 5 "}, "k", 7, 5},
+		{"string-not-parsed", map[string]any{"k": "5"}, "k", 7, 7},
 		{"non-numeric-string", map[string]any{"k": "x"}, "k", 7, 7},
 		// AC-PCFG-INT0: a stored 0 returns 0, not the default (fixes the github
 		// copy's `n != 0` fallback bug).

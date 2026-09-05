@@ -10,8 +10,6 @@ package pluginconfig
 import (
 	"errors"
 	"net/http"
-	"strconv"
-	"strings"
 )
 
 // Str returns raw[k] when it holds a non-empty string, else def. A nil map or a
@@ -25,9 +23,9 @@ func Str(raw map[string]any, k, def string) string {
 	return def
 }
 
-// Int returns raw[k] coerced to int, else def. It accepts int, int64, float64
-// and a numeric string; a nil map, an absent key, or a non-numeric value yields
-// def. A stored numeric 0 returns 0, not def.
+// Int returns raw[k] coerced to int, else def. It accepts int, int64, and
+// float64; a nil map, an absent key, or a non-numeric value yields def. A
+// stored numeric 0 returns 0, not def.
 func Int(raw map[string]any, k string, def int) int {
 	if raw == nil {
 		return def
@@ -39,10 +37,6 @@ func Int(raw map[string]any, k string, def int) int {
 		return int(n)
 	case float64:
 		return int(n)
-	case string:
-		if i, err := strconv.Atoi(strings.TrimSpace(n)); err == nil {
-			return i
-		}
 	}
 	return def
 }
