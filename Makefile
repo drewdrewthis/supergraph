@@ -106,6 +106,7 @@ dev-check: build-harness $(DEV_CONFIG)
 	done; \
 	if [ "$$ok" != "1" ]; then echo "dev-check: template not healthy within 10s" >&2; exit 1; fi
 
+<<<<<<< HEAD
 # --- claude plugin targets ---
 .PHONY: features-claude loc-claude
 
@@ -125,4 +126,31 @@ loc-claude:
 	if [ "$$count" -gt 790 ]; then \
 		echo "loc-claude: $$count LOC exceeds the 790 budget" >&2; \
 		exit 1; \
+=======
+# --- tmux plugin targets (appended; see docs/edr/tmux.md) ---
+.PHONY: features-tmux loc-tmux
+
+# TMUX_LOC_CAP is the ratified LOC budget for the tmux plugin, raised 600 -> 800
+# when the control-mode client + reconcile poll + SQLite read model landed at ~770
+# (see the LOC table in docs/edr/tmux.md).
+TMUX_LOC_CAP := 800
+
+# features-tmux runs only the tmux plugin's @local scenarios against a real tmux
+# server on a private -L socket (created and torn down per scenario). Requires the
+# tmux binary on PATH; CI installs it (see .github/workflows/ci.yml).
+features-tmux:
+	FEATURES_TAGS="@tmux && @local" go test ./features/ -run TestFeatures -v
+
+# loc-tmux prints the tmux plugin's non-comment non-blank non-test LOC and fails if
+# it exceeds TMUX_LOC_CAP. The sed program strips whole-line `//` comments and blank
+# lines; it is line-oriented and portable (BSD/GNU sed both accept -E with it),
+# matching the count reported in the EDR LOC table.
+loc-tmux:
+	@n=$$(find plugins/tmux -name '*.go' ! -name '*_test.go' -print0 \
+		| xargs -0 sed -E '/^[[:space:]]*\/\//d;/^[[:space:]]*$$/d' \
+		| grep -c '.'); \
+	echo "tmux plugin LOC: $$n (cap $(TMUX_LOC_CAP))"; \
+	if [ "$$n" -gt "$(TMUX_LOC_CAP)" ]; then \
+		echo "loc-tmux: $$n exceeds cap $(TMUX_LOC_CAP)" >&2; exit 1; \
+>>>>>>> 5409128 (feat(tmux): control-mode + reconcile-poll pane plugin, real-tmux godog steps, 15 scenarios; 770 LOC (cap 800))
 	fi

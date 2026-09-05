@@ -1,0 +1,11 @@
+# sessions — cached sessions with their worktree/branch join fields.
+query sessions($hostId: String) {
+  tmuxSessions(hostId: $hostId) {
+    hostId
+    name
+    worktree
+    branch
+    lastSeenAt
+    staleSince
+  }
+}

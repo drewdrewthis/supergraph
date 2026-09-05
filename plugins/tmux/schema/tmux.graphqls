@@ -1,0 +1,55 @@
+# tmux plugin's GraphQL contribution (S5 zero-core-edit seam): read model of the
+# local tmux server served over the gqlgen extend-type glob seam (D6) — no webhook,
+# no HTTPRoutes. Types are flattened to scalars so no per-field resolver is needed
+# (the nested-object PRD sketch is not exercised by any AC and would only add
+# resolver LOC). Non-GitHub types keep the Tmux* prefix (PRD §6).
+type TmuxSession {
+  hostId: String!
+  name: String!
+  worktree: String
+  branch: String
+  lastSeenAt: Time
+  staleSince: Time
+}
+
+type TmuxPane {
+  hostId: String!
+  key: String!
+  session: String!
+  window: Int!
+  pane: Int!
+  pid: Int!
+  cmd: String!
+  path: String
+  active: Boolean!
+  free: Boolean!
+  staleSince: Time
+}
+
+type Slot {
+  hostId: String!
+  kind: String!
+  free: Boolean!
+  paneKey: String
+  staleSince: Time
+}
+
+type TmuxEvent {
+  ts: Time!
+  type: String!
+  v: Int!
+  key: String!
+  payload: String!
+}
+
+extend type Query {
+  tmuxSessions(hostId: String): [TmuxSession!]!
+  tmuxPanes(hostId: String): [TmuxPane!]!
+  slots(hostId: String): [Slot!]!
+  freeSlots(hostId: String): [Slot!]!
+  paneForBranch(branch: String!): [TmuxPane!]!
+}
+
+extend type Subscription {
+  tmuxEvents: TmuxEvent!
+}

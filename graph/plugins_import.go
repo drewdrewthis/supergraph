@@ -12,7 +12,12 @@ import (
 	_ "github.com/drewdrewthis/supergraph/plugins/peer"
 	// template is the reference plugin (PRD §6 template plugin).
 	_ "github.com/drewdrewthis/supergraph/plugins/template"
+<<<<<<< HEAD
 
 	// claude ingests Claude Code session state (docs/edr/claude.md).
 	_ "github.com/drewdrewthis/supergraph/plugins/claude"
+=======
+	// tmux is the local tmux-server read model (docs/edr/tmux.md).
+	_ "github.com/drewdrewthis/supergraph/plugins/tmux"
+>>>>>>> 5409128 (feat(tmux): control-mode + reconcile-poll pane plugin, real-tmux godog steps, 15 scenarios; 770 LOC (cap 800))
 )

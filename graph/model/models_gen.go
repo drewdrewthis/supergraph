@@ -63,6 +63,14 @@ type Peer struct {
 type Query struct {
 }
 
+type Slot struct {
+	HostID     string     `json:"hostId"`
+	Kind       string     `json:"kind"`
+	Free       bool       `json:"free"`
+	PaneKey    *string    `json:"paneKey,omitempty"`
+	StaleSince *time.Time `json:"staleSince,omitempty"`
+}
+
 type Subscription struct {
 }
 
@@ -72,4 +80,35 @@ type TemplateEvent struct {
 	V       int       `json:"v"`
 	Key     string    `json:"key"`
 	Payload string    `json:"payload"`
+}
+
+type TmuxEvent struct {
+	Ts      time.Time `json:"ts"`
+	Type    string    `json:"type"`
+	V       int       `json:"v"`
+	Key     string    `json:"key"`
+	Payload string    `json:"payload"`
+}
+
+type TmuxPane struct {
+	HostID     string     `json:"hostId"`
+	Key        string     `json:"key"`
+	Session    string     `json:"session"`
+	Window     int        `json:"window"`
+	Pane       int        `json:"pane"`
+	Pid        int        `json:"pid"`
+	Cmd        string     `json:"cmd"`
+	Path       *string    `json:"path,omitempty"`
+	Active     bool       `json:"active"`
+	Free       bool       `json:"free"`
+	StaleSince *time.Time `json:"staleSince,omitempty"`
+}
+
+type TmuxSession struct {
+	HostID     string     `json:"hostId"`
+	Name       string     `json:"name"`
+	Worktree   *string    `json:"worktree,omitempty"`
+	Branch     *string    `json:"branch,omitempty"`
+	LastSeenAt *time.Time `json:"lastSeenAt,omitempty"`
+	StaleSince *time.Time `json:"staleSince,omitempty"`
 }

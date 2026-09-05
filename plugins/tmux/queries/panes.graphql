@@ -1,0 +1,16 @@
+# panes — cached panes with pid/cmd/path/active/free/staleSince.
+query panes($hostId: String) {
+  tmuxPanes(hostId: $hostId) {
+    hostId
+    key
+    session
+    window
+    pane
+    pid
+    cmd
+    path
+    active
+    free
+    staleSince
+  }
+}

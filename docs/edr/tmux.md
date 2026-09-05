@@ -11,11 +11,13 @@ notifications into a per-plugin SQLite cache; a low-cadence **reconcile poll** (
 `TmuxServer/Session/Window/Pane` + a `Slot` projection over one GraphQL endpoint via the gqlgen
 `extend type` glob seam — **no `HTTPRoutes`, no webhook, no fake server**: `@local` scenarios run
 against a **real tmux server on a temp socket** (`-L <name>`), which is hermetic and needs no
-credentials or hardware. Its reason to exist in the spike is **S2** (cross-box free-slot query)
-and the **issue ↔ branch/worktree** join the github plugin already reserves as
-`paneForBranch @pending`.
+credentials or hardware. Its reason to exist in the spike is the **local warm free-slot read**
+(the on-box half that S2's cross-box query fans out over — the fan-out itself is the **peer
+plugin's**, so this feature owns only `AC-TMUX-FREESLOTS-WARM`, not S2) and the
+**issue ↔ branch/worktree** join the github plugin already reserves as `paneForBranch @pending`.
 
-**Hard constraints (owner / PRD):** ≤ **600 LOC prod** for `plugins/tmux/**` excluding tests;
+**Hard constraints (owner / PRD):** ≤ **800 LOC prod** for `plugins/tmux/**` excluding tests
+(raised from the 600 sketch to the ratified 800 — measured actual **770**, see §LOC budget);
 **zero core diff** (S5); Linux + macOS from one binary; single tmux server per box (v1); no
 mutation of the user's tmux config (see D2); freshness is event-driven with a reconcile floor
 (honest-staleness, mirrors github's AC-GH-STALE).
@@ -150,20 +152,24 @@ extend type Subscription { tmuxEvents(hostId: String): TmuxPane! }
 - `hostId`/indices are parsed from the key, not stored as columns (github convention).
 - Cursor: `snapshot:lastAt` (last successful reconcile time) in core's `cursors` table; `Cursor()` reports it.
 
-## LOC budget (prod, cap **600**; tests excluded)
+## LOC budget (prod, cap **800**; tests excluded) — measured actuals
 
-Strip formula (mirrors github's, portable GNU/BSD sed):
-`find plugins/tmux -name '*.go' ! -name '*_test.go' | xargs sed -E '/^[[:space:]]*\/\//d;/^[[:space:]]*$/d' | wc -l` — fails > 600.
+Strip formula (portable GNU/BSD sed), run by `make loc-tmux`:
+`find plugins/tmux -name '*.go' ! -name '*_test.go' | xargs sed -E '/^[[:space:]]*\/\//d;/^[[:space:]]*$/d' | wc -l` — fails > 800.
 
-| File (`plugins/tmux/`) | Budget | Responsibility |
+**Cap raised 600 → 800:** the control-mode client + reconcile poll + SQLite read model + the flattened resolver seam landed at a measured **770**, over the 600 sketch; the owner ratified 800 rather than compress readable, single-responsibility files (no gold-plating — the overrun is real per-file work, itemized below).
+
+| File (`plugins/tmux/`) | Actual | Responsibility |
 |---|---:|---|
-| `tmux.go` | 80 | wiring: `Register`/`New`/`Name`/`Migrate`/`Start`/`CursorReporter` + config parse |
-| `keys.go` | 70 | key grammar data table: parse + object→key + typename + free/busy classifier |
-| `control.go` | 150 | control-mode client: spawn `tmux -C attach`, hold stdin, `no-output`, parse `%`-notifications → envelopes, `%exit`→`server.down`, backoff reconnect |
-| `snapshot.go` | 120 | `list-panes -a`/`list-sessions` parse → upsert; reconcile diff → `*.closed`/`staleSince`; `tmux.snapshot` emit; free/busy recompute |
-| `store.go` | 120 | SQLite: migrate 3 tables, upsert, get, close(staleSince), scan-free, paneForBranch |
-| `resolver.go` | 60 | GraphQL resolvers for sessions/panes/slots/freeSlots/paneForBranch via `core.Registry` |
-| **Total** | **600** | cap **600**; no `cmd/` delta (serves via gqlgen glob seam, D6) |
+| `tmux.go` | 166 | wiring: `init`/`New`/`Name`/`Migrate`/`Start` (dormant when unconfigured) + `Cursor` + config parse/defaults + injectable clock/exec seams |
+| `keys.go` | 80 | key grammar data table: parse + object→key + typename + host split + free/busy classifier |
+| `control.go` | 118 | control-mode client: spawn `tmux -C attach`, hold stdin, `refresh-client -f no-output`, structural-notification → reconcile trigger, `%exit`→`server.down`, version-gated `%pane-exited`, backoff reconnect |
+| `snapshot.go` | 156 | `list-panes -a`/`list-sessions` parse → upsert; reconcile diff → `*.closed`/`staleSince`; `tmux.snapshot` emit (only on success — owner T1); git-branch resolve; free/busy recompute |
+| `store.go` | 200 | SQLite: migrate tables, upsert session/pane, scan, markStale/markAllStale, livePaneKeys, scan-free, paneForBranch join |
+| `resolver.go` | 50 | exported read funcs for sessions/panes/slots/freeSlots/paneForBranch via the package-singleton seam (no `core.Registry` instance accessor exists; server injects only Health/Lag/Events) |
+| **Total** | **770** | cap **800**; no `cmd/` delta (serves via gqlgen glob seam, D6) |
+
+Deviations from the sketch, attributed: `store.go` +80 (denormalized pane columns for query-simple scans + the branch join; the sketch's 3rd `tmux_windows` table was dropped as YAGNI); `tmux.go` +86 (dormant-when-unconfigured Start so the plugin never attaches to the operator's real server unless `[plugins.tmux]` is set, plus injectable clock/exec/branch seams for hermetic unit tests); `snapshot.go` +36 (T1 emit-only-on-success + git-branch resolve). `resolver.go` −10 and `control.go` −32 (reconcile-on-any-structural-notification is simpler and more version-robust than per-delta parsing).
 
 ## Failure modes
 
@@ -182,14 +188,21 @@ Strip formula (mirrors github's, portable GNU/BSD sed):
 second box / peer plugin / credentials are needed. Primary evidence is **use-proof from the
 running binary + real tmux this turn**. `T` = `reconcileIntervalSeconds` (test uses a short value).
 
-- **AC-TMUX-S2 (PRD S2).** Against a **seeded realistic db** (warm), `supergraph query --op freeSlots`
-  returns free slots with **p95 < 1 s over N≥20 samples**. Fails if p95 ≥ 1 s or a free slot is
-  omitted. **Evidence:** timing capture over the 20 reads (github-style p95 harness). *(Cross-box
-  fan-out is the peer plugin's; this is the local warm-read half S2 actually measures.)*
-- **AC-TMUX-EVENTS-CONTROL.** With the plugin watching a temp-socket server via control mode,
-  splitting a pane / opening a window **in a different session** makes the new pane queryable within
-  `T`. Fails if a server-wide event is missed or arrives after `T`. **Evidence:** the mutating
-  `tmux` command + the `tmuxPanes` query showing the new pane, with timestamps.
+- **AC-TMUX-FREESLOTS-WARM (local half of S2; S2 fan-out is the peer's).** Against a warm cache seeded
+  with idle and busy panes, `freeSlots` returns every idle pane and no busy pane, with **p95 < 1 s
+  over N≥20 samples**. Fails if p95 ≥ 1 s, a free slot is omitted, or a busy pane is offered as free.
+  **Evidence:** the 20 measured query latencies + the free-key set. *(Cross-box fan-out belongs to the
+  peer plugin; prd.feature S2 is untouched. This feature is tagged `@AC-TMUX-FREESLOTS-WARM`, not `@S2`.)*
+- **AC-TMUX-EVENTS-CONTROL (falsifiable: only control mode can satisfy it).** The plugin watches a
+  temp-socket server via control mode **with `reconcileIntervalSeconds` set far beyond the observation
+  window** (e.g. 3600 s) so a periodic poll cannot be the thing that observes the change. Then panes
+  are created **in a different session than the one the control client attached to**, each timed from
+  the mutating `tmux` command to the moment it is queryable (paired timestamps). The **p95
+  split-to-queryable latency is < 1 s over N≥20**, and the cached pane count equals the real
+  `list-panes -a` count (no `%output` noise ingested). Fails if any new pane is not observed before the
+  (huge) reconcile interval elapses, if p95 ≥ 1 s, or if the cached count drifts from tmux's. Because
+  the poll is disabled within the window, only the control-mode push path can make this pass.
+  **Evidence:** the 20 paired split→queryable latencies + the count-equality check.
 - **AC-TMUX-PANE-DEATH.** `kill-pane` on a tracked pane marks it `staleSince`/closed (from the
   `%layout-change` delta) and removes it from `freeSlots` within `T`. Fails if the dead pane still
   appears in `freeSlots`. **Evidence:** `freeSlots` before/after the kill, quoted.
@@ -209,9 +222,20 @@ running binary + real tmux this turn**. `T` = `reconcileIntervalSeconds` (test u
   session worktree is on that branch (the issue↔branch join github reserves as `paneForBranch`).
   Fails if it returns a pane on another branch or misses the matching one. **Evidence:** query result
   vs the seeded worktree/branch, quoted.
-- **AC-TMUX-KEY-GRAMMAR.** A pane key round-trips `pane:<session>:<window>.<pane>@<hostId>`
-  (`parse(format(x)) == x`); the parser rejects a malformed key rather than returning a partial one.
-  Fails if round-trip differs or a bad key parses silently. **Evidence:** round-trip assertion output.
+- **AC-TMUX-KEY-GRAMMAR.** A **live** pane key from the running binary round-trips
+  `pane:<session>:<window>.<pane>@<hostId>` (`parse(format(x)) == x`) via the `tmuxPanes` query, and
+  the compiled parser **rejects** malformed keys rather than returning a partial one: an embedded `:`
+  or `.` in the session segment, an unknown kind prefix, an empty window/pane index, a non-numeric
+  index, and a missing `@hostId`. Fails if the live round-trip differs or any malformed key parses
+  silently. **Evidence:** the live-key round-trip from the query + the malformed-rejection table
+  exercised through the compiled parser (`plugins/tmux/keys_test.go`).
+- **AC-TMUX-POLL-ERROR (owner T1: an errored/timed-out poll must NOT emit).** A reconcile that
+  errors or times out (injected via a stub `tmuxPath` that succeeds on the first poll, then exits
+  non-zero) emits **no** `tmux.snapshot`; with emits stopped, the `tmux` `/health` entry crosses from
+  `ok` to `stale` within the lag threshold. Fails if a failed poll advances health or emits a
+  snapshot. **Evidence:** `/health` `ok` after the first (successful) poll, then `stale` after the
+  stub is tripped, with no intervening snapshot. *(A successful reconcile poll IS a real emit; only
+  the errored/timed-out one must not emit.)*
 - **AC-TMUX-STALE (negative control, honest freshness).** A pane closed while the control client is
   mid-reconnect (no `%`-notification observed) is still marked `staleSince` by the **next reconcile
   poll**, bounding staleness at `T`. Fails if the vanished pane stays `free`/live past `T`.
@@ -226,26 +250,27 @@ running binary + real tmux this turn**. `T` = `reconcileIntervalSeconds` (test u
 - **AC-TMUX-ZEROCORE (S5).** After adding `plugins/tmux/**` + the `graph/plugins_import.go` blank
   import + regenerated `graph/`, `git diff --stat core/` reports **0 files changed** and `/health`
   serves a `tmux` entry. **Evidence:** empty `git diff --stat core/` + `/health` showing `tmux`.
-- **AC-TMUX-LOC.** The strip-formula count for `plugins/tmux/**` (excluding `*_test.go`) is **≤ 600**.
-  **Evidence:** `make loc-tmux` output ≤ 600.
-- **AC-TMUX-F8 (cross-box, @pending).** After the peer plugin exists, a stopped box shows its tmux
-  data as `stale since T` on a peer **< 30 s**, with no peer-of-peer rows. **@pending** — needs the
-  peer plugin + a second box. **Evidence (deferred):** peer query screenshot + grep.
+- **AC-TMUX-LOC.** The strip-formula count for `plugins/tmux/**` (excluding `*_test.go`) is **≤ 800**
+  (measured **770**). **Evidence:** `make loc-tmux` output ≤ 800.
+- **AC-TMUX-STALE-PEER (cross-box, @pending; peer-owned).** After the peer plugin exists, a stopped box
+  shows its tmux data as `stale since T` on a peer **< 30 s**, with no peer-of-peer rows. **@pending** —
+  needs the peer plugin + a second box. Tagged `@AC-TMUX-STALE-PEER` (a tmux-scoped cross-reference; F8
+  itself stays peer-owned in prd.feature, unmoved). **Evidence (deferred):** peer query screenshot + grep.
 
-## prd.feature deltas (for a later coder — this EDR does NOT touch prd.feature)
+## prd.feature deltas — **none** (this EDR / feature does NOT touch prd.feature)
 
-Mirror the github pattern (github removed its owned S3/F2/F3/F7 from prd.feature):
-1. **Retire the S2 scenario from `features/prd.feature`.** `features/tmux.feature` now owns **S2**
-   as a concrete `@local @tmux @S2` scenario (`freeSlots` p95 < 1 s warm). Remove
-   `@pending @plugin-tier @S2` and its line in the AC Coverage Map to preserve the scenario↔AC
-   bijection (no double-ownership).
+S2 is **peer-owned** (cross-box fan-out): this feature owns only the on-box warm read as
+`AC-TMUX-FREESLOTS-WARM` and does **not** claim `@S2`, so prd.feature's S2 scenario stays exactly
+as-is — there is no S2 retirement. Likewise:
+1. **S2 stays in prd.feature (peer-owned).** `tmux.feature` carries `@AC-TMUX-FREESLOTS-WARM` for the
+   local half only. Do **not** remove or retag prd.feature S2, and do not add `@S2` in tmux.feature.
 2. **F5 stays in prd.feature (claude-owned trigger).** Its evidence already reads "…the other
-   plugins, including tmux, keep answering". No move; `tmux.feature`'s `AC-TMUX-ISOLATION` covers
-   tmux's half locally. Leave the prd.feature F5 scenario as-is.
-3. **F8 stays in prd.feature (peer-owned).** `tmux.feature` carries a `@pending @F8` cross-reference
-   for the tmux-data portion only; do **not** move F8 out of prd.feature.
+   plugins, including tmux, keep answering". `tmux.feature`'s `AC-TMUX-ISOLATION` covers tmux's half
+   locally. Leave the prd.feature F5 scenario as-is.
+3. **F8 stays in prd.feature (peer-owned).** `tmux.feature` carries a `@pending @AC-TMUX-STALE-PEER`
+   cross-reference for the tmux-data portion only; do **not** move or retag F8 in prd.feature.
 
-No other prd.feature edits. Everything else tmux-specific lives in `features/tmux.feature`.
+No prd.feature edits at all. Everything tmux-specific lives in `features/tmux.feature`.
 
 ## Handoff
 
@@ -255,4 +280,4 @@ No other prd.feature edits. Everything else tmux-specific lives in `features/tmu
   reconnect + `%exit` handling is the judgment-bearing seam). Wave 2 (godog steps in
   `features/steps_tmux_test.go`) depends on Wave 1 compiling. Per
   `~/.knowledge/modules/shared/records/model-selection.md`.
-- One prd.feature edit (delta #1 above) is a **fast-coder** task, gated on this EDR landing.
+- No prd.feature edit is required (S2/F5/F8 stay peer/claude-owned; see §prd.feature deltas).
