@@ -826,8 +826,12 @@ func (g *ghWorld) forwardStubDelivers() error {
 func (g *ghWorld) forwardAssertIngested() error {
 	// With ingest.go passing --secret, the ghstub signs the forwarded delivery with
 	// the configured webhook secret, so the plugin's HMAC check accepts it and the
-	// issue becomes queryable.
-	deadline := time.Now().Add(3 * time.Second)
+	// issue becomes queryable. This has nothing to do with the crash/backoff path
+	// (GHSTUB_CRASH_AFTER only fires after this delivery is sent) — the bound just
+	// needs enough slack for the stub's 30ms poll tick plus one HTTP round trip and
+	// a sqlite write under -race's slowed goroutine scheduling, so it's generous
+	// rather than tight (10s, well above any observed race-mode latency).
+	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		if ok, _ := g.nodeExists("issue:o/r#1"); ok {
 			return nil
@@ -836,7 +840,7 @@ func (g *ghWorld) forwardAssertIngested() error {
 		if n > 0 {
 			return nil
 		}
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond)
 	}
 	return fmt.Errorf("forward: issue:o/r#1 was never ingested (webhookSecret=%q)", g.webhookSecret)
 }
@@ -859,8 +863,10 @@ func (g *ghWorld) forwardAssertRestarted() error {
 	// After the crash the supervisor waits backoff, then on its restart iteration
 	// runs redelivery from the last-seen id: the queued undelivered event is
 	// replayed to the handler and becomes queryable. issue:o/r#2 appearing proves
-	// the restart happened and redelivery ran.
-	deadline := time.Now().Add(5 * time.Second)
+	// the restart happened and redelivery ran. backoffInitial (ingest.go) is 500ms,
+	// so under normal load this resolves in ~1s; give it the same generous,
+	// race-mode-safe bound as forwardAssertIngested rather than a tight one.
+	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		if ok, _ := g.nodeExists("issue:o/r#2"); ok {
 			return nil
@@ -868,7 +874,7 @@ func (g *ghWorld) forwardAssertRestarted() error {
 		if n, _ := g.countEvents("", "issue:o/r#2"); n > 0 {
 			return nil
 		}
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond)
 	}
 	return fmt.Errorf("forward: the missed delivery (issue:o/r#2) was never replayed after restart")
 }
