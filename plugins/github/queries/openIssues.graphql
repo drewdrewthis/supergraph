@@ -4,7 +4,10 @@
 query openIssues($owner: String!, $repo: String!) {
   repository(owner: $owner, name: $repo) {
     issues(first: 100, states: OPEN) {
-      nodes { number title state id }
+      nodes {
+        number title state id url updatedAt
+        labels(first: 20) { nodes { name } }
+      }
     }
   }
   rateLimit { remaining resetAt cost }

@@ -6,7 +6,7 @@ Feature: GitHub typed Query + the PRD first cross-plugin join
   # These fields are served from the github plugin's SQLite cache ONLY: a hit returns the node with
   # zero upstream calls; a miss returns null/[] (warming stays the proxy `/plugins/github/graphql`
   # path). The join goes issue# ↔ branch ↔ tmux pane ↔ claude session through ONE shared convention
-  # (plugins/internal/issuekey.FromBranch, anchored `^issue-?(\d+)([/-]|$)`) PLUS the cached PR
+  # (internal/issuekey.FromBranch, anchored `^issue-?(\d+)([/-]|$)`) PLUS the cached PR
   # body/title closing-keyword links (close/fix/resolve #N). @local runs against the fake GitHub server plus
   # in-memory fake claude/tmux stores — no PAT. @live needs env GITHUB_TOKEN + GITHUB_ORG and is
   # @pending until run against live GitHub. See docs/edr/github-query.md.
@@ -78,7 +78,8 @@ Feature: GitHub typed Query + the PRD first cross-plugin join
     And the response claudeSessions contains session id `sess-12`
     # A single boundary branch ("issue12-foo", the `issue12-` no-slash form) attaching on
     # both sides proves the claude filter and the tmux branch set use the identical shared
-    # derivation (plugins/internal/issuekey, `^issue-?(\d+)([/-]|$)`); if the two plugins
+    # derivation (internal/issuekey — module-root, not plugins/internal, so graph/ can import it;
+    # `^issue-?(\d+)([/-]|$)`); if the two plugins
     # used different regexes they could not both resolve this boundary form to 12.
 
   @github @local @AC-GHQ-BRANCH-REGEX

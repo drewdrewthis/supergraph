@@ -11,33 +11,36 @@ exactly the entries that touch the changed object (tag purge = keyed delete)**. 
 `brunoborges/ghx` was read in full (see [History](#history)); it is **not vendored** — we borrow only
 its singleflight pattern (~40 LOC, `ghx src/internal/daemon/handler.go:203`).
 
-**Hard constraints (owner):** ≤ **1350 LOC prod** (raised 800→1300→1350, Option A) for `plugins/github/**` excluding tests and
+**Hard constraints (owner):** ≤ **1540 LOC prod** (raised 800→1300→1350→1540, Option A) for `plugins/github/**` excluding tests and
 `internal/fakegh` (per-package budget below); zero core diff; PAT-only; HMAC per hook; per-repo hook
 creation from `/user/repos` (F3); point-budget floor pause + rate-limit logging; CLI `--op/--var` +
 `schema <Type>` in `cmd/` only; fakegh httptest server + fake `gh` stub for `@local`.
 
 ---
 
-## LOC budget (prod, cap **1350** total; tests + `internal/fakegh` excluded)
-Cap raised 800→1300→**1350** by owner (Option A, 2026-09-05). The last ratchet
-(1300→1350) paid for the hardening/correctness batch: REST-path input validation
-(`safeName`/`url.PathEscape`, S1), the list-op cache read path (U2), and the
-reconcile revalidation loop that heals every mutable kind (P1). Table shows **Actual**
-LOC (EDR strip formula), not aspirational budgets.
+## LOC budget (prod, cap **1540** total; tests + `internal/fakegh` excluded)
+Cap raised 800→1300→1350→**1540** by owner (Option A, 2026-09-05). The last ratchet
+(1350→1540) paid for the typed cache-only reads + the PRD cross-plugin join
+([github-query EDR](./github-query.md)): `query.go` (typed `IssueNode`/`PRNode` +
+`mapIssue`/`mapPR` + exported `Issue`/`PullRequest`/`IssuesForRepo`/`CachedPRs`
+accessors), `store.go`'s `nodesByKind`, and `github.go`'s `current` accessor pointer.
+New cap = measured **1466** + 5% rounded up to 10. Table shows **Actual** LOC (EDR
+strip formula), not aspirational budgets.
 | Package/file (`plugins/github/`) | Actual | Responsibility |
 |---|---:|---|
-| `github.go` | 145 | plugin wiring: `Register`/`New`/`Name`/`Migrate`/`Start`/`HTTPRoutes`/`CursorReporter`/config |
+| `github.go` | 151 | plugin wiring: `Register`/`New`/`Name`/`Migrate`/`Start`/`HTTPRoutes`/`CursorReporter`/config + `current` accessor pointer (github-query D2) |
 | `keys.go` | 185 | key grammar as a **data table** (`kindSpecs`): parse + object→key + event→key + REST path + typename + `safeName` (S1) |
 | `client.go` | 106 | shared GitHub HTTP + rate-limit layer: REST/GraphQL calls, auth, ratelog, floor-pause |
-| `store.go` | 213 | SQLite `github_nodes`+`github_tags`+`github_hooks`+`github_deliveries`: upsert, get, purge, tag index, hooks, deliveries prune, non-pinned scan, pin |
+| `store.go` | 231 | SQLite `github_nodes`+`github_tags`+`github_hooks`+`github_deliveries`: upsert, get, purge, tag index, hooks, deliveries prune, non-pinned scan, pin, `nodesByKind` (github-query) |
+| `query.go` | 131 | typed cache-only reads (github-query D4/D5): `IssueNode`/`PRNode` + `mapIssue`/`mapPR` + exported `Issue`/`PullRequest`/`IssuesForRepo`/`CachedPRs` |
 | `proxy.go` | 118 | read-through resolve: miss→fetch→store→serve; ETag/304; **singleflight (borrowed ~40)**; pin eval |
 | `webhook.go` | 63 | HMAC verify (1 MiB body cap, S2); event→key; purge; emit envelopes; delivery dedup |
 | `executor.go` | 255 | JSON-backed GraphQL executor + named-op loader + declared-key scoping (point/list) + list read path (U2) + body cap (S2) + parsed introspection allowlist (raw-query guard hardening) |
 | `ingest.go` | 116 | `gh webhook forward` supervisor (backoff) + redelivery + `/notifications` poll (flag) |
 | `reconcile.go` | 110 | discovery `/user/repos` + hook creation + since-cursor + revalidation (P1) + deliveries prune (S3) |
-| **Total** | **1311** | cap **1350**; CLI delta in `cmd/supergraph/` (~60) is counted separately, not in this budget |
-- **AC-GH-LOC** guards it: a CI step (`make loc-github`) runs `find plugins/github -name '*.go' ! -name '*_test.go' -not -path '*/fakegh/*' | xargs sed -E '/^[[:space:]]*\/\//d;/^[[:space:]]*$/d' | wc -l` and fails > 1350 (POSIX `[[:space:]]`, portable across GNU/BSD sed).
-- −39 (1345→1311 measured): the `strOr`/`boolOr`/`intOr`/`toInt`/`readErrStatus` config helpers moved to `plugins/internal/pluginconfig`; cap held at **1350** (measured × 1.05 rounds above it and the cap never rises).
+| **Total** | **1466** | cap **1540**; CLI delta in `cmd/supergraph/` (~70) is counted separately, not in this budget |
+- **AC-GH-LOC / AC-GHQ-LOC** guard it: a CI step (`make loc-github`) runs `find plugins/github -name '*.go' ! -name '*_test.go' -not -path '*/fakegh/*' | xargs sed -E '/^[[:space:]]*\/\//d;/^[[:space:]]*$/d' | wc -l` and fails > 1540 (POSIX `[[:space:]]`, portable across GNU/BSD sed). The shared `internal/issuekey` package (28 LOC) has its own **`make loc-issuekey`** gate (cap 30), outside this budget.
+- The `strOr`/`boolOr`/`intOr`/`toInt`/`readErrStatus` config helpers moved to `plugins/internal/pluginconfig` (−39 from the pre-migration 1350 baseline); the typed `Query.issue`/`pullRequest`/`issuesForRepo` reads plus the cross-plugin join accessors (`query.go`, `nodesByKind`, `current`) then added the github-query surface, landing at **1466 measured**; cap = 1466 × 1.05 rounded up to 10 = **1540** (owner rule).
 
 ## Cache key = object id (full grammar)
 Every cached node and every purge target is one canonical key. `@<hostId>` suffix is **optional**,

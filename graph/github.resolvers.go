@@ -9,7 +9,43 @@ import (
 	"context"
 
 	"github.com/drewdrewthis/supergraph/graph/model"
+	"github.com/drewdrewthis/supergraph/plugins/github"
 )
+
+// TmuxPanes resolves the panes joined to this issue (the join lives in graph/, D2).
+func (r *issueResolver) TmuxPanes(ctx context.Context, obj *github.IssueNode) ([]model.TmuxPane, error) {
+	return tmuxPanesForIssue(ctx, obj.Owner, obj.Repo, obj.Number), nil
+}
+
+// ClaudeSessions resolves the claude sessions joined to this issue.
+func (r *issueResolver) ClaudeSessions(ctx context.Context, obj *github.IssueNode) ([]model.ClaudeSession, error) {
+	return claudeSessionsForIssue(ctx, obj.Owner, obj.Repo, obj.Number), nil
+}
+
+// TmuxPanes resolves the panes on this PR's head branch (D3).
+func (r *pullRequestResolver) TmuxPanes(ctx context.Context, obj *github.PRNode) ([]model.TmuxPane, error) {
+	return panesForBranchModel(ctx, obj.HeadRefName), nil
+}
+
+// ClaudeSessions resolves the claude sessions on this PR's head branch (D3).
+func (r *pullRequestResolver) ClaudeSessions(ctx context.Context, obj *github.PRNode) ([]model.ClaudeSession, error) {
+	return claudeSessionsOnBranchModel(ctx, obj.HeadRefName), nil
+}
+
+// Issue is the resolver for the issue field: cache-only, null on a miss (D1).
+func (r *queryResolver) Issue(ctx context.Context, key string) (*github.IssueNode, error) {
+	return github.Issue(ctx, key), nil
+}
+
+// PullRequest is the resolver for the pullRequest field: cache-only, null on a miss.
+func (r *queryResolver) PullRequest(ctx context.Context, key string) (*github.PRNode, error) {
+	return github.PullRequest(ctx, key), nil
+}
+
+// IssuesForRepo is the resolver for the issuesForRepo field: cache-only, [] cold.
+func (r *queryResolver) IssuesForRepo(ctx context.Context, owner string, repo string) ([]github.IssueNode, error) {
+	return github.IssuesForRepo(ctx, owner, repo), nil
+}
 
 // CheckRunUpdated is the resolver for the checkRunUpdated field. Like the template
 // plugin's subscription it carries no business logic: it maps envelopes from the
@@ -43,3 +79,14 @@ func (r *subscriptionResolver) CheckRunUpdated(ctx context.Context) (<-chan mode
 	}()
 	return out, nil
 }
+
+// Issue returns IssueResolver implementation.
+func (r *Resolver) Issue() IssueResolver { return &issueResolver{r} }
+
+// PullRequest returns PullRequestResolver implementation.
+func (r *Resolver) PullRequest() PullRequestResolver { return &pullRequestResolver{r} }
+
+type (
+	issueResolver       struct{ *Resolver }
+	pullRequestResolver struct{ *Resolver }
+)

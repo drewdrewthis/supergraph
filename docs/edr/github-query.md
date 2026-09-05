@@ -12,8 +12,9 @@ joined by branch name through a single convention shared across the three plugin
 
 **Non-goals.** No upstream hop from these fields (a miss is `null`/`[]`; warm stays the proxy
 `/plugins/github/graphql` path). No cache-semantics change (TTL/pin/purge/reconcile untouched).
-No core/ or server/ edit. No new webhook/subscription. No Todoist/email join (deferred). No PR
-body/title `#N` scan in v1 (see Owner question).
+No core/ or server/ edit. No new webhook/subscription. No Todoist/email join (deferred). No
+cross-repo `owner/repo#N` closing refs in v1 (owner-accepted default 2026-09-05; only same-repo
+`#N` closes link — see D3).
 
 ---
 
@@ -39,9 +40,12 @@ accessor** — no plugin imports another (rejects Option ii coupling):
 Owner 2026-09-05: the derivation is the **anchored** regex `^issue-?(\d+)([/-]|$)` — matches
 `issue1/spike-core`, `issue-12`, `issue12-foo`; rejects `fix/issue3`, `myissue4`. Today
 `claude/keys.go` owns a near-copy (`^issue-?(\d+)\b`) and tmux has no derivation at all, so the
-three would drift. Extract a **shared `plugins/internal/issuekey`** package (the `pluginconfig`
-PR is already creating `plugins/internal/`) exporting `issuekey.FromBranch(branch) int`; point
-`claude` and `tmux` at it and delete the claude copy — one regex, one source of truth. `graph/`
+three would drift. Extract a **shared `internal/issuekey`** package exporting
+`issuekey.FromBranch(branch) int`; point `claude` and `tmux` at it and delete the claude copy —
+one regex, one source of truth. It lives at the **module-root `internal/`**, not
+`plugins/internal/`: Go's internal rule would confine a `plugins/internal/` package to importers
+rooted at `plugins/`, but `graph/` (outside `plugins/`) must import it too, so module-root
+`internal/` is the only placement all three callers (`plugins/*`, `graph/`) can reach. `graph/`
 imports it directly. (`<N>-slug` branch form is **deferred**, owner 2026-09-05.)
 - `Issue.claudeSessions(N)` → `claude.QuerySessions(ctx, nil, &N)` (claude keys sessions by the
   derived issue number — consistent by construction).
@@ -50,9 +54,11 @@ imports it directly. (`<N>-slug` branch form is **deferred**, owner 2026-09-05.)
   `{pr.HeadRefName | pr ∈ cachedPRs(repo), N ∈ closesIssues(pr.body, pr.title)}`; return
   `⋃ tmux.PaneForBranch(b)` deduped by pane key.
 - `closesIssues(body,title)` scans the cached PR **body+title** with the GitHub closing-keyword
-  regex `(?i)(close[sd]?|fix(e[sd])?|resolve[sd]?)\s+(#|[\w.-]+/[\w.-]+#)(\d+)` (~20 LOC, data
-  already cached once D5 selects `body`). A bare `#N` mention with no keyword does **not** link
-  (AC-GHQ-MENTION-NOLINK).
+  regex `(?i)(close[sd]?|fix(e[sd])?|resolve[sd]?)\s+(#|[\w.-]+/[\w.-]+#)(\d+)` (data already cached
+  once D5 selects `body`); it lives in `internal/issuekey.ClosingRefs`. A bare `#N` mention with no
+  keyword does **not** link (AC-GHQ-MENTION-NOLINK). **Owner 2026-09-05 (accepted default):
+  cross-repo `owner/repo#N` closing refs are ignored in v1** — the regex still matches them but
+  `ClosingRefs` drops any ref whose prefix is not a bare `#`, so only same-repo `#N` closes link.
 - `Issue.claudeSessions(N)` likewise unions sessions on any such PR branch.
 - `PullRequest.tmuxPanes` → `tmux.PaneForBranch(headRefName)`.
 - `PullRequest.claudeSessions` → `claude.QuerySessions(ctx, nil, &issuekey.FromBranch(headRefName))`.
@@ -89,7 +95,7 @@ No key-extraction change (`hasAll` still keys on `{number}`).
   N×(claude+tmux). Bounded (list `first:100`); the `issuesForRepo` AC does not select joins, and
   the p95 AC measures the single-issue join. Note in schema doc-comment.
 - Convention: owner 2026-09-05 fixed the derivation to anchored `^issue-?(\d+)([/-]|$)` (shared
-  `plugins/internal/issuekey`); the `<N>-slug` form is **deferred**. `labels` mapped as `[String!]!`
+  `internal/issuekey`); the `<N>-slug` form is **deferred**. `labels` mapped as `[String!]!`
   names (not a `Label` type) to stay minimal.
 - Closing-keyword false-positives: the regex `(?i)(close[sd]?|fix(e[sd])?|resolve[sd]?)\s+...#(\d+)`
   is GitHub's own linking grammar; a bare `#N` mention must not link (AC-GHQ-MENTION-NOLINK guards it).
@@ -99,7 +105,7 @@ No key-extraction change (`hasAll` still keys on `{number}`).
 ## Build plan (numbered, TDD; ZEROCORE + LOC gated)
 
 1. **Failing feature first.** Land `features/github-query.feature` (below) with steps `@pending`.
-2. **shared derivation**: add `plugins/internal/issuekey` (`FromBranch`, anchored regex
+2. **shared derivation**: add `internal/issuekey` (`FromBranch`, anchored regex
    `^issue-?(\d+)([/-]|$)`); repoint `claude/keys.go` + `tmux` at it, delete the claude copy.
    Closing-keyword scan `closesIssues(body,title)` lands in `graph/` (~20 LOC). `~30 LOC` (shared
    pkg + scan, outside the github budget).
@@ -118,14 +124,18 @@ No key-extraction change (`hasAll` still keys on `{number}`).
    `Query.Issue/PullRequest/IssuesForRepo` (map plugin node→model) and the 4 join resolvers per
    D3. `~110 LOC in graph/` (not in the github budget; `generated.go` excluded).
 10. **Un-`@pending`** the `@local` scenarios; keep `@live @pending` ones pending.
-11. **LOC gate**: rerun `make loc-github`; move the cap to **measured + 5%** (est. ~1525) in the
-    [github EDR](./github.md) budget table — one ratchet line, owner-approved by this EDR.
+11. **LOC gate**: rerun `make loc-github`; move the cap to **measured + 5% rounded up to 10 = 1540**
+    (measured **1466**) in the [github EDR](./github.md) budget table — one ratchet line, with the
+    per-file attribution. The shared `internal/issuekey` (28 LOC) gets its own
+    `make loc-issuekey` gate (cap 30) + CI step, outside the github budget.
 12. **ZEROCORE gate**: `git diff --stat core/ server/` is empty; `gqlgen.yml` + `graph/` +
     `plugins/**` only.
 
-**LOC estimate.** `plugins/github/**` prod: **~+105** (store 12 + wiring 3 + query.go 90) →
-**~1450** (from 1345). New cap **measured + 5% ≈ 1525**. `graph/` (outside budget): ~+110 hand +
-generated. claude: +2.
+**LOC actual.** `plugins/github/**` prod: **+155** (store `nodesByKind` +18 · `github.go`
+`current`/Migrate +6 · `query.go` 131) → **1466** (from the post-`pluginconfig` 1311 baseline on
+`main`). New cap **measured + 5% rounded up to 10 = 1540**. `graph/` (outside budget):
+`github_map.go` (join helpers) + generated stubs. claude: `keys.go` repointed to `issuekey`
+(net ~-6). shared `internal/issuekey`: 28 (own gate, cap 30).
 
 ---
 

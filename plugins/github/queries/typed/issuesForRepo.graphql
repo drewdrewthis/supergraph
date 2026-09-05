@@ -1,0 +1,7 @@
+# Typed cache-only read served by CORE /graphql (Query.issuesForRepo). Usage:
+#   supergraph query --plugin github --op issuesForRepo --var owner=o --var repo=r
+query issuesForRepo($owner: String!, $repo: String!) {
+  issuesForRepo(owner: $owner, repo: $repo) {
+    number title state url updatedAt labels
+  }
+}

@@ -1,0 +1,9 @@
+# Typed cache-only read served by CORE /graphql (Query.pullRequest). Usage:
+#   supergraph query --plugin github --op pullRequest --var key=pr:o/r#8
+query pullRequest($key: String!) {
+  pullRequest(key: $key) {
+    number title state url headRefName
+    tmuxPanes { key }
+    claudeSessions { sessionId }
+  }
+}

@@ -191,6 +191,29 @@ func (s *store) nonPinnedNodes(ctx context.Context) ([]*node, error) {
 	return out, rows.Err()
 }
 
+// nodesByKind returns every cached object node of one kind under a repo scope
+// (e.g. kind "issue", scope "o/r"), keyed as `<kind>:<scope>#<n>`. List results
+// (typename "_list") are excluded. It backs the typed issuesForRepo / cached-PR
+// reads (docs/edr/github-query.md); a cold repo yields an empty slice.
+func (s *store) nodesByKind(ctx context.Context, kind, scope string) ([]*node, error) {
+	rows, err := s.db().QueryContext(ctx,
+		`SELECT key, node_json FROM github_nodes WHERE typename<>'_list' AND key LIKE ?`,
+		kind+":"+scope+"#%")
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []*node
+	for rows.Next() {
+		n := &node{}
+		if err := rows.Scan(&n.Key, &n.JSON); err != nil {
+			return nil, err
+		}
+		out = append(out, n)
+	}
+	return out, rows.Err()
+}
+
 // deliverySeen reports whether this X-GitHub-Delivery id was already ingested, so a
 // redelivery replays a missed event exactly once (AC-GH-FORWARD).
 func (s *store) deliverySeen(ctx context.Context, id string) bool {

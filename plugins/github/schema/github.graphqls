@@ -15,3 +15,42 @@ type GithubEvent {
   key: String!
   payload: String!
 }
+
+# Typed cache-only reads + the PRD first cross-plugin join (docs/edr/github-query.md).
+# issue/pullRequest/issuesForRepo are served from the github plugin's SQLite cache
+# ONLY: a hit returns the node, a miss returns null/[] (no upstream hop — D1). The
+# join fields tmuxPanes/claudeSessions are resolved in graph/ via each plugin's
+# exported accessor (D2), joined by branch through the shared issuekey convention
+# PLUS the cached PR body/title closing-keyword links.
+extend type Query {
+  issue(key: String!): Issue
+  pullRequest(key: String!): PullRequest
+  # issuesForRepo returns the cached open issues warmed by the openIssues op; a cold
+  # repo returns []. Selecting the join fields here fans out N×(claude+tmux) (bounded
+  # by first:100) — the p95 AC measures the single-issue join, not this list.
+  issuesForRepo(owner: String!, repo: String!): [Issue!]!
+}
+
+type Issue {
+  number: Int!
+  title: String!
+  state: String!
+  url: String!
+  updatedAt: Time
+  labels: [String!]!
+  tmuxPanes: [TmuxPane!]!
+  claudeSessions: [ClaudeSession!]!
+}
+
+type PullRequest {
+  number: Int!
+  title: String!
+  state: String!
+  url: String!
+  updatedAt: Time
+  labels: [String!]!
+  headRefName: String!
+  baseRefName: String
+  tmuxPanes: [TmuxPane!]!
+  claudeSessions: [ClaudeSession!]!
+}

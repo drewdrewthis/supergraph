@@ -1,9 +1,10 @@
 package claude
 
 import (
-	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/drewdrewthis/supergraph/internal/issuekey"
 )
 
 // Key grammar (EDR §"Key grammar"):
@@ -16,18 +17,12 @@ import (
 func sessionKey(sid, host string) string   { return "session:" + sid + "@" + host }
 func instanceKey(pane, host string) string { return "instance:" + pane + "@" + host }
 
-// branchIssueRe extracts the issue number a git branch encodes: an "issueN/..." (or
-// "issue-N/...") prefix. A branch with no such prefix (e.g. "plugin/claude") yields 0.
-var branchIssueRe = regexp.MustCompile(`^issue-?(\d+)\b`)
-
 // issueFromBranch derives the S4 join key (issue number) from a branch name, or 0
-// when the branch encodes none (PRD §6 "issue number ↔ branch/worktree").
+// when the branch encodes none (PRD §6 "issue number ↔ branch/worktree"). The
+// derivation is the shared internal/issuekey regex — one source of truth
+// across claude, tmux, and github so the cross-plugin join cannot drift.
 func issueFromBranch(branch string) int {
-	m := branchIssueRe.FindStringSubmatch(strings.TrimSpace(branch))
-	if m == nil {
-		return 0
-	}
-	n, _ := strconv.Atoi(m[1])
+	n, _ := issuekey.FromBranch(branch)
 	return n
 }
 

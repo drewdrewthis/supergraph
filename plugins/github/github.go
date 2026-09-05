@@ -11,11 +11,18 @@ import (
 	"net/http"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/drewdrewthis/supergraph/core"
 	"github.com/drewdrewthis/supergraph/plugins/internal/pluginconfig"
 )
+
+// current is the running plugin instance, published in Migrate so the graph query
+// resolvers (graph/github_map.go) can read cached nodes through the exported
+// package funcs in query.go — mirroring tmux's `active` / claude's `live`. No
+// plugin imports another: the cross-plugin join lives in graph/ (D2).
+var current atomic.Pointer[Plugin]
 
 func init() { core.Register("github", New) }
 
@@ -120,7 +127,11 @@ func (p *Plugin) Name() string { return "github" }
 // handlers and loops (which never receive a Store directly).
 func (p *Plugin) Migrate(ctx context.Context, s *core.Store) error {
 	p.store = &store{core: s}
-	return p.store.migrate(ctx)
+	if err := p.store.migrate(ctx); err != nil {
+		return err
+	}
+	current.Store(p)
+	return nil
 }
 
 // Start captures the emit closure (the only source of it — HTTP handlers read it

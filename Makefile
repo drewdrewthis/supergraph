@@ -47,17 +47,18 @@ features-github:
 
 # loc-github guards the plugins/github/** LOC budget (docs/edr/github.md): prod
 # code only (no _test.go, no internal/fakegh), comments/blank lines stripped,
-# fails when the total exceeds 1350 (AC-GH-LOC; cap raised 800→1300→1350 by owner as
-# the security/reconcile/list-read batches landed; held at 1350 after the config helpers
-# moved to plugins/internal/pluginconfig — measured fell 1350->1311 but 1311 x1.05 rounds
-# above 1350 and the cap never rises). Uses POSIX [[:space:]] (not \s,
+# fails when the total exceeds 1540 (AC-GH-LOC / AC-GHQ-LOC; cap raised
+# 800→1300→1350→1540 by owner — the 1350→1540 ratchet paid for the typed
+# Query.issue/pullRequest/issuesForRepo reads + the cross-plugin join accessors,
+# landing at measured 1466 after the config helpers moved to plugins/internal/pluginconfig;
+# 1466 x1.05 rounded up to 10 = 1540). Uses POSIX [[:space:]] (not \s,
 # which BSD/macOS sed does not honor, silently under-stripping indented comments).
 loc-github:
 	@files=$$(find plugins/github -name '*.go' ! -name '*_test.go' -not -path '*/fakegh/*' 2>/dev/null); \
 	if [ -z "$$files" ]; then count=0; else count=$$(echo "$$files" | xargs sed -E '/^[[:space:]]*\/\//d;/^[[:space:]]*$$/d' | wc -l | tr -d ' '); fi; \
 	echo "plugins/github prod LOC: $$count"; \
-	if [ "$$count" -gt 1350 ]; then \
-		echo "loc-github: $$count LOC exceeds the 1350 budget" >&2; \
+	if [ "$$count" -gt 1540 ]; then \
+		echo "loc-github: $$count LOC exceeds the 1540 budget" >&2; \
 		exit 1; \
 	fi
 
@@ -174,5 +175,22 @@ loc-internal:
 	echo "plugins/internal prod LOC: $$count"; \
 	if [ "$$count" -gt 100 ]; then \
 		echo "loc-internal: $$count LOC exceeds the 100 budget" >&2; \
+		exit 1; \
+	fi
+
+# --- shared branch↔issue derivation gate (appended; docs/edr/github-query.md) ---
+.PHONY: loc-issuekey
+
+# loc-issuekey guards the shared internal/issuekey package's prod LOC (the
+# single source of truth for the branch↔issue join key across claude/tmux/github).
+# Cap 30 = measured 28 + 5% rounded up to 10. Same portable POSIX [[:space:]]
+# formula as loc-github. Kept separate from the pluginconfig PR's loc-internal line
+# so the two extractions into plugins/internal/ rebase cleanly.
+loc-issuekey:
+	@files=$$(find internal/issuekey -name '*.go' ! -name '*_test.go' 2>/dev/null); \
+	if [ -z "$$files" ]; then count=0; else count=$$(echo "$$files" | xargs sed -E '/^[[:space:]]*\/\//d;/^[[:space:]]*$$/d' | wc -l | tr -d ' '); fi; \
+	echo "internal/issuekey prod LOC: $$count"; \
+	if [ "$$count" -gt 30 ]; then \
+		echo "loc-issuekey: $$count LOC exceeds the 30 budget" >&2; \
 		exit 1; \
 	fi

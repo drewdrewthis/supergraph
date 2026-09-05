@@ -16,6 +16,7 @@ import (
 	"github.com/99designs/gqlgen/graphql/introspection"
 	"github.com/drewdrewthis/supergraph/core"
 	"github.com/drewdrewthis/supergraph/graph/model"
+	"github.com/drewdrewthis/supergraph/plugins/github"
 	gqlparser "github.com/vektah/gqlparser/v2"
 	"github.com/vektah/gqlparser/v2/ast"
 )
@@ -30,6 +31,8 @@ func NewExecutableSchema(cfg Config) graphql.ExecutableSchema {
 type Config = graphql.Config[ResolverRoot, DirectiveRoot, ComplexityRoot]
 
 type ResolverRoot interface {
+	Issue() IssueResolver
+	PullRequest() PullRequestResolver
 	Query() QueryResolver
 	Subscription() SubscriptionResolver
 }
@@ -87,6 +90,17 @@ type ComplexityRoot struct {
 		State       func(childComplexity int) int
 	}
 
+	Issue struct {
+		ClaudeSessions func(childComplexity int) int
+		Labels         func(childComplexity int) int
+		Number         func(childComplexity int) int
+		State          func(childComplexity int) int
+		Title          func(childComplexity int) int
+		TmuxPanes      func(childComplexity int) int
+		URL            func(childComplexity int) int
+		UpdatedAt      func(childComplexity int) int
+	}
+
 	Peer struct {
 		HostID                    func(childComplexity int) int
 		LastSeenAt                func(childComplexity int) int
@@ -96,15 +110,31 @@ type ComplexityRoot struct {
 		URL                       func(childComplexity int) int
 	}
 
+	PullRequest struct {
+		BaseRefName    func(childComplexity int) int
+		ClaudeSessions func(childComplexity int) int
+		HeadRefName    func(childComplexity int) int
+		Labels         func(childComplexity int) int
+		Number         func(childComplexity int) int
+		State          func(childComplexity int) int
+		Title          func(childComplexity int) int
+		TmuxPanes      func(childComplexity int) int
+		URL            func(childComplexity int) int
+		UpdatedAt      func(childComplexity int) int
+	}
+
 	Query struct {
 		ClaudeInstances func(childComplexity int, hostID *string) int
 		ClaudeSession   func(childComplexity int, sessionID string) int
 		ClaudeSessions  func(childComplexity int, hostID *string, issueNumber *int) int
 		FreeSlots       func(childComplexity int, hostID *string) int
 		Health          func(childComplexity int) int
+		Issue           func(childComplexity int, key string) int
+		IssuesForRepo   func(childComplexity int, owner string, repo string) int
 		PaneForBranch   func(childComplexity int, branch string) int
 		Peers           func(childComplexity int) int
 		Ping            func(childComplexity int) int
+		PullRequest     func(childComplexity int, key string) int
 		Slots           func(childComplexity int, hostID *string) int
 		TemplatePing    func(childComplexity int) int
 		TmuxPanes       func(childComplexity int, hostID *string) int
@@ -171,12 +201,23 @@ type ComplexityRoot struct {
 
 // region    ************************** generated!.gotpl **************************
 
+type IssueResolver interface {
+	TmuxPanes(ctx context.Context, obj *github.IssueNode) ([]model.TmuxPane, error)
+	ClaudeSessions(ctx context.Context, obj *github.IssueNode) ([]model.ClaudeSession, error)
+}
+type PullRequestResolver interface {
+	TmuxPanes(ctx context.Context, obj *github.PRNode) ([]model.TmuxPane, error)
+	ClaudeSessions(ctx context.Context, obj *github.PRNode) ([]model.ClaudeSession, error)
+}
 type QueryResolver interface {
 	Health(ctx context.Context) ([]core.HealthStatus, error)
 	Ping(ctx context.Context) (string, error)
 	ClaudeSessions(ctx context.Context, hostID *string, issueNumber *int) ([]model.ClaudeSession, error)
 	ClaudeSession(ctx context.Context, sessionID string) (*model.ClaudeSession, error)
 	ClaudeInstances(ctx context.Context, hostID *string) ([]model.ClaudeInstance, error)
+	Issue(ctx context.Context, key string) (*github.IssueNode, error)
+	PullRequest(ctx context.Context, key string) (*github.PRNode, error)
+	IssuesForRepo(ctx context.Context, owner string, repo string) ([]github.IssueNode, error)
 	Peers(ctx context.Context) ([]model.Peer, error)
 	TemplatePing(ctx context.Context) (string, error)
 	TmuxSessions(ctx context.Context, hostID *string) ([]model.TmuxSession, error)
@@ -420,6 +461,55 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Health.State(childComplexity), true
 
+	case "Issue.claudeSessions":
+		if e.ComplexityRoot.Issue.ClaudeSessions == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Issue.ClaudeSessions(childComplexity), true
+	case "Issue.labels":
+		if e.ComplexityRoot.Issue.Labels == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Issue.Labels(childComplexity), true
+	case "Issue.number":
+		if e.ComplexityRoot.Issue.Number == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Issue.Number(childComplexity), true
+	case "Issue.state":
+		if e.ComplexityRoot.Issue.State == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Issue.State(childComplexity), true
+	case "Issue.title":
+		if e.ComplexityRoot.Issue.Title == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Issue.Title(childComplexity), true
+	case "Issue.tmuxPanes":
+		if e.ComplexityRoot.Issue.TmuxPanes == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Issue.TmuxPanes(childComplexity), true
+	case "Issue.url":
+		if e.ComplexityRoot.Issue.URL == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Issue.URL(childComplexity), true
+	case "Issue.updatedAt":
+		if e.ComplexityRoot.Issue.UpdatedAt == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Issue.UpdatedAt(childComplexity), true
+
 	case "Peer.hostId":
 		if e.ComplexityRoot.Peer.HostID == nil {
 			break
@@ -456,6 +546,67 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Peer.URL(childComplexity), true
+
+	case "PullRequest.baseRefName":
+		if e.ComplexityRoot.PullRequest.BaseRefName == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PullRequest.BaseRefName(childComplexity), true
+	case "PullRequest.claudeSessions":
+		if e.ComplexityRoot.PullRequest.ClaudeSessions == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PullRequest.ClaudeSessions(childComplexity), true
+	case "PullRequest.headRefName":
+		if e.ComplexityRoot.PullRequest.HeadRefName == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PullRequest.HeadRefName(childComplexity), true
+	case "PullRequest.labels":
+		if e.ComplexityRoot.PullRequest.Labels == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PullRequest.Labels(childComplexity), true
+	case "PullRequest.number":
+		if e.ComplexityRoot.PullRequest.Number == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PullRequest.Number(childComplexity), true
+	case "PullRequest.state":
+		if e.ComplexityRoot.PullRequest.State == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PullRequest.State(childComplexity), true
+	case "PullRequest.title":
+		if e.ComplexityRoot.PullRequest.Title == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PullRequest.Title(childComplexity), true
+	case "PullRequest.tmuxPanes":
+		if e.ComplexityRoot.PullRequest.TmuxPanes == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PullRequest.TmuxPanes(childComplexity), true
+	case "PullRequest.url":
+		if e.ComplexityRoot.PullRequest.URL == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PullRequest.URL(childComplexity), true
+	case "PullRequest.updatedAt":
+		if e.ComplexityRoot.PullRequest.UpdatedAt == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PullRequest.UpdatedAt(childComplexity), true
 
 	case "Query.claudeInstances":
 		if e.ComplexityRoot.Query.ClaudeInstances == nil {
@@ -508,6 +659,28 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Query.Health(childComplexity), true
 
+	case "Query.issue":
+		if e.ComplexityRoot.Query.Issue == nil {
+			break
+		}
+
+		args, err := ec.field_Query_issue_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Query.Issue(childComplexity, args["key"].(string)), true
+	case "Query.issuesForRepo":
+		if e.ComplexityRoot.Query.IssuesForRepo == nil {
+			break
+		}
+
+		args, err := ec.field_Query_issuesForRepo_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Query.IssuesForRepo(childComplexity, args["owner"].(string), args["repo"].(string)), true
 	case "Query.paneForBranch":
 		if e.ComplexityRoot.Query.PaneForBranch == nil {
 			break
@@ -531,6 +704,17 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Query.Ping(childComplexity), true
+	case "Query.pullRequest":
+		if e.ComplexityRoot.Query.PullRequest == nil {
+			break
+		}
+
+		args, err := ec.field_Query_pullRequest_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Query.PullRequest(childComplexity, args["key"].(string)), true
 	case "Query.slots":
 		if e.ComplexityRoot.Query.Slots == nil {
 			break
@@ -998,6 +1182,45 @@ type GithubEvent {
   key: String!
   payload: String!
 }
+
+# Typed cache-only reads + the PRD first cross-plugin join (docs/edr/github-query.md).
+# issue/pullRequest/issuesForRepo are served from the github plugin's SQLite cache
+# ONLY: a hit returns the node, a miss returns null/[] (no upstream hop — D1). The
+# join fields tmuxPanes/claudeSessions are resolved in graph/ via each plugin's
+# exported accessor (D2), joined by branch through the shared issuekey convention
+# PLUS the cached PR body/title closing-keyword links.
+extend type Query {
+  issue(key: String!): Issue
+  pullRequest(key: String!): PullRequest
+  # issuesForRepo returns the cached open issues warmed by the openIssues op; a cold
+  # repo returns []. Selecting the join fields here fans out N×(claude+tmux) (bounded
+  # by first:100) — the p95 AC measures the single-issue join, not this list.
+  issuesForRepo(owner: String!, repo: String!): [Issue!]!
+}
+
+type Issue {
+  number: Int!
+  title: String!
+  state: String!
+  url: String!
+  updatedAt: Time
+  labels: [String!]!
+  tmuxPanes: [TmuxPane!]!
+  claudeSessions: [ClaudeSession!]!
+}
+
+type PullRequest {
+  number: Int!
+  title: String!
+  state: String!
+  url: String!
+  updatedAt: Time
+  labels: [String!]!
+  headRefName: String!
+  baseRefName: String
+  tmuxPanes: [TmuxPane!]!
+  claudeSessions: [ClaudeSession!]!
+}
 `, BuiltIn: false},
 	{Name: "../plugins/peer/schema/peer.graphqls", Input: `# peer plugin's GraphQL contribution (extend only — zero core diff). The data
 # fan-out (issues/slots/tmux rows across a box) rides the /plugins/peer/op executor
@@ -1203,6 +1426,28 @@ func (ec *executionContext) childFields_Health(ctx context.Context, field graphq
 	return nil, fmt.Errorf("no field named %q was found under type Health", field.Name)
 }
 
+func (ec *executionContext) childFields_Issue(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "number":
+		return ec.fieldContext_Issue_number(ctx, field)
+	case "title":
+		return ec.fieldContext_Issue_title(ctx, field)
+	case "state":
+		return ec.fieldContext_Issue_state(ctx, field)
+	case "url":
+		return ec.fieldContext_Issue_url(ctx, field)
+	case "updatedAt":
+		return ec.fieldContext_Issue_updatedAt(ctx, field)
+	case "labels":
+		return ec.fieldContext_Issue_labels(ctx, field)
+	case "tmuxPanes":
+		return ec.fieldContext_Issue_tmuxPanes(ctx, field)
+	case "claudeSessions":
+		return ec.fieldContext_Issue_claudeSessions(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type Issue", field.Name)
+}
+
 func (ec *executionContext) childFields_Peer(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "hostId":
@@ -1219,6 +1464,32 @@ func (ec *executionContext) childFields_Peer(ctx context.Context, field graphql.
 		return ec.fieldContext_Peer_mirroredKeys(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type Peer", field.Name)
+}
+
+func (ec *executionContext) childFields_PullRequest(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "number":
+		return ec.fieldContext_PullRequest_number(ctx, field)
+	case "title":
+		return ec.fieldContext_PullRequest_title(ctx, field)
+	case "state":
+		return ec.fieldContext_PullRequest_state(ctx, field)
+	case "url":
+		return ec.fieldContext_PullRequest_url(ctx, field)
+	case "updatedAt":
+		return ec.fieldContext_PullRequest_updatedAt(ctx, field)
+	case "labels":
+		return ec.fieldContext_PullRequest_labels(ctx, field)
+	case "headRefName":
+		return ec.fieldContext_PullRequest_headRefName(ctx, field)
+	case "baseRefName":
+		return ec.fieldContext_PullRequest_baseRefName(ctx, field)
+	case "tmuxPanes":
+		return ec.fieldContext_PullRequest_tmuxPanes(ctx, field)
+	case "claudeSessions":
+		return ec.fieldContext_PullRequest_claudeSessions(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type PullRequest", field.Name)
 }
 
 func (ec *executionContext) childFields_Slot(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -1509,6 +1780,42 @@ func (ec *executionContext) field_Query_freeSlots_args(ctx context.Context, rawA
 	return args, nil
 }
 
+func (ec *executionContext) field_Query_issue_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "key",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNString2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["key"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Query_issuesForRepo_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "owner",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNString2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["owner"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "repo",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNString2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["repo"] = arg1
+	return args, nil
+}
+
 func (ec *executionContext) field_Query_paneForBranch_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
@@ -1520,6 +1827,20 @@ func (ec *executionContext) field_Query_paneForBranch_args(ctx context.Context, 
 		return nil, err
 	}
 	args["branch"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Query_pullRequest_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "key",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNString2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["key"] = arg0
 	return args, nil
 }
 
@@ -2444,6 +2765,208 @@ func (ec *executionContext) fieldContext_Health_state(_ context.Context, field g
 	return graphql.NewScalarFieldContext("Health", field, false, false, errors.New("field of type HealthState does not have child fields"))
 }
 
+func (ec *executionContext) _Issue_number(ctx context.Context, field graphql.CollectedField, obj *github.IssueNode) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Issue_number(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Number, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Issue_number(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("Issue", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _Issue_title(ctx context.Context, field graphql.CollectedField, obj *github.IssueNode) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Issue_title(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Title, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Issue_title(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("Issue", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _Issue_state(ctx context.Context, field graphql.CollectedField, obj *github.IssueNode) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Issue_state(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.State, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Issue_state(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("Issue", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _Issue_url(ctx context.Context, field graphql.CollectedField, obj *github.IssueNode) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Issue_url(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.URL, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Issue_url(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("Issue", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _Issue_updatedAt(ctx context.Context, field graphql.CollectedField, obj *github.IssueNode) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Issue_updatedAt(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.UpdatedAt, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *time.Time) graphql.Marshaler {
+			return ec.marshalOTime2ᚖtimeᚐTime(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_Issue_updatedAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("Issue", field, false, false, errors.New("field of type Time does not have child fields"))
+}
+
+func (ec *executionContext) _Issue_labels(ctx context.Context, field graphql.CollectedField, obj *github.IssueNode) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Issue_labels(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Labels, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []string) graphql.Marshaler {
+			return ec.marshalNString2ᚕstringᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Issue_labels(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("Issue", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _Issue_tmuxPanes(ctx context.Context, field graphql.CollectedField, obj *github.IssueNode) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Issue_tmuxPanes(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.Issue().TmuxPanes(ctx, obj)
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []model.TmuxPane) graphql.Marshaler {
+			return ec.marshalNTmuxPane2ᚕgithubᚗcomᚋdrewdrewthisᚋsupergraphᚋgraphᚋmodelᚐTmuxPaneᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Issue_tmuxPanes(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Issue",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_TmuxPane(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Issue_claudeSessions(ctx context.Context, field graphql.CollectedField, obj *github.IssueNode) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Issue_claudeSessions(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.Issue().ClaudeSessions(ctx, obj)
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []model.ClaudeSession) graphql.Marshaler {
+			return ec.marshalNClaudeSession2ᚕgithubᚗcomᚋdrewdrewthisᚋsupergraphᚋgraphᚋmodelᚐClaudeSessionᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Issue_claudeSessions(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Issue",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_ClaudeSession(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _Peer_hostId(ctx context.Context, field graphql.CollectedField, obj *model.Peer) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -2580,6 +3103,254 @@ func (ec *executionContext) _Peer_mirroredKeys(ctx context.Context, field graphq
 }
 func (ec *executionContext) fieldContext_Peer_mirroredKeys(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("Peer", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _PullRequest_number(ctx context.Context, field graphql.CollectedField, obj *github.PRNode) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_PullRequest_number(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Number, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_PullRequest_number(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("PullRequest", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _PullRequest_title(ctx context.Context, field graphql.CollectedField, obj *github.PRNode) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_PullRequest_title(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Title, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_PullRequest_title(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("PullRequest", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _PullRequest_state(ctx context.Context, field graphql.CollectedField, obj *github.PRNode) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_PullRequest_state(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.State, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_PullRequest_state(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("PullRequest", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _PullRequest_url(ctx context.Context, field graphql.CollectedField, obj *github.PRNode) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_PullRequest_url(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.URL, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_PullRequest_url(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("PullRequest", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _PullRequest_updatedAt(ctx context.Context, field graphql.CollectedField, obj *github.PRNode) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_PullRequest_updatedAt(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.UpdatedAt, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *time.Time) graphql.Marshaler {
+			return ec.marshalOTime2ᚖtimeᚐTime(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_PullRequest_updatedAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("PullRequest", field, false, false, errors.New("field of type Time does not have child fields"))
+}
+
+func (ec *executionContext) _PullRequest_labels(ctx context.Context, field graphql.CollectedField, obj *github.PRNode) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_PullRequest_labels(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Labels, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []string) graphql.Marshaler {
+			return ec.marshalNString2ᚕstringᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_PullRequest_labels(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("PullRequest", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _PullRequest_headRefName(ctx context.Context, field graphql.CollectedField, obj *github.PRNode) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_PullRequest_headRefName(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.HeadRefName, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_PullRequest_headRefName(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("PullRequest", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _PullRequest_baseRefName(ctx context.Context, field graphql.CollectedField, obj *github.PRNode) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_PullRequest_baseRefName(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.BaseRefName, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_PullRequest_baseRefName(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("PullRequest", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _PullRequest_tmuxPanes(ctx context.Context, field graphql.CollectedField, obj *github.PRNode) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_PullRequest_tmuxPanes(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.PullRequest().TmuxPanes(ctx, obj)
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []model.TmuxPane) graphql.Marshaler {
+			return ec.marshalNTmuxPane2ᚕgithubᚗcomᚋdrewdrewthisᚋsupergraphᚋgraphᚋmodelᚐTmuxPaneᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_PullRequest_tmuxPanes(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "PullRequest",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_TmuxPane(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _PullRequest_claudeSessions(ctx context.Context, field graphql.CollectedField, obj *github.PRNode) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_PullRequest_claudeSessions(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.PullRequest().ClaudeSessions(ctx, obj)
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []model.ClaudeSession) graphql.Marshaler {
+			return ec.marshalNClaudeSession2ᚕgithubᚗcomᚋdrewdrewthisᚋsupergraphᚋgraphᚋmodelᚐClaudeSessionᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_PullRequest_claudeSessions(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "PullRequest",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_ClaudeSession(ctx, field)
+		},
+	}
+	return fc, nil
 }
 
 func (ec *executionContext) _Query_health(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
@@ -2763,6 +3534,138 @@ func (ec *executionContext) fieldContext_Query_claudeInstances(ctx context.Conte
 	}()
 	ctx = graphql.WithFieldContext(ctx, fc)
 	if fc.Args, err = ec.field_Query_claudeInstances_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Query_issue(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Query_issue(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Query().Issue(ctx, fc.Args["key"].(string))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *github.IssueNode) graphql.Marshaler {
+			return ec.marshalOIssue2ᚖgithubᚗcomᚋdrewdrewthisᚋsupergraphᚋpluginsᚋgithubᚐIssueNode(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_Query_issue(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_Issue(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Query_issue_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Query_pullRequest(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Query_pullRequest(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Query().PullRequest(ctx, fc.Args["key"].(string))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *github.PRNode) graphql.Marshaler {
+			return ec.marshalOPullRequest2ᚖgithubᚗcomᚋdrewdrewthisᚋsupergraphᚋpluginsᚋgithubᚐPRNode(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_Query_pullRequest(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_PullRequest(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Query_pullRequest_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Query_issuesForRepo(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Query_issuesForRepo(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Query().IssuesForRepo(ctx, fc.Args["owner"].(string), fc.Args["repo"].(string))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []github.IssueNode) graphql.Marshaler {
+			return ec.marshalNIssue2ᚕgithubᚗcomᚋdrewdrewthisᚋsupergraphᚋpluginsᚋgithubᚐIssueNodeᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Query_issuesForRepo(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_Issue(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Query_issuesForRepo_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
 		ec.Error(ctx, err)
 		return fc, err
 	}
@@ -5442,6 +6345,145 @@ func (ec *executionContext) _Health(ctx context.Context, sel ast.SelectionSet, o
 	return out
 }
 
+var issueImplementors = []string{"Issue"}
+
+func (ec *executionContext) _Issue(ctx context.Context, sel ast.SelectionSet, obj *github.IssueNode) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, issueImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("Issue")
+		case "number":
+			out.Values[i] = ec._Issue_number(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "title":
+			out.Values[i] = ec._Issue_title(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "state":
+			out.Values[i] = ec._Issue_state(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "url":
+			out.Values[i] = ec._Issue_url(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "updatedAt":
+			out.Values[i] = ec._Issue_updatedAt(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "labels":
+			out.Values[i] = ec._Issue_labels(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "tmuxPanes":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Issue_tmuxPanes(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.IsDeferred() {
+				deferredFieldSet.AddField(field)
+				fieldIndex := len(deferredFieldSet.Values) - 1
+				deferredFieldSet.Concurrently(fieldIndex, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, deferredFieldSet)
+				})
+
+				for _, deferrable := range field.Deferrables {
+					view, ok := deferLabelToView[deferrable.Label]
+					if !ok {
+						view = deferredFieldSet.NewView()
+						deferLabelToView[deferrable.Label] = view
+					}
+					view.AddIndices(fieldIndex)
+				}
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "claudeSessions":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Issue_claudeSessions(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.IsDeferred() {
+				deferredFieldSet.AddField(field)
+				fieldIndex := len(deferredFieldSet.Values) - 1
+				deferredFieldSet.Concurrently(fieldIndex, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, deferredFieldSet)
+				})
+
+				for _, deferrable := range field.Deferrables {
+					view, ok := deferLabelToView[deferrable.Label]
+					if !ok {
+						view = deferredFieldSet.NewView()
+						deferLabelToView[deferrable.Label] = view
+					}
+					view.AddIndices(fieldIndex)
+				}
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
 var peerImplementors = []string{"Peer"}
 
 func (ec *executionContext) _Peer(ctx context.Context, sel ast.SelectionSet, obj *model.Peer) graphql.Marshaler {
@@ -5484,6 +6526,155 @@ func (ec *executionContext) _Peer(ctx context.Context, sel ast.SelectionSet, obj
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
+var pullRequestImplementors = []string{"PullRequest"}
+
+func (ec *executionContext) _PullRequest(ctx context.Context, sel ast.SelectionSet, obj *github.PRNode) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, pullRequestImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("PullRequest")
+		case "number":
+			out.Values[i] = ec._PullRequest_number(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "title":
+			out.Values[i] = ec._PullRequest_title(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "state":
+			out.Values[i] = ec._PullRequest_state(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "url":
+			out.Values[i] = ec._PullRequest_url(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "updatedAt":
+			out.Values[i] = ec._PullRequest_updatedAt(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "labels":
+			out.Values[i] = ec._PullRequest_labels(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "headRefName":
+			out.Values[i] = ec._PullRequest_headRefName(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "baseRefName":
+			out.Values[i] = ec._PullRequest_baseRefName(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "tmuxPanes":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._PullRequest_tmuxPanes(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.IsDeferred() {
+				deferredFieldSet.AddField(field)
+				fieldIndex := len(deferredFieldSet.Values) - 1
+				deferredFieldSet.Concurrently(fieldIndex, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, deferredFieldSet)
+				})
+
+				for _, deferrable := range field.Deferrables {
+					view, ok := deferLabelToView[deferrable.Label]
+					if !ok {
+						view = deferredFieldSet.NewView()
+						deferLabelToView[deferrable.Label] = view
+					}
+					view.AddIndices(fieldIndex)
+				}
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "claudeSessions":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._PullRequest_claudeSessions(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.IsDeferred() {
+				deferredFieldSet.AddField(field)
+				fieldIndex := len(deferredFieldSet.Values) - 1
+				deferredFieldSet.Concurrently(fieldIndex, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, deferredFieldSet)
+				})
+
+				for _, deferrable := range field.Deferrables {
+					view, ok := deferLabelToView[deferrable.Label]
+					if !ok {
+						view = deferredFieldSet.NewView()
+						deferLabelToView[deferrable.Label] = view
+					}
+					view.AddIndices(fieldIndex)
+				}
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -5623,6 +6814,72 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 					}
 				}()
 				res = ec._Query_claudeInstances(ctx, field)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "issue":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_issue(ctx, field)
+				if res == graphql.RequiredNull {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "pullRequest":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_pullRequest(ctx, field)
+				if res == graphql.RequiredNull {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "issuesForRepo":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_issuesForRepo(ctx, field)
 				if res == graphql.Null {
 					atomic.AddUint32(&fs.Invalids, 1)
 				}
@@ -6712,6 +7969,26 @@ func (ec *executionContext) marshalNInt2int(ctx context.Context, sel ast.Selecti
 	return res
 }
 
+func (ec *executionContext) marshalNIssue2githubᚗcomᚋdrewdrewthisᚋsupergraphᚋpluginsᚋgithubᚐIssueNode(ctx context.Context, sel ast.SelectionSet, v github.IssueNode) graphql.Marshaler {
+	return ec._Issue(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNIssue2ᚕgithubᚗcomᚋdrewdrewthisᚋsupergraphᚋpluginsᚋgithubᚐIssueNodeᚄ(ctx context.Context, sel ast.SelectionSet, v []github.IssueNode) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNIssue2githubᚗcomᚋdrewdrewthisᚋsupergraphᚋpluginsᚋgithubᚐIssueNode(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
 func (ec *executionContext) marshalNPeer2githubᚗcomᚋdrewdrewthisᚋsupergraphᚋgraphᚋmodelᚐPeer(ctx context.Context, sel ast.SelectionSet, v model.Peer) graphql.Marshaler {
 	return ec._Peer(ctx, sel, &v)
 }
@@ -6766,6 +8043,35 @@ func (ec *executionContext) marshalNString2string(ctx context.Context, sel ast.S
 		}
 	}
 	return res
+}
+
+func (ec *executionContext) unmarshalNString2ᚕstringᚄ(ctx context.Context, v any) ([]string, error) {
+	vSlice := graphql.CoerceList(v)
+	var err error
+	res := make([]string, len(vSlice))
+	for i := range vSlice {
+		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithIndex(i))
+		res[i], err = ec.unmarshalNString2string(ctx, vSlice[i])
+		if err != nil {
+			return nil, err
+		}
+	}
+	return res, nil
+}
+
+func (ec *executionContext) marshalNString2ᚕstringᚄ(ctx context.Context, sel ast.SelectionSet, v []string) graphql.Marshaler {
+	ret := make(graphql.Array, len(v))
+	for i := range v {
+		ret[i] = ec.marshalNString2string(ctx, sel, v[i])
+	}
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
 }
 
 func (ec *executionContext) marshalNTemplateEvent2githubᚗcomᚋdrewdrewthisᚋsupergraphᚋgraphᚋmodelᚐTemplateEvent(ctx context.Context, sel ast.SelectionSet, v model.TemplateEvent) graphql.Marshaler {
@@ -7025,6 +8331,20 @@ func (ec *executionContext) marshalOInt2ᚖint(ctx context.Context, sel ast.Sele
 	_ = ctx
 	res := graphql.MarshalInt(*v)
 	return res
+}
+
+func (ec *executionContext) marshalOIssue2ᚖgithubᚗcomᚋdrewdrewthisᚋsupergraphᚋpluginsᚋgithubᚐIssueNode(ctx context.Context, sel ast.SelectionSet, v *github.IssueNode) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._Issue(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalOPullRequest2ᚖgithubᚗcomᚋdrewdrewthisᚋsupergraphᚋpluginsᚋgithubᚐPRNode(ctx context.Context, sel ast.SelectionSet, v *github.PRNode) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._PullRequest(ctx, sel, v)
 }
 
 func (ec *executionContext) unmarshalOString2ᚖstring(ctx context.Context, v any) (*string, error) {
