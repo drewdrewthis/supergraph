@@ -14,6 +14,19 @@ type GithubEvent struct {
 	Payload string    `json:"payload"`
 }
 
+type Peer struct {
+	HostID     string     `json:"hostId"`
+	URL        string     `json:"url"`
+	LastSeenAt *time.Time `json:"lastSeenAt,omitempty"`
+	StaleSince *time.Time `json:"staleSince,omitempty"`
+	// The remote's own worst plugin lag (seconds), mirrored from its pluginLag stream —
+	// NOT the health of this peer link. A remote plugin stuck "starting" reports a large
+	// value here while staleSince stays null (the link itself is up). staleSince, driven
+	// by a WS drop / 401, is the signal for "this peer is unreachable".
+	RemoteMaxPluginLagSeconds float64 `json:"remoteMaxPluginLagSeconds"`
+	MirroredKeys              int     `json:"mirroredKeys"`
+}
+
 type Query struct {
 }
 

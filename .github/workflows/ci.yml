@@ -64,11 +64,22 @@ jobs:
           git fetch origin main
           git diff --quiet origin/main -- core/ server/
 
+      - name: loc-peer (AC-PEER-LOC, plugins/peer/** prod code within budget)
+        run: make loc-peer
+
+      - name: peer zerocore (AC-PEER-ZEROCORE, the peer plugin touches neither core/ nor server/)
+        run: |
+          out=$(git diff --stat origin/main -- core server)
+          if [ -n "$out" ]; then echo "core/server changed:"; echo "$out"; exit 1; fi
+
       - name: godog feature suite (@service excluded by default)
         run: go test ./features/ -run TestFeatures -count=1
 
       - name: github plugin feature suite (@github, @local only)
         run: make features-github
+
+      - name: peer plugin feature suite (@peer, @local only)
+        run: make features-peer
 
       - name: features-red (AC-CORE-9 runner fails red on an unmet scenario)
         run: make features-red
