@@ -3,9 +3,12 @@
 // /plugins/claude/hook (sub-ms live state, the only source of TMUX_PANE and
 // permission-input state) and a poll-scan TAIL of ~/.claude/projects/*/<sid>.jsonl
 // (the correctness floor that backfills pre-install sessions and enriches with
-// gitBranch/model/PR the hook lacks). Only structural METADATA is ever stored or
-// emitted — prompt, response, and tool_input bodies never cross the mesh. All state
-// lives in the plugin's own SQLite db; core is untouched.
+// gitBranch/model/PR the hook lacks). Only structural METADATA is ever STORED or
+// EMITTED — prompt, response, and tool_input bodies are dropped at the decode boundary
+// (redact.go whitelist), so nothing that persists or leaves the box carries them. A raw
+// hook body does transit the local forwarder's POST request body before that decode;
+// note too that a stored `cwd` is a filesystem path and can embed the OS username. All
+// state lives in the plugin's own SQLite db; core is untouched.
 package claude
 
 import (
@@ -32,12 +35,13 @@ var live atomic.Pointer[Plugin]
 // Plugin is the claude plugin: one instance serves the hook HTTP route and the tail
 // loop, so it holds every shared dependency (store, captured emit, injected clock/fs).
 type Plugin struct {
-	hostID       string
-	projectsDir  string
-	settingsPath string
-	scanInterval time.Duration
-	pidLiveness  bool
-	panicInject  bool
+	hostID        string
+	projectsDir   string
+	settingsPath  string
+	scanInterval  time.Duration
+	retentionDays int
+	pidLiveness   bool
+	panicInject   bool
 
 	store *store
 	alive func(pid int) bool
@@ -51,18 +55,20 @@ type Plugin struct {
 func New(cfg core.PluginConfig) (core.Plugin, error) {
 	home, _ := os.UserHomeDir()
 	p := &Plugin{
-		hostID:       cfg.HostID,
-		projectsDir:  filepath.Join(home, ".claude", "projects"),
-		settingsPath: filepath.Join(home, ".claude", "settings.json"),
-		scanInterval: 5 * time.Second,
-		pidLiveness:  true,
-		alive:        realAlive,
-		now:          func() time.Time { return time.Now().UTC() },
+		hostID:        cfg.HostID,
+		projectsDir:   filepath.Join(home, ".claude", "projects"),
+		settingsPath:  filepath.Join(home, ".claude", "settings.json"),
+		scanInterval:  5 * time.Second,
+		retentionDays: 30,
+		pidLiveness:   true,
+		alive:         realAlive,
+		now:           func() time.Time { return time.Now().UTC() },
 	}
 	raw := cfg.Raw
 	p.projectsDir = strOr(raw, "projectsDir", p.projectsDir)
 	p.settingsPath = strOr(raw, "settingsPath", p.settingsPath)
 	p.pidLiveness = boolOr(raw, "pidLiveness", p.pidLiveness)
+	p.retentionDays = intOr(raw, "retentionDays", p.retentionDays)
 	if n := intOr(raw, "scanIntervalSeconds", 0); n > 0 {
 		p.scanInterval = time.Duration(n) * time.Second
 	}
@@ -173,6 +179,9 @@ func QueryInstances(ctx context.Context, host *string) []SessionRow {
 }
 
 // --- small config/format helpers (toml decodes to string/int64/float64/bool) ---
+//
+// TODO: strOr/boolOr/intOr are copied from plugins/github/github.go (and readErrStatus
+// in hook.go); consolidate into a shared plugins/internal/pluginconfig on a follow-up.
 
 func strOr(raw map[string]any, k, def string) string {
 	if raw != nil {

@@ -48,7 +48,7 @@ sub-second live state, a **pull** channel for correctness (backfill + enrichment
 | Option | Latency | Coverage | TMUX_PANE | Input/permission state | Enrichment (branch, PR, model) | Install cost |
 |---|---|---|---|---|---|---|
 | **(a) hooks → `/plugins/claude/hook`** | sub-ms (sync POST) | only sessions started **after** the hook is installed | **yes** (env at hook time) | **yes** (`Notification`) | no (hook payload lacks them) | must register hook in `settings.json` |
-| **(b) fsnotify transcript tail** | file-flush lag (~100ms–1s) | **all** sessions incl. pre-install + subagents (`isSidechain`) | **no** | **no** (not in transcript) | **yes** (`gitBranch`,`pr-link`,`model`,`agent-name`) | none |
+| **(b) poll-scan transcript tail** | scan-interval lag (default 5s) | **all** sessions incl. pre-install + subagents (`isSidechain`) | **no** | **no** (not in transcript) | **yes** (`gitBranch`,`pr-link`,`model`,`agent-name`) | none |
 | **(c) both** ✅ | sub-ms live, tail heals | all | yes (hook) | yes (hook) | yes (tail) | hook optional — tail is the correctness floor |
 
 **Recommendation: (c).** Neither channel alone is sufficient and their gaps are complementary:
@@ -130,7 +130,7 @@ bodies would **replicate potentially sensitive session content across every box*
 
 | Field | Stored? | Why |
 |---|---|---|
-| `sessionId`, `hostId`, `cwd`, `gitBranch`, `issueNumber` | **stored** | structural; join keys; `cwd` is a path, not content |
+| `sessionId`, `hostId`, `cwd`, `gitBranch`, `issueNumber` | **stored** | structural; join keys; `cwd` is a path, not content — **but a path can embed the OS username** (`/home/<user>/…`, `/Users/<user>/…`), which is stored and emitted, so it is not fully anonymous |
 | `model`, `state`, `lastTool` (name), `toolCalls` (count), `pane`, `pid` | **stored** | operational metadata; `lastTool` is the tool **name** only |
 | `startedAt`, `lastEventAt`, `staleSince`, `prNumber`, `prUrl` | **stored** | timing; PR fields are public |
 | **prompt text** (`last_prompt`/`first_prompt`) | **redacted** | user content; never crosses the mesh |
@@ -201,41 +201,59 @@ join (core, over github+claude, with the absent-source `staleSince` marker) stay
 **Deviations from the first sketch** (kept minimal, both to serve the sharpened ACs and reuse the proven
 template/github patterns): the subscription returns a raw `ClaudeEvent` envelope (not `ClaudeSession`)
 so the privacy AC can inspect the emitted payload; `claudeInstances` and the `issueNumber` filter are
-added for the PANE and S4-half ACs; `startedAt` is surfaced.
+added for the PANE and S4-half ACs; `startedAt` is surfaced. The query resolvers reach the running
+plugin through a package-level `live atomic.Pointer[Plugin]` singleton (`claude.go`) that `Migrate`
+publishes and the resolvers `Load` — the same zero-core-edit seam: it lets `graph/` read session state
+through the plugin's package funcs **without** a new core-injected `Resolver` field, so no file under
+`core/` changes. This is the one narration of the seam; the resolver/schema comments only point back here.
+
+## Client CLI (`supergraph query --op --plugin claude`)
+
+The `query` command takes `--plugin <name>` (default `github`). Named ops load from
+`./plugins/<plugin>/queries/NAME.graphql`. github posts `{op,variables}` to its own
+`/plugins/github/graphql` op route (which keys each returned node); claude exposes **no**
+op route, so `--plugin claude` **falls back to posting the loaded query TEXT** as
+`{query,variables}` to core `/graphql` — a plain read, no plugin LOC and no keying, which
+is all a session read needs. Shipped ops: `sessionsForIssue.graphql` (`$issueNumber`, the
+S4 claude half) and `instances.graphql` (`$hostId`, the tmux-pinned instances).
 
 ## Config keys `[plugins.claude]`
 
 `hostId` (else hostname), `projectsDir` (default `~/.claude/projects`), `pidLiveness` (bool, default
-true), `scanIntervalSeconds` (tail poll cadence, default 5), `settingsPath` (default
+true), `scanIntervalSeconds` (tail poll cadence, default 5), `retentionDays` (prune sessions/folds whose
+last event is older than this on each tail tick, default 30; 0 disables), `settingsPath` (default
 `~/.claude/settings.json`, test override), `projectsDir` override drives `@local` tests. Stale-lag is
 core's global `lagThresholdSeconds` (the plugin does not duplicate it); the plugin's own liveness signal
 is the pid-liveness sweep. Hook install is a `supergraph install --install-hook` CLI flag (owner
 decision C1, default off), **not** a plugin config key — the plugin never writes settings itself.
 
-## LOC budget (prod, cap **700**; tests excluded)
+## LOC budget (prod, guard **790**; tests excluded)
 
-Table shows target **Actual** LOC (EDR strip formula: non-comment, non-blank). CLI hook-install delta
-lives in `cmd/supergraph/` (~50) and is counted separately, like github's.
+Table shows target vs **Actual** LOC (EDR strip formula: non-comment, non-blank). CLI hook-install delta
+lives in `cmd/supergraph/` and is counted separately, like github's. The **Actual** column is measured
+after the review-findings batch (M1/M2/S1–S7) landed; the Δ column attributes the growth over the first
+measure (677).
 
-| File (`plugins/claude/`) | Target | **Actual** | Responsibility |
-|---|---:|---:|---|
-| `claude.go` | 110 | **153** | wiring: `Register`/`New`/`Name`/`Migrate`/`Start`/`HTTPRoutes`/`CursorReporter`/config + query funcs |
-| `keys.go` | 70 | **29** | key grammar (`session:`/`instance:`) + `issueNumber` from branch + PR# from URL |
-| `store.go` | 150 | **224** | SQLite `claude_sessions`+`claude_folds`: fold/dedup upsert, enrichment COALESCE, get/list/instances, stale-scan |
-| `hook.go` | 110 | **62** | `HTTPRoutes` `/hook`: parse+validate payload → `reducer` → emit; pane/input path |
-| `reducer.go` | 100 | **34** | ported state machine (Start/Prompt/Pre/Post/Notification/Stop/End) shared by hook + tail |
-| `tail.go` | 120 | **99** | poll-scan `projectsDir` (ticker) + JSONL parse + byte-offset cursor + backfill + enrich + pid-liveness sweep |
-| `redact.go` | 30 | **76** | whitelist projection: hook + transcript record → body-free foldInput/enrichment |
-| **Total** | **690** | **677** | cap **700** (measured `make loc-claude`); CLI delta counted separately |
+| File (`plugins/claude/`) | Target | **Actual** | Δ | Responsibility (and what the batch added) |
+|---|---:|---:|---:|---|
+| `claude.go` | 110 | **156** | +3 | wiring + query funcs; +`retentionDays` config, softened privacy doc, helper-dedup TODO (S2/S4/S7) |
+| `keys.go` | 70 | **29** | 0 | key grammar (`session:`/`instance:`) + `issueNumber` from branch + PR# from URL |
+| `store.go` | 150 | **255** | +31 | fold/dedup/enrich/get/list/instances/stale-scan; +`prune` retention sweep (S2) |
+| `hook.go` | 110 | **67** | +5 | `/hook` parse+validate→reducer→emit; +`validSessionID` format gate (S3) |
+| `reducer.go` | 100 | **34** | 0 | ported state machine shared by hook + tail |
+| `tail.go` | 120 | **128** | +29 | poll-scan + JSONL parse + offset cursor + backfill/enrich + stale sweep; +capped `readLine` + retention call (S1/S2) |
+| `redact.go` | 30 | **76** | 0 | whitelist projection: hook + transcript record → body-free foldInput/enrichment (comment softened, S4) |
+| **Total** | **690** | **745** | +68 | guard **790** = measured 745 + 5% rounded up to a multiple of 10 (owner rule) |
 
-CLI delta (`cmd/supergraph/install.go`, counted separately like github's): **150** actual — it holds the
-opt-in `install` (print-block + idempotent `--install-hook` merge) **and** the `claude-hook` stdin→POST
-forwarder, more than the ~50 first sketched because both the merge and the forwarder live there.
+CLI delta (`cmd/supergraph/install.go`, counted separately like github's): **183** actual (was 150) — the
+opt-in `install` (print-block + idempotent, now **atomic** `--install-hook` merge that refuses to
+overwrite an unparseable file, M1) **and** the `claude-hook` stdin→POST forwarder (deterministic token
+pick, S6). The `query --op --plugin` client change lives in `cmd/supergraph/query.go`, also separate.
 
 - **AC-CLAUDE-LOC** guards it: a CI step counts non-comment, non-blank prod lines under
-  `plugins/claude` excluding `*_test.go` and fails > **720** (same `sed`/`wc` formula as `make
-  loc-github`). Measured total **677**; the guard is set to measured + 5% rounded up to a multiple of 10
-  (**720**) per the owner rule — the 700 in the table above is the original estimate, not the guard.
+  `plugins/claude` excluding `*_test.go` and fails > **790** (same `sed`/`wc` formula as `make
+  loc-github`). Measured total **745**; the guard is measured + 5% rounded up to a multiple of 10
+  (**790**) per the owner rule — the Target column is the original estimate, not the guard.
 
 ## Failure modes
 
@@ -291,7 +309,7 @@ double-count) · `CURSOR` (the per-transcript byte offset persists across restar
 2. `plugins/claude/reducer.go` — port `fold-state.sh`'s state machine to Go (pure fn: prev+event→next).
 3. `plugins/claude/redact.go` — whitelist projection (the privacy guard).
 4. `plugins/claude/hook.go` — `HTTPRoutes` `/hook`: payload → reducer → emit; pane/input path.
-5. `plugins/claude/tail.go` — fsnotify watcher + JSONL parse + offset cursor + backfill + enrich.
+5. `plugins/claude/tail.go` — poll-scan ticker + JSONL parse + offset cursor + backfill + enrich.
 6. `plugins/claude/claude.go` — wiring (`Register`/`Start`/`HTTPRoutes`/`CursorReporter`); blank import
    in `graph/plugins_import.go`; `plugins/claude/schema/claude.graphqls`.
 7. `cmd/supergraph/` — `claude-hook` stdin→POST forwarder + idempotent `settings.json` merge in `install`.

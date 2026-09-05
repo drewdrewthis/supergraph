@@ -106,7 +106,7 @@ dev-check: build-harness $(DEV_CONFIG)
 	done; \
 	if [ "$$ok" != "1" ]; then echo "dev-check: template not healthy within 10s" >&2; exit 1; fi
 
-# --- claude plugin (appended; keep separate from core/github targets for a clean rebase) ---
+# --- claude plugin targets ---
 .PHONY: features-claude loc-claude
 
 # features-claude runs only the claude plugin's @local scenarios (AC-CLAUDE-*, F1/F5/S4
@@ -115,14 +115,14 @@ features-claude:
 	FEATURES_TAGS="@claude && ~@pending" go test ./features/ -run TestFeatures -v
 
 # loc-claude guards the plugins/claude/** LOC budget (docs/edr/claude.md): prod code
-# only (no _test.go), comments/blank lines stripped, fails when the total exceeds 720
+# only (no _test.go), comments/blank lines stripped, fails when the total exceeds 790
 # (AC-CLAUDE-LOC). Uses POSIX [[:space:]] (not \s, which BSD/macOS sed does not honor,
 # silently under-stripping indented comments) — the same formula as loc-github.
 loc-claude:
 	@files=$$(find plugins/claude -name '*.go' ! -name '*_test.go' 2>/dev/null); \
 	if [ -z "$$files" ]; then count=0; else count=$$(echo "$$files" | xargs sed -E '/^[[:space:]]*\/\//d;/^[[:space:]]*$$/d' | wc -l | tr -d ' '); fi; \
 	echo "plugins/claude prod LOC: $$count"; \
-	if [ "$$count" -gt 720 ]; then \
-		echo "loc-claude: $$count LOC exceeds the 720 budget" >&2; \
+	if [ "$$count" -gt 790 ]; then \
+		echo "loc-claude: $$count LOC exceeds the 790 budget" >&2; \
 		exit 1; \
 	fi

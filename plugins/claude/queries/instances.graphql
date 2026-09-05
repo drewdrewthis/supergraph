@@ -1,0 +1,16 @@
+# Live tmux-pinned instances, optionally by host. Posted as query text to core /graphql
+# by `supergraph query --op instances --plugin claude [--var hostId=box]`.
+query Instances($hostId: String) {
+  claudeInstances(hostId: $hostId) {
+    hostId
+    pane
+    pid
+    staleSince
+    session {
+      sessionId
+      state
+      issueNumber
+      model
+    }
+  }
+}

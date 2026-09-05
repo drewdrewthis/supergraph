@@ -232,6 +232,42 @@ func (s *store) queryRows(ctx context.Context, q string, args ...any) ([]Session
 	return out, rows.Err()
 }
 
+// prune deletes sessions whose last event is older than cutoff and their folds, so an
+// unbounded fleet history does not grow the db forever (config retentionDays). It
+// parses each stored timestamp in Go rather than comparing RFC3339Nano strings in SQL,
+// whose trimmed fractional seconds make lexical order unreliable.
+func (s *store) prune(ctx context.Context, cutoff time.Time) error {
+	rows, err := s.db().QueryContext(ctx, `SELECT sid,last_event_at FROM claude_sessions`)
+	if err != nil {
+		return fmt.Errorf("claude: prune scan: %w", err)
+	}
+	var old []string
+	for rows.Next() {
+		var sid, last string
+		if err := rows.Scan(&sid, &last); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		if t, err := time.Parse(rfc, last); err == nil && t.Before(cutoff) {
+			old = append(old, sid)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	_ = rows.Close()
+	for _, sid := range old {
+		if _, err := s.db().ExecContext(ctx, `DELETE FROM claude_sessions WHERE sid=?`, sid); err != nil {
+			return fmt.Errorf("claude: prune session %s: %w", sid, err)
+		}
+		if _, err := s.db().ExecContext(ctx, `DELETE FROM claude_folds WHERE sid=?`, sid); err != nil {
+			return fmt.Errorf("claude: prune folds %s: %w", sid, err)
+		}
+	}
+	return nil
+}
+
 // staleScan marks every live-pid session whose process is gone as stale (without a
 // SessionEnd), returning the newly-stale sids so the caller can emit ended envelopes.
 // It is the negative-control liveness path (AC-CLAUDE-STALE).

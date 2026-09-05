@@ -36,6 +36,22 @@ In a second terminal:
 supergraph query '{ health { plugin state } }'
 ```
 
+Run a named operation from a plugin's `queries/` dir with `--op` (and `--plugin` to
+pick the plugin, default `github`):
+
+```
+# github ops post to the github plugin's op route (cached, node-keyed):
+supergraph query --op openPRs --plugin github
+
+# claude ops post their query text to core /graphql (a plain read):
+supergraph query --op sessionsForIssue --plugin claude --var issueNumber=1
+supergraph query --op instances --plugin claude
+```
+
+`--op NAME` loads `./plugins/<plugin>/queries/NAME.graphql` (override the dir with
+`--queries-dir`). Only plugins that expose an op route (currently `github`) key the
+returned nodes; every other plugin's op is run as a normal query against core.
+
 Read health over HTTP:
 
 ```

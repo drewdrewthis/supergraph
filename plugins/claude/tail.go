@@ -6,12 +6,18 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
 	"syscall"
 	"time"
 )
+
+// maxTranscriptLine caps a single JSONL record. A well-formed transcript line is a few
+// KiB; a line larger than this (a corrupt/never-terminated write) is skipped, not
+// buffered — bounding tail memory regardless of what lands in projectsDir.
+const maxTranscriptLine = 1 << 20
 
 // tailKey names one transcript's byte-offset cursor in core's cursors table, so a
 // scan resumes where the last left off instead of re-reading the file
@@ -44,6 +50,9 @@ func (p *Plugin) scanOnce(ctx context.Context) {
 		p.scanFile(ctx, f)
 	}
 	p.sweep(ctx)
+	if p.retentionDays > 0 {
+		_ = p.store.prune(ctx, p.now().Add(-time.Duration(p.retentionDays)*24*time.Hour))
+	}
 }
 
 // scanFile reads the bytes appended since this transcript's cursor, folding each
@@ -66,15 +75,46 @@ func (p *Plugin) scanFile(ctx context.Context, path string) {
 	rd := bufio.NewReader(fh)
 	newOff := off
 	for {
-		line, err := rd.ReadBytes('\n')
-		if err != nil {
+		line, oversized, consumed, complete := readLine(rd, maxTranscriptLine)
+		if !complete {
 			break // EOF with no trailing newline: a partial line, do not consume it
 		}
-		newOff += int64(len(line))
+		newOff += consumed
+		if oversized {
+			// Cursor still advances past it, so it is never re-read; we just skip the fold.
+			log.Printf("claude: skipping oversized transcript line (> %d bytes) in %s", maxTranscriptLine, path)
+			continue
+		}
 		p.foldLine(ctx, line)
 	}
 	if newOff != off {
 		_ = p.store.setCursor(ctx, tailKey(path), strconv.FormatInt(newOff, 10))
+	}
+}
+
+// readLine reads one '\n'-terminated line, buffering at most cap bytes. It returns the
+// line (nil when oversized), whether it exceeded cap, how many bytes were consumed from
+// rd (so the cursor advances even past a skipped line), and whether a full line was
+// read. On EOF before any '\n' it reports complete=false and consumed=0, leaving a
+// mid-write partial line unconsumed to be folded whole on a later scan.
+func readLine(rd *bufio.Reader, cap int) (line []byte, oversized bool, consumed int64, complete bool) {
+	var buf []byte
+	for {
+		b, err := rd.ReadByte()
+		if err != nil {
+			return nil, false, 0, false
+		}
+		consumed++
+		if !oversized {
+			if len(buf) >= cap {
+				oversized, buf = true, nil // stop buffering; keep consuming to the newline
+			} else {
+				buf = append(buf, b)
+			}
+		}
+		if b == '\n' {
+			return buf, oversized, consumed, true
+		}
 	}
 }
 

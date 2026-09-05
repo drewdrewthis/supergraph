@@ -6,8 +6,10 @@ import "encoding/json"
 // content"). Every path that turns an untrusted hook payload or transcript record
 // into stored/emitted state goes through the projections here, and they copy ONLY an
 // explicit list of structural fields. prompt, assistant response text, tool_input,
-// and the Notification message body are never assigned to a stored/emitted field —
-// so a new field added to a future payload is dropped by default, not leaked.
+// and the Notification message body are never assigned to a STORED or EMITTED field —
+// so a new field added to a future payload is dropped by default, not leaked. (Those
+// bodies still transit the local forwarder's request body upstream of this decode; the
+// guarantee here is that nothing which PERSISTS or leaves the box carries them.)
 
 // foldInput is the body-free projection of one raw event: the classified transition
 // plus structural metadata. It carries a tool NAME but never a tool_input body, and a

@@ -1,8 +1,10 @@
 package claude
 
 import (
+	"bufio"
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -116,6 +118,70 @@ func TestApplyEnrichmentCoalesce(t *testing.T) {
 	r, _ := st.get(ctx, "S1")
 	if r.State != string(stateWorking) || r.GitBranch != "plugin/claude" || r.Model != "m" || r.PrNumber != 8 {
 		t.Fatalf("row = %+v; want working + enriched fields preserved", r)
+	}
+}
+
+func TestValidSessionID(t *testing.T) {
+	for _, s := range []string{"abc", "a-b_c.d", "0f8c46811-bf1a", strings.Repeat("a", 128)} {
+		if !validSessionID(s) {
+			t.Errorf("validSessionID(%q) = false, want true", s)
+		}
+	}
+	for _, s := range []string{"", "has space", "semi;colon", "slash/x", "at@host", strings.Repeat("a", 129)} {
+		if validSessionID(s) {
+			t.Errorf("validSessionID(%q) = true, want false", s)
+		}
+	}
+}
+
+func TestReadLineCapsOversized(t *testing.T) {
+	big := strings.Repeat("x", 2000)
+	rd := bufio.NewReader(strings.NewReader("short\n" + big + "\nafter\n"))
+
+	line, oversized, consumed, complete := readLine(rd, 100)
+	if !complete || oversized || string(line) != "short\n" || consumed != 6 {
+		t.Fatalf("line1 = %q ov=%v c=%d ok=%v; want short\\n,false,6,true", line, oversized, consumed, complete)
+	}
+	line, oversized, consumed, complete = readLine(rd, 100)
+	if !complete || !oversized || line != nil || consumed != int64(len(big)+1) {
+		t.Fatalf("line2 = %q ov=%v c=%d ok=%v; want nil,true,%d,true", line, oversized, consumed, complete, len(big)+1)
+	}
+	line, oversized, _, complete = readLine(rd, 100)
+	if !complete || oversized || string(line) != "after\n" {
+		t.Fatalf("line3 = %q ov=%v ok=%v; want after\\n,false,true", line, oversized, complete)
+	}
+	// A trailing line with no newline is a partial write: consumed 0, not complete.
+	rd2 := bufio.NewReader(strings.NewReader("partial-no-newline"))
+	if _, _, c, ok := readLine(rd2, 100); ok || c != 0 {
+		t.Fatalf("partial line: consumed=%d complete=%v; want 0,false", c, ok)
+	}
+}
+
+func TestPruneRemovesOldSessionsAndFolds(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t)
+	old := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	recent := time.Date(2026, 9, 5, 0, 0, 0, 0, time.UTC)
+	if _, err := st.applyFold(ctx, foldInput{sid: "old", event: "SessionStart", ts: "T1"}, "h", old); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.applyFold(ctx, foldInput{sid: "new", event: "SessionStart", ts: "T2"}, "h", recent); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.prune(ctx, time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	if r, _ := st.get(ctx, "old"); r != nil {
+		t.Fatal("session older than cutoff should be pruned")
+	}
+	if r, _ := st.get(ctx, "new"); r == nil {
+		t.Fatal("session newer than cutoff must survive")
+	}
+	// The pruned session's fold row is gone too, so a later replay is not deduped away.
+	var folds int
+	_ = st.db().QueryRowContext(ctx, `SELECT COUNT(*) FROM claude_folds WHERE sid='old'`).Scan(&folds)
+	if folds != 0 {
+		t.Fatalf("pruned session folds = %d, want 0", folds)
 	}
 }
 

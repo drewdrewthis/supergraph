@@ -48,3 +48,34 @@ func TestHealthQueryResolvesInjectedStatuses(t *testing.T) {
 		t.Errorf("beta state = %q, want %q", got["beta"], "stale")
 	}
 }
+
+// TestClaudeSessionUpdatedHostFilter proves the hostId arg filters the subscription by
+// the envelope key's "@<host>" suffix (M2): only boxA's session + instance envelopes
+// pass when hostId=boxA; boxB is dropped.
+func TestClaudeSessionUpdatedHostFilter(t *testing.T) {
+	ch := make(chan core.Envelope, 3)
+	ch <- core.Envelope{Source: "claude", Type: "claude.session.updated", Key: "session:s1@boxA"}
+	ch <- core.Envelope{Source: "claude", Type: "claude.session.updated", Key: "session:s2@boxB"}
+	ch <- core.Envelope{Source: "claude", Type: "claude.instance.updated", Key: "instance:%23@boxA"}
+	close(ch)
+
+	res := &Resolver{Events: func(_ context.Context, source string) <-chan core.Envelope {
+		if source != "claude" {
+			t.Fatalf("Events source = %q, want claude", source)
+		}
+		return ch
+	}}
+	host := "boxA"
+	out, err := (&subscriptionResolver{res}).ClaudeSessionUpdated(context.Background(), &host)
+	if err != nil {
+		t.Fatalf("resolver err: %v", err)
+	}
+	var keys []string
+	for e := range out {
+		keys = append(keys, e.Key)
+	}
+	want := []string{"session:s1@boxA", "instance:%23@boxA"}
+	if len(keys) != len(want) || keys[0] != want[0] || keys[1] != want[1] {
+		t.Fatalf("filtered keys = %v, want %v (boxB dropped)", keys, want)
+	}
+}

@@ -19,20 +19,23 @@ import (
 // present, so the command works out of the box without a full config file.
 const defaultQueryEndpoint = "http://127.0.0.1:7788/graphql"
 
-// defaultQueriesDir is where `query --op` looks for plugins/github/queries/NAME.graphql
-// relative to the current working directory, unless --queries-dir overrides it.
-const defaultQueriesDir = "./plugins/github/queries"
+// pluginsWithOpRoute lists plugins that serve a POST {op,variables} route which keys
+// each returned node under its own cache key (github's caching path). Any other
+// --plugin has no such route, so `--op` falls back to posting the loaded query TEXT to
+// core's /graphql — a plain read, no keying.
+var pluginsWithOpRoute = map[string]bool{"github": true}
 
 func queryCmd() *cobra.Command {
-	var endpoint, op, queriesDir string
+	var endpoint, op, queriesDir, plugin string
 	var varArgs []string
 	cmd := &cobra.Command{
-		Use:   "query ['<graphql>'] [--op NAME [--var k=v ...]]",
+		Use:   "query ['<graphql>'] [--op NAME [--plugin P] [--var k=v ...]]",
 		Short: "Run a GraphQL query and print JSON: a raw query string, or a named plugin op",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			if op != "" {
-				return runNamedQuery(githubEndpoint(endpoint, configPath), op, varArgs, queriesDir)
+				url, opRoute := pluginEndpoint(plugin, endpoint, configPath)
+				return runNamedQuery(url, op, varArgs, queriesDirFor(queriesDir, plugin), opRoute)
 			}
 			if len(args) != 1 {
 				return fmt.Errorf("query: pass a GraphQL string, or --op NAME")
@@ -43,12 +46,34 @@ func queryCmd() *cobra.Command {
 	cmd.Flags().StringVar(&endpoint, "endpoint", defaultQueryEndpoint,
 		"GraphQL endpoint URL (overrides the config's listen address)")
 	cmd.Flags().StringVar(&op, "op", "",
-		"named operation to load from plugins/github/queries/NAME.graphql and run against the github plugin")
+		"named operation to load from plugins/<plugin>/queries/NAME.graphql and run")
+	cmd.Flags().StringVar(&plugin, "plugin", "github",
+		"plugin that owns the --op query dir and route (github uses its op route; others post the query to core /graphql)")
 	cmd.Flags().StringArrayVar(&varArgs, "var", nil,
 		"operation variable as key=value; value is parsed as JSON when it parses, else kept as a string (repeatable)")
-	cmd.Flags().StringVar(&queriesDir, "queries-dir", defaultQueriesDir,
-		"directory to search for named .graphql operation files")
+	cmd.Flags().StringVar(&queriesDir, "queries-dir", "",
+		"directory to search for named .graphql operation files (default ./plugins/<plugin>/queries)")
 	return cmd
+}
+
+// queriesDirFor resolves the op search dir: an explicit --queries-dir wins, else it is
+// derived from --plugin so each plugin's ops live under its own tree.
+func queriesDirFor(dir, plugin string) string {
+	if dir != "" {
+		return dir
+	}
+	return "./plugins/" + plugin + "/queries"
+}
+
+// pluginEndpoint resolves where a named op is posted and whether that target is a
+// plugin op route. github posts {op,variables} to /plugins/github/graphql (keying
+// path); every other plugin has no op route, so its query text goes to core /graphql.
+func pluginEndpoint(plugin, endpoint, cfgPath string) (url string, opRoute bool) {
+	base := strings.TrimSuffix(resolveEndpoint(endpoint, cfgPath), "/graphql")
+	if pluginsWithOpRoute[plugin] {
+		return base + "/plugins/" + plugin + "/graphql", true
+	}
+	return base + "/graphql", false
 }
 
 func schemaCmd() *cobra.Command {
@@ -101,21 +126,25 @@ func runQuery(endpoint, query string) error {
 	return printGraphQLResult(raw)
 }
 
-// runNamedQuery validates the op exists on the client's search path, parses
-// --var key=value pairs into GraphQL variables, and posts the operation to the
-// github plugin's endpoint by name as {op, variables}. Posting the op name (not
-// the raw query text) drives the plugin's runOp/extractAndStore path, which is
-// what stores each returned node under its own key (AC-GH-NAMEDOP-KEYS); a raw
-// {query} body is proxied straight to upstream and never keyed.
-func runNamedQuery(endpoint, op string, varArgs []string, queriesDir string) error {
-	if _, err := loadNamedQuery(op, queriesDir); err != nil {
+// runNamedQuery loads NAME.graphql from the search path, parses --var key=value pairs
+// into GraphQL variables, and posts the operation. When opRoute is true (github) it
+// posts {op, variables} by NAME so the plugin's runOp/extractAndStore path keys each
+// returned node (AC-GH-NAMEDOP-KEYS). Otherwise it posts the loaded query TEXT as
+// {query, variables} to core /graphql — a plain read for plugins with no op route.
+func runNamedQuery(endpoint, op string, varArgs []string, queriesDir string, opRoute bool) error {
+	query, err := loadNamedQuery(op, queriesDir)
+	if err != nil {
 		return err
 	}
 	variables, err := parseVars(varArgs)
 	if err != nil {
 		return err
 	}
-	body, err := json.Marshal(map[string]any{"op": op, "variables": variables})
+	req := map[string]any{"query": query, "variables": variables}
+	if opRoute {
+		req = map[string]any{"op": op, "variables": variables}
+	}
+	body, err := json.Marshal(req)
 	if err != nil {
 		return fmt.Errorf("encode request: %w", err)
 	}

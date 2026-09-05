@@ -6,11 +6,22 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"regexp"
 )
 
 // maxHookBody caps an inbound hook POST. Claude Code hook payloads are small (a few
 // fields plus a tool_input we do not even read), so 1 MiB is ample and bounds memory.
 const maxHookBody = 1 << 20
+
+// sessionIDRe is the accepted session_id shape: the Claude Code UUID plus the mild
+// punctuation a slug may carry. Rejecting anything else keeps a hostile id out of the
+// db key and the emitted envelope key (AC-CLAUDE-HOOK-SCHEMA).
+var sessionIDRe = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
+// validSessionID enforces non-empty, bounded length, and the id charset.
+func validSessionID(s string) bool {
+	return s != "" && len(s) <= 128 && sessionIDRe.MatchString(s)
+}
 
 // handleHook is the /plugins/claude/hook ingress: it validates and folds ONE
 // lifecycle hook payload into session state, synchronously, so the row is queryable
@@ -31,8 +42,8 @@ func (p *Plugin) handleHook(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad payload", http.StatusBadRequest) // e.g. non-numeric issue_number
 		return
 	}
-	if hp.SessionID == "" || !knownEvents[hp.Event] {
-		http.Error(w, "unknown event or missing session", http.StatusBadRequest)
+	if !validSessionID(hp.SessionID) || !knownEvents[hp.Event] {
+		http.Error(w, "unknown event or invalid session", http.StatusBadRequest)
 		return
 	}
 
@@ -73,6 +84,9 @@ func (p *Plugin) emitForFold(ctx context.Context, fi foldInput) {
 
 // readErrStatus maps a body read error to 413 when the MaxBytesReader cap tripped,
 // else 400 for an ordinary malformed body.
+//
+// TODO: identical to plugins/github/github.go's readErrStatus (and strOr/boolOr/intOr
+// in claude.go) — fold into a shared plugins/internal/pluginconfig on a follow-up.
 func readErrStatus(err error) int {
 	var mbe *http.MaxBytesError
 	if errors.As(err, &mbe) {

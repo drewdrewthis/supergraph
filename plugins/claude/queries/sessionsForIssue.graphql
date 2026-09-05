@@ -1,0 +1,19 @@
+# Sessions touching one issue (the claude half of S4). Posted as query text to core
+# /graphql by `supergraph query --op sessionsForIssue --plugin claude --var issueNumber=N`.
+query SessionsForIssue($issueNumber: Int!) {
+  claudeSessions(issueNumber: $issueNumber) {
+    hostId
+    sessionId
+    state
+    gitBranch
+    issueNumber
+    model
+    lastTool
+    toolCalls
+    prNumber
+    prUrl
+    startedAt
+    lastEventAt
+    staleSince
+  }
+}

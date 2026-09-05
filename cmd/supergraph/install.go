@@ -3,10 +3,12 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -43,7 +45,7 @@ func installCmd() *cobra.Command {
 			if settingsPath == "" {
 				settingsPath = defaultClaudeSettingsPath()
 			}
-			return mergeHookBlock(settingsPath)
+			return mergeHookBlock(cmd.ErrOrStderr(), settingsPath)
 		},
 	}
 	cmd.Flags().BoolVar(&doInstall, "install-hook", false,
@@ -77,11 +79,20 @@ func printHookBlock(w io.Writer) error {
 
 // mergeHookBlock additively + idempotently merges our command into each event array
 // of settingsPath, deduped by command string, preserving every existing hook
-// (AC-CLAUDE-INSTALL-IDEMPOTENT).
-func mergeHookBlock(settingsPath string) error {
+// (AC-CLAUDE-INSTALL-IDEMPOTENT). An existing settings file that does not parse is a
+// hard stop — we NEVER overwrite a file we could not read, which would silently
+// discard the user's own settings; we print a hint and write nothing.
+func mergeHookBlock(hintW io.Writer, settingsPath string) error {
 	settings := map[string]any{}
 	if data, err := os.ReadFile(settingsPath); err == nil { //nolint:gosec // G304: settingsPath is an explicit user-provided --settings flag
-		_ = json.Unmarshal(data, &settings)
+		if err := json.Unmarshal(data, &settings); err != nil {
+			_, _ = fmt.Fprintf(hintW, "refusing to overwrite %s: it is not valid JSON (%v).\n"+
+				"Fix or remove it, or run `supergraph install` to print the block and paste it manually.\n",
+				settingsPath, err)
+			return fmt.Errorf("parse %s: %w", settingsPath, err)
+		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("read %s: %w", settingsPath, err)
 	}
 	hooks, _ := settings["hooks"].(map[string]any)
 	if hooks == nil {
@@ -99,10 +110,34 @@ func mergeHookBlock(settingsPath string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o750); err != nil {
+	return writeFileAtomic(settingsPath, append(out, '\n'), 0o600)
+}
+
+// writeFileAtomic writes data to a temp file in the target dir then renames it over
+// path, so a crash mid-write can never leave a truncated settings.json — the reader
+// sees either the old file or the complete new one.
+func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return err
 	}
-	return os.WriteFile(settingsPath, append(out, '\n'), 0o600)
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".settings-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer func() { _ = os.Remove(tmpName) }() // no-op once the rename below succeeds
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(mode); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
 }
 
 // containsHookCommand reports whether any entry in a settings event array already
@@ -179,9 +214,16 @@ func hookEndpoint(cfgPath string) (string, string) {
 		if cfg.Listen != "" {
 			listen = cfg.Listen
 		}
-		for _, t := range cfg.Tokens {
-			token = t
-			break
+		// Pick the token deterministically (first caller by sorted name) so every
+		// forwarder on the box presents the same bearer instead of a random
+		// map-iteration one.
+		names := make([]string, 0, len(cfg.Tokens))
+		for name := range cfg.Tokens {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		if len(names) > 0 {
+			token = cfg.Tokens[names[0]]
 		}
 	}
 	return "http://" + listen + "/plugins/claude/hook", token

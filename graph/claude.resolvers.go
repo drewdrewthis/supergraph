@@ -7,6 +7,7 @@ package graph
 
 import (
 	"context"
+	"strings"
 
 	"github.com/drewdrewthis/supergraph/graph/model"
 	"github.com/drewdrewthis/supergraph/plugins/claude"
@@ -48,7 +49,9 @@ func (r *queryResolver) ClaudeInstances(ctx context.Context, hostID *string) ([]
 // ClaudeSessionUpdated is the resolver for the claudeSessionUpdated field. Like the
 // template plugin's, it maps envelopes from the injected Events hook into the model,
 // keeping graph/ free of per-plugin logic. The raw envelope shape lets consumers
-// verify the payload carries only metadata (AC-CLAUDE-PRIVACY).
+// verify the payload carries only metadata (AC-CLAUDE-PRIVACY). When hostID is set it
+// filters to that box: every claude envelope key ends in "@<hostId>" (keys.go grammar
+// `session:<sid>@<host>` / `instance:<pane>@<host>`), so a suffix match selects one box.
 func (r *subscriptionResolver) ClaudeSessionUpdated(ctx context.Context, hostID *string) (<-chan model.ClaudeEvent, error) {
 	out := make(chan model.ClaudeEvent)
 	if r.Resolver.Events == nil {
@@ -56,9 +59,16 @@ func (r *subscriptionResolver) ClaudeSessionUpdated(ctx context.Context, hostID 
 		return out, nil
 	}
 	in := r.Resolver.Events(ctx, "claude")
+	var suffix string
+	if hostID != nil {
+		suffix = "@" + *hostID
+	}
 	go func() {
 		defer close(out)
 		for e := range in {
+			if suffix != "" && !strings.HasSuffix(e.Key, suffix) {
+				continue
+			}
 			select {
 			case out <- model.ClaudeEvent{Ts: e.TS, Type: e.Type, V: e.V, Key: e.Key, Payload: string(e.Payload)}:
 			case <-ctx.Done():
