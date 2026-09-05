@@ -2,7 +2,10 @@
 # keys: pr:{owner}/{repo}#{number}
 query pr($owner: String!, $repo: String!, $number: Int!) {
   repository(owner: $owner, name: $repo) {
-    pullRequest(number: $number) { number title state id merged }
+    pullRequest(number: $number) {
+      number title state id merged url updatedAt headRefName baseRefName body
+      labels(first: 20) { nodes { name } }
+    }
   }
   rateLimit { remaining resetAt cost }
 }

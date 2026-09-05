@@ -25,6 +25,13 @@ const defaultQueryEndpoint = "http://127.0.0.1:7788/graphql"
 // core's /graphql — a plain read, no keying.
 var pluginsWithOpRoute = map[string]bool{"github": true}
 
+// coreTypedOps are the three github ops that query typed CORE Query fields
+// (Query.issue/pullRequest/issuesForRepo, docs/edr/github-query.md), NOT the github
+// executor route. Their .graphql files live under plugins/github/queries/typed/ (so
+// they never collide with the executor's own issue/pr ops), and `--plugin github
+// --op <name>` posts their query TEXT to core /graphql instead of the op route.
+var coreTypedOps = map[string]bool{"issue": true, "pullRequest": true, "issuesForRepo": true}
+
 func queryCmd() *cobra.Command {
 	var endpoint, op, queriesDir, plugin string
 	var varArgs []string
@@ -34,6 +41,16 @@ func queryCmd() *cobra.Command {
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			if op != "" {
+				// The three typed core ops route to core /graphql from the typed/
+				// subdir, so `--plugin github --op issue` reads Query.issue rather
+				// than the github executor's own issue op (per-op sane routing).
+				if plugin == "github" && coreTypedOps[op] {
+					dir := queriesDir
+					if dir == "" {
+						dir = queriesDirFor(queriesDir, plugin) + "/typed"
+					}
+					return runNamedQuery(resolveEndpoint(endpoint, configPath), op, varArgs, dir, false)
+				}
 				url, opRoute := pluginEndpoint(plugin, endpoint, configPath)
 				return runNamedQuery(url, op, varArgs, queriesDirFor(queriesDir, plugin), opRoute)
 			}

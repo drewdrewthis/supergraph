@@ -37,3 +37,11 @@ models:
     model: github.com/drewdrewthis/supergraph/core.HealthStatus
   HealthState:
     model: github.com/drewdrewthis/supergraph/core.HealthState
+  # Bind the typed github reads onto hand-written structs (D4, mirrors Health): the
+  # scalar fields live on the struct so gqlgen emits no resolver for them, while the
+  # absent tmuxPanes/claudeSessions fields get field-resolver stubs implemented in
+  # graph/ (the cross-plugin join, D2/D3).
+  Issue:
+    model: github.com/drewdrewthis/supergraph/plugins/github.IssueNode
+  PullRequest:
+    model: github.com/drewdrewthis/supergraph/plugins/github.PRNode

@@ -1,0 +1,10 @@
+# Typed cache-only read served by CORE /graphql (Query.issue) — NOT the github
+# executor route. Usage:
+#   supergraph query --plugin github --op issue --var key=issue:o/r#5
+query issue($key: String!) {
+  issue(key: $key) {
+    number title state url updatedAt labels
+    tmuxPanes { key }
+    claudeSessions { sessionId }
+  }
+}

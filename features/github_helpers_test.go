@@ -134,6 +134,17 @@ func (g *ghWorld) writeConfig() error {
 	// since this only shapes the test harness's own config.
 	b.WriteString("[plugins.github.ttl]\n")
 	b.WriteString("issue = 3600\npr = 3600\ncheckRun = 3600\n")
+	// The github-query join scenarios (features/github-query.feature) read claude
+	// sessions through the running claude plugin, so it is configured here at an
+	// empty projectsDir (nothing to scan) with a long scan interval — harmless to
+	// the github-only scenarios, which never query it. tmux is intentionally left
+	// unconfigured: its Migrate still runs (creating tmux.db and publishing its
+	// accessor), so seeded panes are readable, but its reconcile loop stays dormant
+	// and never clobbers a seeded row.
+	b.WriteString("[plugins.claude]\n")
+	fmt.Fprintf(&b, "projectsDir = %q\n", g.sw.claudeProjectsDir)
+	fmt.Fprintf(&b, "settingsPath = %q\n", g.sw.claudeSettingsPath)
+	b.WriteString("scanIntervalSeconds = 3600\nretentionDays = 3650\n")
 	return os.WriteFile(g.sw.cfgPath, []byte(b.String()), 0o644)
 }
 

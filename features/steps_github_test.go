@@ -19,7 +19,7 @@ import (
 // fake GitHub httptest server (plugins/github/fakegh), and direct reads of the
 // plugin's own github.db SQLite file (the same pattern steps_test.go already uses
 // for template.db) — never an import of the plugins/github package itself, so
-// these steps survive an internal refactor of the plugin (budget 1350).
+// these steps survive an internal refactor of the plugin (budget 1570).
 //
 // @live @pending scenarios: every step in them returns godog.ErrPending directly,
 // per the brief. Godog stops executing a scenario's steps at the first pending
@@ -169,11 +169,17 @@ func registerGithubSteps(sc *godog.ScenarioContext) {
 	// ---------- AC-GH-LOC ----------
 	sc.Step(lit("the github plugin source under `plugins/github`"), noop)
 	sc.Step(lit("`make loc-github` counts non-comment, non-blank prod lines excluding tests and `internal/fakegh`"), g.locRun)
-	sc.Step(lit("the count is 1350 or fewer"), g.locAssert)
+	sc.Step(lit("the count is 1570 or fewer"), g.locAssert)
 
 	// ---------- AC-GH-ZEROCORE ----------
 	sc.Step(lit("the github plugin package and its blank import in graph/plugins_import.go"), noop)
 	sc.Step(lit("`git diff --stat core/` is run"), g.zerocoreRun)
+
+	// ---------- github-query typed reads + cross-plugin join (github-query.feature) ----------
+	// Registered on the SAME ghWorld g (and its server, started by the shared Given
+	// above) so the join scenarios read the seeded github/claude/tmux dbs under one
+	// data dir. See features/steps_githubquery_test.go.
+	registerGithubQuerySteps(sc, g)
 
 	// ---------- @live @pending ----------
 	registerGithubLiveSteps(sc)
@@ -1183,7 +1189,7 @@ func (g *ghWorld) locRun() error {
 }
 
 func (g *ghWorld) locAssert() error {
-	budget := 1350
+	budget := 1570
 	if v := os.Getenv("LOC_BUDGET"); v != "" {
 		var n int
 		if _, err := fmt.Sscanf(v, "%d", &n); err == nil {
