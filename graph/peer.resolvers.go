@@ -24,12 +24,12 @@ func (r *queryResolver) Peers(ctx context.Context) ([]model.Peer, error) {
 	out := make([]model.Peer, 0, len(views))
 	for _, v := range views {
 		out = append(out, model.Peer{
-			HostID:       v.HostID,
-			URL:          v.URL,
-			LastSeenAt:   v.LastSeenAt,
-			StaleSince:   v.StaleSince,
-			LagSeconds:   v.LagSeconds,
-			MirroredKeys: v.MirroredKeys,
+			HostID:                    v.HostID,
+			URL:                       v.URL,
+			LastSeenAt:                v.LastSeenAt,
+			StaleSince:                v.StaleSince,
+			RemoteMaxPluginLagSeconds: v.LagSeconds,
+			MirroredKeys:              v.MirroredKeys,
 		})
 	}
 	return out, nil

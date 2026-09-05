@@ -6,11 +6,20 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
 
 	coderws "github.com/coder/websocket"
+)
+
+// maxRespBytes caps a remote executor's response body and maxNodes caps how many
+// nodes one proxy call mirrors, so a hostile or runaway remote cannot exhaust the
+// consumer's memory (a mesh peer is a non-loopback, third-party trust boundary).
+const (
+	maxRespBytes = 4 << 20 // 4 MiB
+	maxNodes     = 5000
 )
 
 // client.go is the peer plugin's outbound mesh layer: every call to a remote box
@@ -28,7 +37,7 @@ type remoteNode struct {
 }
 
 // remoteResult is the {nodes:[...]} envelope a remote /plugins/<name>/graphql
-// executor returns. errAuth is set true by postOp when the remote answered 401.
+// executor returns.
 type remoteResult struct {
 	Nodes []remoteNode `json:"nodes"`
 }
@@ -56,7 +65,7 @@ func (p *Plugin) postOp(ctx context.Context, pr peerCfg, targetPlugin, op string
 		return remoteResult{}, err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	body, _ := io.ReadAll(resp.Body)
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxRespBytes))
 	if resp.StatusCode == http.StatusUnauthorized {
 		return remoteResult{}, errUnauthorized{host: pr.HostID}
 	}
@@ -67,34 +76,11 @@ func (p *Plugin) postOp(ctx context.Context, pr peerCfg, targetPlugin, op string
 	if err := json.Unmarshal(body, &out); err != nil {
 		return remoteResult{}, fmt.Errorf("peer: decode %s op %q: %w", pr.HostID, op, err)
 	}
+	if len(out.Nodes) > maxNodes {
+		log.Printf("peer: %s op %q returned %d nodes; truncated to %d", pr.HostID, op, len(out.Nodes), maxNodes)
+		out.Nodes = out.Nodes[:maxNodes]
+	}
 	return out, nil
-}
-
-// ping probes a remote's base /graphql liveness with a trivial `{ ping }` query and
-// bearer auth. It returns errUnauthorized on 401, an error on any other failure, and
-// nil when the remote answered — the poll-fallback liveness signal (D7).
-func (p *Plugin) ping(ctx context.Context, pr peerCfg) error {
-	reqBody, _ := json.Marshal(map[string]any{"query": "{ ping }"})
-	url := strings.TrimRight(pr.URL, "/") + "/graphql"
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(reqBody))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	authorize(req, pr.Token)
-	resp, err := p.hc.Do(req)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	_, _ = io.Copy(io.Discard, resp.Body)
-	if resp.StatusCode == http.StatusUnauthorized {
-		return errUnauthorized{host: pr.HostID}
-	}
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("peer: ping %s: status %d", pr.HostID, resp.StatusCode)
-	}
-	return nil
 }
 
 // subscribeLag dials the remote's base /graphql pluginLag subscription over

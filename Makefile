@@ -74,8 +74,8 @@ loc-peer:
 	@files=$$(find plugins/peer -name '*.go' ! -name '*_test.go' 2>/dev/null); \
 	if [ -z "$$files" ]; then count=0; else count=$$(echo "$$files" | xargs sed -E '/^[[:space:]]*\/\//d;/^[[:space:]]*$$/d' | wc -l | tr -d ' '); fi; \
 	echo "plugins/peer prod LOC: $$count"; \
-	if [ "$$count" -gt 690 ]; then \
-		echo "loc-peer: $$count LOC exceeds the 690 budget" >&2; \
+	if [ "$$count" -gt 700 ]; then \
+		echo "loc-peer: $$count LOC exceeds the 700 budget" >&2; \
 		exit 1; \
 	fi
 

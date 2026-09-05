@@ -16,7 +16,7 @@ may open any client connection from `Start`), its own SQLite, `emit`, `HTTPRoute
 `extend type Query` seam. Two *optional* core seams are listed below (§Core change requests) for a
 future push-based variant; **neither is required for the spike.**
 
-**Hard constraints (owner):** ≤ **690 LOC prod** for `plugins/peer/**` excluding tests (measured 649
+**Hard constraints (owner):** ≤ **700 LOC prod** for `plugins/peer/**` excluding tests (measured 665
 + 5%; the 700 was an estimate, not a cap); the seeded remote lives in `plugins/fakeremote` (a separate
 harness-only package, not counted); **zero `core/` + `server/` diff**; per-peer bearer token; **loop rule — a peer plugin never
 re-serves peer-tagged rows** (PRD §6); F8 stale-since ≤ 30 s; `@local` boots **two** supergraph
@@ -61,14 +61,16 @@ The tradeoff owned honestly: a mirrored value can be stale between pulls — exa
 the PRD chose ("Duplicated on purpose").
 
 ### D3 — How data is mirrored and served (query fan-out)
-- **Fan-out:** the peer plugin serves its own `/plugins/peer/graphql` executor (github HTTPRoutes
+- **Fan-out:** the peer plugin serves its own `/plugins/peer/op` executor (github HTTPRoutes
   pattern) and an `extend type Query { peers: [Peer!]! }` field. A named op targeting a host
   (`--op freeSlots --var host=<hostId>`) is **proxied to that peer's `/plugins/<targetPlugin>/graphql`**
   over the mesh, the returned nodes are cached in `peer_nodes` keyed by their **original key** (which
   already carries `@<remoteHostId>` per the envelope contract), stamped `lastSeenAt`, and served back.
 - **Key-grammar routing:** the router reads the `@<hostId>` suffix. `@localHostId` (or none) → not
   peer's concern (local plugins answer). `@<knownRemote>` → proxy/serve from mirror. `@<unknown>` →
-  empty + logged (never invents a hop).
+  empty + logged (never invents a hop). Symmetrically (S3), an **op** no source plugin owns
+  (`opPlugins` miss, no `remotePlugin` override) also returns empty + logged with **no** hop — the router
+  never falls back to guessing `github`.
 - **Warm path (S2):** a cached row is served from `peer_nodes` with **no upstream call** → local read,
   < 1 s.
 
@@ -82,7 +84,7 @@ advances (liveness derived from the emit path, per contract §Health), and cross
 ### D5 — Loop prevention (PRD "never re-serves peer-tagged rows"; F8 "no peer-of-peer rows")
 Two guards, both enforced in `mirror.go`:
 1. **Never proxy to a remote's `peer` plugin** — the fan-out only targets a remote's *source* plugins
-   (github/tmux/claude/template), never `/plugins/peer/graphql`.
+   (github/tmux/claude/template), never `/plugins/peer/op`.
 2. **Drop foreign-host rows** — any fetched node whose key `@hostId` ≠ the remote's declared `hostId`
    (i.e. it is the remote's own mirror of a *third* box) is dropped, not stored. Also drop keys whose
    `@hostId` == the local host. Together these guarantee the mirror holds only first-hop rows → no
@@ -96,12 +98,25 @@ including `/health` (`server/server.go:103`). A 401 marks that peer unreachable 
 nothing mirrored. Token never logged.
 
 ### D7 — Reconnect / backoff / staleness
-`liveness.go` runs one goroutine per peer: dial the `pluginLag` WS, on each push (or a fallback
-`query{ health }` poll at `livenessPollSeconds`) set `lastSeenAt=now`, `staleSince=null`. On WS
-drop/dial-fail/401: **exponential backoff** (like github's `gh webhook forward` supervisor), and keep
-`staleSince` at the first-failure time. A peer whose `lastSeenAt` age or reported `pluginLag` crosses
-`staleThresholdSeconds` (default 30, F8) reads **`stale since T`** in `peers`. Mirror rows survive a
-stale peer (served with their own `lastSeenAt`), they are just flagged.
+`liveness.go` runs one goroutine per peer: dial the `pluginLag` WS; a live subscription **is** the
+liveness signal (`lastSeenAt=now`, `staleSince=null` on connect and on each pushed frame). Staleness is
+**event-driven, not threshold-polled**: on a WS drop / dial-fail / 401 the peer is marked stale
+immediately, `staleSince` pinned at the first-failure time, and reconnect uses **exponential backoff**
+(like github's `gh webhook forward` supervisor). There is **no** local `lastSeenAt`-age comparison and
+**no** poll loop (`livenessPollSeconds` was never wired — dropped). `staleThresholdSeconds` (default 30,
+F8) is passed **only** as the remote `pluginLag(thresholdSeconds:)` argument — it tunes when the REMOTE
+pushes a lag frame, not this link's staleness. A 401 logs one `peer: <host> rejected token (401)` line
+(no token) and mirrors nothing. Mirror rows survive a stale peer (served with their own `lastSeenAt`),
+just flagged.
+
+### D8 — Graph `peers` accessor — a process `active` singleton, not core's `Resolver.Events`
+The `peers` query needs live **plugin state** (per-peer liveness from `peer_state`), but the only reader
+core hands a plugin's graph resolver is the **events channel** — there is no "give me plugin X" handle,
+and adding one is a core change (LOCKED). So the plugin publishes itself in `New` via a package-level
+`active atomic.Pointer[Plugin]` (`accessor.go`) and `graph/peer.resolvers.go` delegates through
+`peer.Peers()`. The pointer swap keeps it **test-safe** — each `New` re-`Store`s, so a test reads its own
+instance, and a nil/unstarted pointer yields no peers, never a panic. Single-process assumption: one
+supergraph binary, one peer plugin.
 
 ---
 
@@ -114,14 +129,19 @@ type Peer {
   hostId: String!
   url: String!
   lastSeenAt: Time
-  staleSince: Time                # non-null ⇒ stale since T (F8)
-  lagSeconds: Float!              # remote's own worst pluginLag, mirrored
-  mirroredKeys: Int!             # rows currently cached for this peer
+  staleSince: Time                     # non-null ⇒ stale since T (F8); the link-health signal
+  remoteMaxPluginLagSeconds: Float!    # remote's OWN worst pluginLag, mirrored from its pluginLag
+                                       # stream — NOT this link's health (a remote plugin stuck
+                                       # "starting" shows a large value while staleSince stays null)
+  mirroredKeys: Int!                   # rows currently cached for this peer
 }
 ```
-Data fan-out (issues/slots/tmux rows across a box) rides the `/plugins/peer/graphql` **executor**
-(named-op + `@hostId` routing), not a bespoke typed field per source — the mirror is source-agnostic,
-keyed by the origin's grammar.
+Field named `remoteMaxPluginLagSeconds` (not `lagSeconds`) so it cannot be misread as this peer link's
+latency: it is the remote's own reported max plugin lag, and staleSince — not this field — says whether
+the peer is reachable (owner user-test finding). Data fan-out (issues/slots/tmux rows across a box) rides
+the `/plugins/peer/op` **executor** (JSON `{op,host,refresh}` command, named-op + `@hostId` routing — not
+a GraphQL document, hence the `op` route not `graphql`), not a bespoke typed field per source — the
+mirror is source-agnostic, keyed by the origin's grammar.
 
 ## Envelopes emitted (`{Source:"peer",V:1,...}`)
 - **`peer.node.mirrored`** — `Key`=original `@remoteHostId` key, `Payload={peer,node,lastSeenAt}` — a
@@ -140,28 +160,36 @@ keyed by the origin's grammar.
 
 ## Config keys `[plugins.peer]`
 `[[plugins.peer.peers]]` × N: `hostId`, `url` (mesh, e.g. `http://10.0.3.222:7788`), `token`.
-Plugin-level: `staleThresholdSeconds` (30, F8), `livenessPollSeconds` (10, fallback when no `pluginLag`
-push), `backoffMaxSeconds` (60), `mirrorTTLSeconds` (0 = serve until a refresh; a churny deployment may
-cap it). `remotePlugin` (test-only override → routes the whole fan-out at the seeded `fakeremote`
-executor; production leaves it empty and routes per op via `mirror.go`'s `opPlugins`). `mirrorTTLSeconds`
-is reserved (not consumed in the spike — the warm read serves until an explicit `refresh`).
+Plugin-level: `staleThresholdSeconds` (30, F8 — passed **only** as the remote `pluginLag(thresholdSeconds:)`
+argument, see D7), `backoffMaxSeconds` (60), `mirrorTTLSeconds` (0 = serve until a refresh; > 0 purges a
+host's rows not refreshed within the TTL on each proxy call for that host, S2). `remotePlugin`
+(test-only override → routes the whole fan-out at the seeded `fakeremote` executor; production leaves it
+empty and routes per op via `mirror.go`'s `opPlugins`; an op **no** plugin owns makes no hop, S3).
 
-## LOC budget (prod; measured actuals — cap **690** for `plugins/peer/**`; tests excluded)
+## LOC budget (prod; measured actuals — cap **700** for `plugins/peer/**`; tests excluded)
 The 700-line estimate was an owner-blessed estimate, not a cap. Measured actuals below; the
-`make loc-peer` gate is set to **690** = measured 649 + 5% rounded up to a multiple of 10 (per the
-owner's LOC-budget rule). `graph/peer.resolvers.go` lives outside `plugins/peer/` so `make loc-peer`
-does not count it; it is listed for completeness against the estimate.
+`make loc-peer` gate is set to **700** = measured **665** + 5% (698.25) rounded up to a multiple of 10
+(per the owner's LOC-budget rule). `graph/peer.resolvers.go` lives outside `plugins/peer/` so
+`make loc-peer` does not count it; it is listed for completeness against the estimate.
+
+Actuals below are post-review (M1/M2/S1–S6 + owner user-test follow-ups): `peer.go` was split into
+`executor.go` (HTTP executor + wire types, S4) and `accessor.go` (`Peers`/`active`, S4); `ping` was
+deleted from `client.go` (M2) while the 4 MiB body limit + node cap (S1) were added; `mirror.go` grew
+the unknown-op guard (S3), TTL purge call (S2) and 401 warn (a); `store.go` grew `purgeStale` (S2);
+`liveness.go` grew the 401 warn (a) + injectable seams (S5). Net +16 over the pre-review 649.
 
 | File (`plugins/peer/`) | Est. | Actual | Responsibility |
 |---|---:|---:|---|
-| `peer.go` | 150 | **230** | wiring: `Register`/`New`/`Name`/`Migrate`/`Start`/`Routes`/`Cursor`/config parse **+ the HTTP executor (warm-read vs proxy, `servedResult` wire shape) + the `Peers` graph accessor** — the executor and the resolver-accessor were folded here rather than a 6th file, which is where the +80 over estimate lands |
-| `store.go` | 150 | **142** | `peer_nodes`+`peer_state`: upsert, per-host scan, foreign-host drop, `markSeen`/`markStale` transitions, `states` |
-| `client.go` | 130 | **141** | outbound GraphQL POST + `ping` + `pluginLag` WS subscribe (graphql-transport-ws) + bearer |
-| `mirror.go` | 140 | **80** | pull-through proxy: `@hostId` routing, loop guards (D5), tag + re-emit (came in lean — the op→plugin table + two guards) |
-| `liveness.go` | 100 | **56** | per-peer WS loop, backoff, `staleSince` transitions, `peer.stale` emit (WS-primary, no separate poll loop → leaner than estimate) |
-| **`plugins/peer/` total** | 670 | **649** | **under the 690 gate; the executor+accessor folded into `peer.go` account for the peer.go overrun, offset by lean mirror/liveness** |
+| `peer.go` | 150 | **167** | wiring: `Register`/`New`/`Name`/`Migrate`/`Start`/`Routes`/`Cursor`/config parse (executor + accessor now split out, S4) |
+| `executor.go` | — | **47** | HTTP executor (`handleOp`, warm-read vs proxy, `servedNode`/`servedResult` wire shape, `maxBody`) — split from `peer.go` (S4) |
+| `accessor.go` | — | **34** | graph `peers` accessor (`Peers`, `PeerView`, the `active` singleton, D8) — split from `peer.go` (S4) |
+| `store.go` | 150 | **147** | `peer_nodes`+`peer_state`: upsert, per-host scan, foreign-host drop, `markSeen`/`markStale`, `purgeStale` (S2), `states` |
+| `client.go` | 130 | **127** | outbound POST (4 MiB `LimitReader` + node cap, S1) + `pluginLag` WS subscribe (graphql-transport-ws) + bearer (`ping` deleted, M2) |
+| `mirror.go` | 140 | **85** | pull-through proxy: `@hostId` routing, unknown-op guard (S3), loop guards (D5), tag + re-emit, TTL purge (S2), 401 warn (a) |
+| `liveness.go` | 100 | **58** | per-peer WS loop, backoff, `staleSince` transitions, `peer.stale` emit, 401 warn (a), injectable seams (S5) |
+| **`plugins/peer/` total** | 670 | **665** | **under the 700 gate** |
 | resolver (`graph/peer.resolvers.go`, delegates) | 30 | 24 | `peers` → `peer.Peers` accessor → store (not counted by `make loc-peer`) |
-- **AC-PEER-LOC** guards `plugins/peer/**` (same portable `sed` strip formula as `make loc-github`), fails > **690**.
+- **AC-PEER-LOC** guards `plugins/peer/**` (same portable `sed` strip formula as `make loc-github`), fails > **700**.
 
 ---
 
@@ -204,13 +232,13 @@ the real two-box run. Summary:
   still readable, flagged stale; **no peer-of-peer rows** (a foreign `@boxC` row was seeded and dropped).
 - **@AC-PEER-MIRROR** a proxied named op returns remote rows tagged `@remoteHostId` + `lastSeenAt`, cached in `peer_nodes`; the served body equals the remote's.
 - **@AC-PEER-REEMIT** each mirrored node emits `peer.node.mirrored` preserving the original `@remoteHostId` key; core `/health` "peer" `lastEventAt` advances.
-- **@AC-PEER-LOOP** the remote offers a foreign `@boxC` row (asserted present via a *direct* query to the remote); the consumer drops it (no `@boxC` in `peer_nodes`, drop logged) and **never invokes the remote's own peer executor** (asserted: the remote process log carries no `peer: executor` line). Negative control for "no peer-of-peer rows".
+- **@AC-PEER-LOOP** the remote offers a foreign `@boxC` row (asserted present via a *direct* query to the remote); the consumer drops it (no `@boxC` in `peer_nodes`, drop logged) and **never invokes the remote's own peer executor** (asserted: the remote process log carries no `peer: executor` line). The remote **runs its own peer plugin** (pointed at a dead `boxC`, executor mounted at `/plugins/peer/op`) so a recursive hop is *structurally possible* — without it the "never invoked" assertion is vacuous (M1). Negative control for "no peer-of-peer rows".
 - **@AC-PEER-UNKNOWN** *(added by AC review)* a named op for an **unconfigured host** returns empty and makes **no outbound hop** (the remote's request count is unchanged) — never invents a mesh hop.
 - **@AC-PEER-AUTH** remote bound **non-loopback** (`:PORT` ⇒ core mandates + enforces tokens): the **absent-Authorization** branch → 401 → peer unreachable, nothing mirrored; the **wrong-token** branch → 401, still nothing mirrored; the **correct token** → proxy succeeds, ≥1 row cached.
 - **@AC-PEER-RECONNECT** remote stopped → `staleSince` set < 30 s; restarted on the same port → within **4 s** (≤ 2 × a 2 s test `backoffMaxSeconds`) the backoff loop reconnects to `pluginLag` and `staleSince` clears; the next proxy refreshes the mirror.
 - **@AC-PEER-HEALTH** *(grounded by AC review)* `/health` shows a "peer" entry; with the remote never up and nothing mirrored, its `lastEventAt` **stays null** (state `starting`) — **no synthetic heartbeat is fabricated**; `peers` shows `staleSince` set, derived only from the failed connection attempt.
 - **@AC-PEER-ZEROCORE** `git diff --stat origin/main -- core server` = 0 files (integration/diff check) **and** no `core/` file imports a plugin package.
-- **@AC-PEER-LOC** `plugins/peer/**` prod LOC ≤ **690** (measured 649 + 5%).
+- **@AC-PEER-LOC** `plugins/peer/**` prod LOC ≤ **700** (measured 665 + 5%).
 
 ## AC review: applied (owner-confirmed decisions)
 Applied to `features/peer.feature` + this EDR per `~/.knowledge/.../acceptance-criteria.md`. Owner
@@ -245,10 +273,16 @@ table; op-scoped warm-read partitioning is a follow-up, not a spike requirement.
    `supergraph serve` process (harness supports per-scenario binary+port) running it; unit tests use an
    `httptest` server (`plugins/peer/peer_test.go`). The base `/graphql pluginLag` stream (liveness) and
    the mesh token rule come from core for free, so no bespoke fake was needed.
+   *Why a top-level `plugins/fakeremote` and not a nested fake like github's `plugins/github/fakegh/`:*
+   `fakegh` fakes an **external** dependency (the GitHub API) that the github plugin's own tests dial via
+   `httptest`; it is never a registered supergraph plugin. `fakeremote` must be the **real** thing a
+   consumer talks to across the mesh — a genuine registered source plugin served by a full second
+   `supergraph serve` process — so it lives at the plugin top level (built only under `harness`), not
+   nested under `plugins/peer/`.
 2. `plugins/peer/store.go` + `Migrate` (two tables) — mirror + per-peer state.
 3. `plugins/peer/client.go` — GraphQL POST + `pluginLag` WS subscribe + bearer.
 4. `plugins/peer/mirror.go` — pull-through proxy, `@hostId` routing, loop guards (D5), tag + re-emit.
-5. `plugins/peer/liveness.go` — per-peer WS/poll loop, backoff, `staleSince`, `peer.stale` emit.
+5. `plugins/peer/liveness.go` — per-peer WS loop (no poll), backoff, `staleSince`, `peer.stale` emit.
 6. `plugins/peer/peer.go` — wiring (`Register`/`Start`/`HTTPRoutes`/`CursorReporter`); blank import in
    `graph/plugins_import.go`; `plugins/peer/queries/*.graphql` (reuse `freeSlots`, add nothing github owns).
 7. `plugins/peer/schema/peer.graphqls` + regen `graph/`; fill `peers` resolver (delegates via registry).

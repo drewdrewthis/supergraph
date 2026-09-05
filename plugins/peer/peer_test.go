@@ -3,6 +3,8 @@ package peer
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -35,7 +37,7 @@ func TestTargetPlugin(t *testing.T) {
 		{"override wins", "fakeremote", "issue", "fakeremote"},
 		{"mapped op", "", "freeSlots", "tmux"},
 		{"mapped github", "", "issue", "github"},
-		{"unmapped default", "", "mystery", "github"},
+		{"unmapped is empty (no hop)", "", "mystery", ""}, // S3: unknown op makes no hop
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -218,6 +220,131 @@ func TestStoreMarkStaleThenSeen(t *testing.T) {
 	if st.LastSeenAt == nil || st.LagSeconds != 1.5 {
 		t.Errorf("markSeen state = %+v", st)
 	}
+}
+
+// TestMirrorUnknownOpNoHop: an op no source plugin owns makes no outbound hop and
+// mirrors nothing (S3), the same rule as an unknown host.
+func TestMirrorUnknownOpNoHop(t *testing.T) {
+	hit := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hit = true
+		_ = json.NewEncoder(w).Encode(map[string]any{"nodes": []any{}})
+	}))
+	defer srv.Close()
+
+	// No remotePlugin override ⇒ targetPlugin routes per opPlugins; "mystery" is unmapped.
+	p, _ := newTestPlugin(t, map[string]any{"peers": []any{map[string]any{"hostId": "boxB", "url": srv.URL}}})
+	kept, err := p.mirror(context.Background(), "mystery", "boxB", nil)
+	if err != nil {
+		t.Fatalf("mirror unmapped op: %v", err)
+	}
+	if len(kept) != 0 {
+		t.Errorf("unmapped op kept %d rows, want 0", len(kept))
+	}
+	if hit {
+		t.Error("unmapped op made an outbound hop")
+	}
+}
+
+// TestPostOpCapsNodes: a remote returning more than maxNodes is truncated, bounding
+// consumer memory against a hostile/runaway peer (S1).
+func TestPostOpCapsNodes(t *testing.T) {
+	many := make([]map[string]any, maxNodes+10)
+	for i := range many {
+		many[i] = map[string]any{"key": fmt.Sprintf("k%d@boxB", i), "node": json.RawMessage(`{}`)}
+	}
+	srv := fakeExecutor(t, many)
+	defer srv.Close()
+
+	p, _ := newTestPlugin(t, map[string]any{"remotePlugin": "src", "peers": []any{map[string]any{"hostId": "boxB", "url": srv.URL}}})
+	res, err := p.postOp(context.Background(), peerCfg{HostID: "boxB", URL: srv.URL}, "src", "op", nil)
+	if err != nil {
+		t.Fatalf("postOp: %v", err)
+	}
+	if len(res.Nodes) != maxNodes {
+		t.Fatalf("postOp returned %d nodes, want capped to %d", len(res.Nodes), maxNodes)
+	}
+}
+
+// TestMirrorTTLPurge: with mirrorTTL set, a proxy call evicts this host's rows not
+// refreshed within the TTL, while the freshly-fetched rows survive (S2).
+func TestMirrorTTLPurge(t *testing.T) {
+	srv := fakeExecutor(t, []map[string]any{
+		{"key": "tmux:s1@boxB", "node": json.RawMessage(`{"s":"1"}`)},
+	})
+	defer srv.Close()
+
+	raw := map[string]any{
+		"remotePlugin":     "src",
+		"mirrorTTLSeconds": int64(60),
+		"peers":            []any{map[string]any{"hostId": "boxB", "url": srv.URL}},
+	}
+	p, _ := newTestPlugin(t, raw)
+	ctx := context.Background()
+
+	// A boxB row last seen an hour before the fixed clock — older than the 60s TTL.
+	stale := mirroredNode{Key: "tmux:old@boxB", Host: "boxB", NodeJSON: []byte(`{}`), LastSeenAt: p.now().Add(-time.Hour)}
+	if err := p.store.upsertNode(ctx, stale); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.mirror(ctx, "tmux", "boxB", nil); err != nil {
+		t.Fatalf("mirror: %v", err)
+	}
+	keys, _ := p.store.nodesForHost(ctx, "boxB")
+	if len(keys) != 1 || keys[0].Key != "tmux:s1@boxB" {
+		t.Fatalf("TTL purge left %+v, want only the fresh tmux:s1@boxB", keys)
+	}
+}
+
+// TestLivenessBackoffAndTransition drives runLiveness with injected subscribe/sleep
+// seams (S5): a never-up peer backs off 500ms→1s→2s(cap) and emits NO peer.stale,
+// while an up→down peer emits exactly one.
+func TestLivenessBackoffAndTransition(t *testing.T) {
+	t.Run("never up: backoff doubles+caps, no stale emit", func(t *testing.T) {
+		p, emitted := newTestPlugin(t, map[string]any{
+			"backoffMaxSeconds": int64(2),
+			"peers":             []any{map[string]any{"hostId": "boxB", "url": "http://b"}},
+		})
+		var sleeps []time.Duration
+		ctx, cancel := context.WithCancel(context.Background())
+		p.subscribe = func(context.Context, peerCfg, float64, func(), func(float64)) error {
+			return errors.New("dial refused") // never onConnect ⇒ never up
+		}
+		p.sleep = func(_ context.Context, d time.Duration) bool {
+			sleeps = append(sleeps, d)
+			if len(sleeps) >= 4 {
+				cancel()
+				return false
+			}
+			return true
+		}
+		p.runLiveness(ctx, peerCfg{HostID: "boxB", URL: "http://b"})
+
+		want := []time.Duration{500 * time.Millisecond, time.Second, 2 * time.Second}
+		for i, w := range want {
+			if i >= len(sleeps) || sleeps[i] != w {
+				t.Fatalf("backoff = %v, want prefix %v", sleeps, want)
+			}
+		}
+		if n := countType(*emitted, "peer.stale"); n != 0 {
+			t.Errorf("never-up peer emitted %d peer.stale, want 0", n)
+		}
+	})
+
+	t.Run("up then down emits one stale", func(t *testing.T) {
+		p, emitted := newTestPlugin(t, map[string]any{"peers": []any{map[string]any{"hostId": "boxB", "url": "http://b"}}})
+		ctx, cancel := context.WithCancel(context.Background())
+		p.subscribe = func(_ context.Context, _ peerCfg, _ float64, onConnect func(), _ func(float64)) error {
+			onConnect() // reachable, then drops
+			return errors.New("dropped")
+		}
+		p.sleep = func(context.Context, time.Duration) bool { cancel(); return false }
+		p.runLiveness(ctx, peerCfg{HostID: "boxB", URL: "http://b"})
+
+		if n := countType(*emitted, "peer.stale"); n != 1 {
+			t.Errorf("up→down emitted %d peer.stale, want 1", n)
+		}
+	})
 }
 
 func countType(evs []core.Envelope, typ string) int {

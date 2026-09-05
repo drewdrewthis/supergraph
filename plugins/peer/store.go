@@ -84,6 +84,13 @@ func (s *store) nodesForHost(ctx context.Context, host string) ([]mirroredNode, 
 	return out, rows.Err()
 }
 
+// purgeStale deletes host's mirrored rows last seen before cutoff (mirrorTTL, S2).
+func (s *store) purgeStale(ctx context.Context, host string, cutoff time.Time) error {
+	_, err := s.db().ExecContext(ctx,
+		`DELETE FROM peer_nodes WHERE peer_host=? AND last_seen_at < ?`, host, cutoff.UTC().Format(rfc))
+	return err
+}
+
 // countForHost returns the number of mirrored rows for host (peers.mirroredKeys).
 func (s *store) countForHost(ctx context.Context, host string) (int, error) {
 	var n int

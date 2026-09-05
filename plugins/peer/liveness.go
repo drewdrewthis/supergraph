@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"time"
 
 	"github.com/drewdrewthis/supergraph/core"
@@ -21,7 +22,7 @@ func (p *Plugin) runLiveness(ctx context.Context, pr peerCfg) {
 	backoff := backoffInitial
 	everUp := false
 	for ctx.Err() == nil {
-		err := p.subscribeLag(ctx, pr, p.cfg.staleThreshold.Seconds(),
+		err := p.subscribe(ctx, pr, p.cfg.staleThreshold.Seconds(),
 			func() {
 				everUp = true
 				backoff = backoffInitial
@@ -41,9 +42,10 @@ func (p *Plugin) runLiveness(ctx context.Context, pr peerCfg) {
 		}
 		var ua errUnauthorized
 		if errors.As(err, &ua) {
+			log.Printf("peer: %s rejected token (401)", pr.HostID)
 			everUp = false // a 401 is not a live peer; do not treat the next drop as a transition
 		}
-		if !sleepCtx(ctx, backoff) {
+		if !p.sleep(ctx, backoff) {
 			return
 		}
 		if backoff *= 2; backoff > p.cfg.backoffMax {

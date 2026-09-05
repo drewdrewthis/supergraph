@@ -9,22 +9,15 @@ package peer
 
 import (
 	"context"
-	"encoding/json"
-	"log"
 	"net/http"
 	"strconv"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/drewdrewthis/supergraph/core"
 )
 
 func init() { core.Register("peer", New) }
-
-// active is the running plugin instance, published for the graph `peers` resolver
-// to delegate through (the plugin never imports graph; graph reads this accessor).
-var active atomic.Pointer[Plugin]
 
 // peerCfg is one configured mesh peer: its stable hostId, mesh URL, and bearer.
 type peerCfg struct {
@@ -39,6 +32,9 @@ type config struct {
 	peers          []peerCfg
 	staleThreshold time.Duration
 	backoffMax     time.Duration
+	// mirrorTTL evicts a host's mirrored rows not refreshed within it, on each proxy
+	// call for that host (S2). 0 ⇒ never purge (serve until an explicit refresh).
+	mirrorTTL time.Duration
 	// remotePlugin, when set, forces every proxy at one remote executor. It is the
 	// @local harness override that points the whole fan-out at the seeded fakeremote;
 	// production leaves it empty and routes per op (mirror.go opPlugins).
@@ -56,6 +52,12 @@ type Plugin struct {
 	emit   core.Emit
 
 	now func() time.Time
+
+	// subscribe and sleep are injectable seams so liveness backoff/transition logic
+	// is unit-testable without a real socket or wall-clock (S5); New wires them to
+	// the real subscribeLag and sleepCtx.
+	subscribe func(ctx context.Context, pr peerCfg, threshold float64, onConnect func(), onLag func(float64)) error
+	sleep     func(ctx context.Context, d time.Duration) bool
 }
 
 // New builds the plugin from its resolved config (EDR §"Config keys").
@@ -72,12 +74,17 @@ func New(cfg core.PluginConfig) (core.Plugin, error) {
 	if n := numOr(cfg.Raw, "backoffMaxSeconds", 0); n > 0 {
 		c.backoffMax = time.Duration(n * float64(time.Second))
 	}
+	if n := numOr(cfg.Raw, "mirrorTTLSeconds", 0); n > 0 {
+		c.mirrorTTL = time.Duration(n * float64(time.Second))
+	}
 	c.peers = parsePeers(cfg.Raw)
 	p := &Plugin{
-		cfg: c,
-		hc:  &http.Client{Timeout: 15 * time.Second},
-		now: func() time.Time { return time.Now().UTC() },
+		cfg:   c,
+		hc:    &http.Client{Timeout: 15 * time.Second},
+		now:   func() time.Time { return time.Now().UTC() },
+		sleep: sleepCtx,
 	}
+	p.subscribe = p.subscribeLag
 	active.Store(p)
 	return p, nil
 }
@@ -115,9 +122,11 @@ func (p *Plugin) Start(ctx context.Context, emit core.Emit) error {
 	return nil
 }
 
-// Routes mounts the pull-through executor under /plugins/peer/ (HTTPRoutes seam).
+// Routes mounts the pull-through executor at /plugins/peer/op (HTTPRoutes seam). The
+// route is "op", not "graphql": the body is a JSON {op,host,refresh} command, not a
+// GraphQL document, so the honest path name says so.
 func (p *Plugin) Routes() map[string]http.Handler {
-	return map[string]http.Handler{"graphql": http.HandlerFunc(p.handleGraphQL)}
+	return map[string]http.Handler{"op": http.HandlerFunc(p.handleOp)}
 }
 
 // Cursor surfaces a peers=<n> stale=<m> summary in the health snapshot (optional
@@ -159,106 +168,9 @@ func (p *Plugin) peerByHost(host string) (peerCfg, bool) {
 	return peerCfg{}, false
 }
 
-// --- HTTP executor ---
-
-// servedNode is one mirrored node on the wire, tagged with its origin host and
-// mirror freshness.
-type servedNode struct {
-	Key        string          `json:"key"`
-	Host       string          `json:"host"`
-	LastSeenAt time.Time       `json:"lastSeenAt"`
-	Node       json.RawMessage `json:"node"`
-}
-
-// servedResult is the JSON /plugins/peer/graphql returns: the host, its current
-// staleSince (non-null ⇒ the peer is flagged stale but its rows are still served),
-// and the mirrored nodes.
-type servedResult struct {
-	Host       string       `json:"host"`
-	StaleSince *time.Time   `json:"staleSince"`
-	Nodes      []servedNode `json:"nodes"`
-}
-
-// handleGraphQL serves POST {op, host, variables, refresh}. refresh=true proxies to
-// the remote and refreshes the mirror; refresh=false is the warm path — a pure local
-// read from peer_nodes with zero upstream call (S2). A stopped peer still serves its
-// mirrored rows, flagged by staleSince (F8).
-func (p *Plugin) handleGraphQL(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, maxBody)
-	var req struct {
-		Op        string         `json:"op"`
-		Host      string         `json:"host"`
-		Variables map[string]any `json:"variables"`
-		Refresh   bool           `json:"refresh"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
-		return
-	}
-	ctx := r.Context()
-	w.Header().Set("Content-Type", "application/json")
-	// Logged so a black-box step can prove a remote box's OWN peer executor is never
-	// invoked by a mirroring consumer (AC-PEER-LOOP: no proxy to a remote's peer).
-	log.Printf("peer: executor op=%q host=%q refresh=%t", req.Op, req.Host, req.Refresh)
-
-	var nodes []mirroredNode
-	if req.Refresh {
-		// A proxy error (401, transport) degrades to stale rather than 500-ing the
-		// read: the peer is marked stale and whatever was already cached is served.
-		nodes, _ = p.mirror(ctx, req.Op, req.Host, req.Variables)
-	} else {
-		nodes, _ = p.store.nodesForHost(ctx, req.Host)
-	}
-
-	st, _ := p.store.state(ctx, req.Host)
-	out := servedResult{Host: req.Host, StaleSince: st.StaleSince, Nodes: make([]servedNode, 0, len(nodes))}
-	for _, n := range nodes {
-		out.Nodes = append(out.Nodes, servedNode{Key: n.Key, Host: n.Host, LastSeenAt: n.LastSeenAt, Node: json.RawMessage(n.NodeJSON)})
-	}
-	_ = json.NewEncoder(w).Encode(out)
-}
-
-// maxBody caps the executor POST body: an op name, a host, and a few variables are
-// all it needs, so 64 KiB is generous and bounds pre-decode memory.
-const maxBody = 64 << 10
-
-// --- graph resolver accessor ---
-
-// PeerView is one peer's liveness for the graph `peers` resolver (a black-box view,
-// so graph never imports the plugin's internal types).
-type PeerView struct {
-	HostID       string
-	URL          string
-	LastSeenAt   *time.Time
-	StaleSince   *time.Time
-	LagSeconds   float64
-	MirroredKeys int
-}
-
-// Peers returns every configured peer's liveness snapshot. The graph `peers`
-// resolver delegates here; a nil/unstarted plugin yields no peers rather than a
-// panic.
-func Peers(ctx context.Context) ([]PeerView, error) {
-	p := active.Load()
-	if p == nil || p.store == nil {
-		return nil, nil
-	}
-	states, err := p.store.states(ctx)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]PeerView, 0, len(states))
-	for _, s := range states {
-		n, _ := p.store.countForHost(ctx, s.Host)
-		out = append(out, PeerView{
-			HostID: s.Host, URL: s.URL, LastSeenAt: s.LastSeenAt,
-			StaleSince: s.StaleSince, LagSeconds: s.LagSeconds, MirroredKeys: n,
-		})
-	}
-	return out, nil
-}
-
 // --- config coercion (toml decodes to string/int64/float64/bool/[]any/map) ---
+// TODO: strOr/numOr duplicate plugins/github/github.go's copies; a shared core
+// helper would fold them, but that is a core change (LOCKED) — left duplicated.
 
 func parsePeers(raw map[string]any) []peerCfg {
 	if raw == nil {

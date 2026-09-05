@@ -55,12 +55,12 @@ type ComplexityRoot struct {
 	}
 
 	Peer struct {
-		HostID       func(childComplexity int) int
-		LagSeconds   func(childComplexity int) int
-		LastSeenAt   func(childComplexity int) int
-		MirroredKeys func(childComplexity int) int
-		StaleSince   func(childComplexity int) int
-		URL          func(childComplexity int) int
+		HostID                    func(childComplexity int) int
+		LastSeenAt                func(childComplexity int) int
+		MirroredKeys              func(childComplexity int) int
+		RemoteMaxPluginLagSeconds func(childComplexity int) int
+		StaleSince                func(childComplexity int) int
+		URL                       func(childComplexity int) int
 	}
 
 	Query struct {
@@ -187,12 +187,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Peer.HostID(childComplexity), true
-	case "Peer.lagSeconds":
-		if e.ComplexityRoot.Peer.LagSeconds == nil {
-			break
-		}
-
-		return e.ComplexityRoot.Peer.LagSeconds(childComplexity), true
 	case "Peer.lastSeenAt":
 		if e.ComplexityRoot.Peer.LastSeenAt == nil {
 			break
@@ -205,6 +199,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Peer.MirroredKeys(childComplexity), true
+	case "Peer.remoteMaxPluginLagSeconds":
+		if e.ComplexityRoot.Peer.RemoteMaxPluginLagSeconds == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Peer.RemoteMaxPluginLagSeconds(childComplexity), true
 	case "Peer.staleSince":
 		if e.ComplexityRoot.Peer.StaleSince == nil {
 			break
@@ -434,9 +434,9 @@ type GithubEvent {
 }
 `, BuiltIn: false},
 	{Name: "../plugins/peer/schema/peer.graphqls", Input: `# peer plugin's GraphQL contribution (extend only — zero core diff). The data
-# fan-out (issues/slots/tmux rows across a box) rides the /plugins/peer/graphql
-# executor keyed by the origin's @host grammar; this field exposes only per-peer
-# liveness + last-seen, the source of the F8 "stale since T" view.
+# fan-out (issues/slots/tmux rows across a box) rides the /plugins/peer/op executor
+# keyed by the origin's @host grammar; this field exposes only per-peer liveness +
+# last-seen, the source of the F8 "stale since T" view.
 extend type Query {
   peers: [Peer!]!
 }
@@ -446,7 +446,13 @@ type Peer {
   url: String!
   lastSeenAt: Time
   staleSince: Time
-  lagSeconds: Float!
+  """
+  The remote's own worst plugin lag (seconds), mirrored from its pluginLag stream —
+  NOT the health of this peer link. A remote plugin stuck "starting" reports a large
+  value here while staleSince stays null (the link itself is up). staleSince, driven
+  by a WS drop / 401, is the signal for "this peer is unreachable".
+  """
+  remoteMaxPluginLagSeconds: Float!
   mirroredKeys: Int!
 }
 `, BuiltIn: false},
@@ -519,8 +525,8 @@ func (ec *executionContext) childFields_Peer(ctx context.Context, field graphql.
 		return ec.fieldContext_Peer_lastSeenAt(ctx, field)
 	case "staleSince":
 		return ec.fieldContext_Peer_staleSince(ctx, field)
-	case "lagSeconds":
-		return ec.fieldContext_Peer_lagSeconds(ctx, field)
+	case "remoteMaxPluginLagSeconds":
+		return ec.fieldContext_Peer_remoteMaxPluginLagSeconds(ctx, field)
 	case "mirroredKeys":
 		return ec.fieldContext_Peer_mirroredKeys(ctx, field)
 	}
@@ -1069,16 +1075,16 @@ func (ec *executionContext) fieldContext_Peer_staleSince(_ context.Context, fiel
 	return graphql.NewScalarFieldContext("Peer", field, false, false, errors.New("field of type Time does not have child fields"))
 }
 
-func (ec *executionContext) _Peer_lagSeconds(ctx context.Context, field graphql.CollectedField, obj *model.Peer) (ret graphql.Marshaler) {
+func (ec *executionContext) _Peer_remoteMaxPluginLagSeconds(ctx context.Context, field graphql.CollectedField, obj *model.Peer) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
 		field,
 		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_Peer_lagSeconds(ctx, field)
+			return ec.fieldContext_Peer_remoteMaxPluginLagSeconds(ctx, field)
 		},
 		func(ctx context.Context) (any, error) {
-			return obj.LagSeconds, nil
+			return obj.RemoteMaxPluginLagSeconds, nil
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v float64) graphql.Marshaler {
@@ -1088,7 +1094,7 @@ func (ec *executionContext) _Peer_lagSeconds(ctx context.Context, field graphql.
 		true,
 	)
 }
-func (ec *executionContext) fieldContext_Peer_lagSeconds(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+func (ec *executionContext) fieldContext_Peer_remoteMaxPluginLagSeconds(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("Peer", field, false, false, errors.New("field of type Float does not have child fields"))
 }
 
@@ -2739,8 +2745,8 @@ func (ec *executionContext) _Peer(ctx context.Context, sel ast.SelectionSet, obj
 			if out.Values[i] == graphql.RequiredNull {
 				out.Invalids++
 			}
-		case "lagSeconds":
-			out.Values[i] = ec._Peer_lagSeconds(ctx, field, obj)
+		case "remoteMaxPluginLagSeconds":
+			out.Values[i] = ec._Peer_remoteMaxPluginLagSeconds(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}

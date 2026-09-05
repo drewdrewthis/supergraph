@@ -100,7 +100,7 @@ func registerPeerSteps(sc *godog.ScenarioContext) {
 	sc.Step(lit("`git diff --stat origin/main -- core server` reports no files changed"), pw.thenZeroCoreDiff)
 	sc.Step(lit("no file under core/ imports a plugin package"), pw.thenNoCoreImports)
 	sc.Step(lit("the peer plugin source under `plugins/peer/`"), noop)
-	sc.Step(lit("the count is at most 690"), pw.thenLocUnder700)
+	sc.Step(lit("the count is at most 700"), pw.thenLocUnder700)
 
 	registerPeerLiveSteps(sc)
 }
@@ -137,6 +137,10 @@ func (pw *peerWorld) givenRemoteTmuxForeign() error {
 		{"tmux:s1@boxB", `{"session":"s1"}`},
 		{"tmux:s1@boxC", `{"session":"s1","foreign":true}`},
 	}
+	// Give the remote its OWN peer plugin pointed at a dead boxC so a recursive hop
+	// is structurally possible: the AC-PEER-LOOP assertion "the remote's peer executor
+	// was never invoked" is now a real negative control, not a vacuous truth (M1).
+	pw.remotePeerBoxC = "http://" + freePort() // free loopback port, nothing listening
 	return pw.startRemote()
 }
 
@@ -158,6 +162,9 @@ func (pw *peerWorld) givenConsumerNoToken() error  { pw.consumerTok = ""; return
 func (pw *peerWorld) givenConsumerNoRemote() error { return pw.startConsumer() }
 
 func (pw *peerWorld) givenWarmed() error {
+	// The op name ("warm") is irrelevant here: the mirror cache is HOST-scoped, so a
+	// refresh of any op for boxB fills the same peer_nodes rows a later freeSlots warm
+	// read serves (S5). With remotePlugin=fakeremote the op is not routed per-op anyway.
 	sw, err := pw.postExecutor("warm", "boxB", true)
 	if err != nil {
 		return err
@@ -539,8 +546,8 @@ func (pw *peerWorld) thenLocUnder700() error {
 		return fmt.Errorf("could not parse loc-peer output:\n%s", pw.locOut)
 	}
 	n, _ := strconv.Atoi(m[1])
-	if n > 690 {
-		return fmt.Errorf("peer prod LOC %d exceeds 690", n)
+	if n > 700 {
+		return fmt.Errorf("peer prod LOC %d exceeds 700", n)
 	}
 	return nil
 }

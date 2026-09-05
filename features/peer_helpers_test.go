@@ -31,9 +31,13 @@ type peerWorld struct {
 	remoteTok  string // token the remote requires (non-loopback), "" for loopback
 	remote     *serveProc
 
-	consumerTok string // token the consumer's peer config carries for boxB
-	backoffMax  int    // consumer backoffMaxSeconds (0 ⇒ default)
-	seeds       []seedNode
+	consumerTok    string // token the consumer's peer config carries for boxB
+	backoffMax     int    // consumer backoffMaxSeconds (0 ⇒ default)
+	seeds          []seedNode
+	remotePeerBoxC string // when set, the REMOTE also runs a peer plugin pointed at
+	// this (dead) boxC url, so a recursive hop is STRUCTURALLY possible — the
+	// AC-PEER-LOOP negative control ("remote's peer executor never invoked") is then
+	// meaningful rather than vacuous (M1).
 
 	served         servedWire // last servedResult decoded from the consumer executor
 	samples        []time.Duration
@@ -66,7 +70,7 @@ type peerRow struct {
 	URL          string     `json:"url"`
 	LastSeenAt   *time.Time `json:"lastSeenAt"`
 	StaleSince   *time.Time `json:"staleSince"`
-	LagSeconds   float64    `json:"lagSeconds"`
+	LagSeconds   float64    `json:"remoteMaxPluginLagSeconds"`
 	MirroredKeys int        `json:"mirroredKeys"`
 }
 
@@ -147,6 +151,14 @@ func (pw *peerWorld) writeRemoteConfig() error {
 		fmt.Fprintf(&b, "key = %q\n", s.key)
 		fmt.Fprintf(&b, "body = %q\n", s.body)
 	}
+	if pw.remotePeerBoxC != "" {
+		// Remote runs its OWN peer plugin (executor mounted at /plugins/peer/op),
+		// pointed at a dead boxC — the consumer must NOT proxy into it (M1).
+		b.WriteString("[plugins.peer]\n")
+		b.WriteString("[[plugins.peer.peers]]\n")
+		b.WriteString("hostId = \"boxC\"\n")
+		fmt.Fprintf(&b, "url = %q\n", pw.remotePeerBoxC)
+	}
 	return os.WriteFile(filepath.Join(pw.remoteDir, "config.toml"), []byte(b.String()), 0o644)
 }
 
@@ -225,7 +237,7 @@ func (pw *peerWorld) consumerLog() string {
 
 func (pw *peerWorld) postExecutor(op, host string, refresh bool) (servedWire, error) {
 	body, _ := json.Marshal(map[string]any{"op": op, "host": host, "refresh": refresh})
-	resp, err := http.Post("http://"+pw.cw.listen+"/plugins/peer/graphql", "application/json", bytes.NewReader(body))
+	resp, err := http.Post("http://"+pw.cw.listen+"/plugins/peer/op", "application/json", bytes.NewReader(body))
 	if err != nil {
 		return servedWire{}, err
 	}
@@ -269,7 +281,7 @@ func (pw *peerWorld) directRemote(op string) (map[string]json.RawMessage, error)
 }
 
 func (pw *peerWorld) consumerPeers() ([]peerRow, error) {
-	q := `{ peers { hostId url lastSeenAt staleSince lagSeconds mirroredKeys } }`
+	q := `{ peers { hostId url lastSeenAt staleSince remoteMaxPluginLagSeconds mirroredKeys } }`
 	body, _ := json.Marshal(map[string]string{"query": q})
 	resp, err := http.Post("http://"+pw.cw.listen+"/graphql", "application/json", bytes.NewReader(body))
 	if err != nil {

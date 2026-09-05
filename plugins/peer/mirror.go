@@ -37,6 +37,12 @@ func (p *Plugin) mirror(ctx context.Context, op, host string, vars map[string]an
 		return nil, nil
 	}
 	target := p.targetPlugin(op)
+	if target == "" {
+		// Unknown op: no source plugin owns it, so make no hop — the same "never
+		// invent a hop" rule as an unknown host (S3, mirrors D3 key-grammar routing).
+		log.Printf("peer: op %q has no source plugin; no hop", op)
+		return nil, nil
+	}
 	// Loop guard 1: the fan-out only targets a remote's SOURCE plugins, never its
 	// own peer plugin, so a mesh can never recurse through peers (D5-1).
 	if target == "peer" {
@@ -46,6 +52,7 @@ func (p *Plugin) mirror(ctx context.Context, op, host string, vars map[string]an
 	if err != nil {
 		var ua errUnauthorized
 		if errors.As(err, &ua) {
+			log.Printf("peer: %s rejected token (401)", host)
 			_, _ = p.store.markStale(ctx, host, p.now())
 		}
 		return nil, err
@@ -72,6 +79,11 @@ func (p *Plugin) mirror(ctx context.Context, op, host string, vars map[string]an
 	}
 	// A successful proxy is itself a liveness signal.
 	_ = p.store.markSeen(ctx, host, now, 0)
+	// TTL purge (S2): evict this host's rows not refreshed within mirrorTTL, so a
+	// churny remote does not accumulate unbounded stale rows. 0 ⇒ serve until refresh.
+	if p.cfg.mirrorTTL > 0 {
+		_ = p.store.purgeStale(ctx, host, now.Add(-p.cfg.mirrorTTL))
+	}
 	return kept, nil
 }
 
@@ -89,18 +101,16 @@ func (p *Plugin) emitMirrored(ctx context.Context, n mirroredNode) {
 	})
 }
 
-// targetPlugin maps a named op to the remote SOURCE plugin that serves it. A
-// test/plugin-level override (cfg.remotePlugin) forces every op at one executor so
-// the @local harness can point the whole fan-out at its seeded fakeremote; in
-// production the static map routes each op to its owning source plugin.
+// targetPlugin maps a named op to the remote SOURCE plugin that serves it, or ""
+// when no plugin owns it (S3: an unmapped op makes no hop, rather than guessing
+// github). A test/plugin-level override (cfg.remotePlugin) forces every op at one
+// executor so the @local harness can point the whole fan-out at its seeded
+// fakeremote; in production the static map routes each op to its owning plugin.
 func (p *Plugin) targetPlugin(op string) string {
 	if p.cfg.remotePlugin != "" {
 		return p.cfg.remotePlugin
 	}
-	if plugin, ok := opPlugins[op]; ok {
-		return plugin
-	}
-	return "github"
+	return opPlugins[op] // "" when unmapped
 }
 
 // opPlugins is the production op→source-plugin routing table. It is intentionally

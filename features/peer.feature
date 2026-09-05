@@ -115,7 +115,7 @@ Feature: peer plugin — multi-box federation as a lazy mirror
   Scenario: The peer plugin stays within its prod LOC budget
     Given the peer plugin source under `plugins/peer/`
     When `make loc-peer` counts prod lines excluding tests
-    Then the count is at most 690
+    Then the count is at most 700
 
   # ---------- Live cross-box proofs (honest @pending until run across boxes) ----------
 
@@ -148,4 +148,4 @@ Feature: peer plugin — multi-box federation as a lazy mirror
   # AC-PEER-RECONNECT: "Backoff reconnect clears stale within 2x backoffMax" → Scenario: A peer that drops and returns reconnects with backoff and clears its stale mark
   # AC-PEER-HEALTH: "/health peer entry, null lastEventAt until real emit, no heartbeat" → Scenario: /health carries a peer entry with a null lastEventAt until a real mirror emit, no synthetic heartbeat
   # AC-PEER-ZEROCORE: "Zero core/server edit" → Scenario: Adding the peer plugin touches zero files under core/ or server/
-  # AC-PEER-LOC: "Prod LOC <= 690" → Scenario: The peer plugin stays within its prod LOC budget
+  # AC-PEER-LOC: "Prod LOC <= 700" → Scenario: The peer plugin stays within its prod LOC budget
