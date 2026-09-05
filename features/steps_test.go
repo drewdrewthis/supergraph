@@ -49,6 +49,7 @@ func InitializeScenario(sc *godog.ScenarioContext) {
 	sc.Step(lit("I run `supergraph stop`"), w.stopStep)
 	sc.Step(lit("I run `supergraph start`"), w.startStep)
 	sc.Step(lit("I run `supergraph status`"), w.statusStep)
+	sc.Step(lit("it reports 0 files changed"), w.assertNoDiffReported)
 
 	// --- AC-CORE-1 ---
 	sc.Step(lit(`the template plugin emits a "V:2" event captured from the templateEvents subscription`), w.ac1Emit)
@@ -152,6 +153,9 @@ func InitializeScenario(sc *godog.ScenarioContext) {
 
 	// --- claude plugin (@claude) ---
 	registerClaudeSteps(sc, w)
+
+	// --- tmux plugin @local scenarios (real tmux on a private -L socket) ---
+	registerTmuxSteps(sc)
 }
 
 // ---------- shared ----------

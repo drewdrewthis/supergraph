@@ -337,6 +337,16 @@ func (w *world) stopServe() {
 	w.serve = nil
 }
 
+// assertNoDiffReported checks the `git diff --stat` output a prior step
+// captured into lastStdout is empty. Shared by tmux's AC-ZEROCORE and
+// github's AC-GH-ZEROCORE scenarios, whose "Then" phrase is identical.
+func (w *world) assertNoDiffReported() error {
+	if strings.TrimSpace(w.lastStdout) != "" {
+		return fmt.Errorf("git diff --stat is not empty:\n%s", w.lastStdout)
+	}
+	return nil
+}
+
 func exitCode(err error) int {
 	if err == nil {
 		return 0

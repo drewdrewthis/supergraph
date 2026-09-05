@@ -15,4 +15,6 @@ import (
 
 	// claude ingests Claude Code session state (docs/edr/claude.md).
 	_ "github.com/drewdrewthis/supergraph/plugins/claude"
+	// tmux is the local tmux-server read model (docs/edr/tmux.md).
+	_ "github.com/drewdrewthis/supergraph/plugins/tmux"
 )

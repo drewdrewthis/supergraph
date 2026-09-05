@@ -1,0 +1,12 @@
+# paneForBranch — the issue↔branch join github reserves.
+query paneForBranch($branch: String!) {
+  paneForBranch(branch: $branch) {
+    hostId
+    key
+    session
+    window
+    pane
+    free
+    staleSince
+  }
+}

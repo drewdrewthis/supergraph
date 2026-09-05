@@ -1,0 +1,10 @@
+# slotsForHost — every slot (free + busy) for a dashboard view.
+query slotsForHost($hostId: String) {
+  slots(hostId: $hostId) {
+    hostId
+    kind
+    free
+    paneKey
+    staleSince
+  }
+}

@@ -25,6 +25,19 @@ jobs:
           go-version-file: go.mod
           check-latest: true
 
+      # The tmux plugin's @local godog scenarios drive a real tmux server on a
+      # private -L socket, so tmux must be on PATH on both runners. `tmux -V` is
+      # printed so a version-dependent behaviour (e.g. %pane-exited, added after
+      # 3.6a — the plugin version-gates it) is visible in the job log.
+      - name: Install tmux
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            sudo apt-get update && sudo apt-get install -y tmux
+          else
+            brew list tmux >/dev/null 2>&1 || brew install tmux
+          fi
+          tmux -V
+
       - name: gofmt
         run: |
           out=$(gofmt -l .)

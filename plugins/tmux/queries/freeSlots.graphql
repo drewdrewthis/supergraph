@@ -1,0 +1,10 @@
+# freeSlots — the S2 warm-read op: only idle, non-stale slots on this box.
+query freeSlots($hostId: String) {
+  freeSlots(hostId: $hostId) {
+    hostId
+    kind
+    free
+    paneKey
+    staleSince
+  }
+}

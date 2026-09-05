@@ -126,3 +126,31 @@ loc-claude:
 		echo "loc-claude: $$count LOC exceeds the 790 budget" >&2; \
 		exit 1; \
 	fi
+
+# --- tmux plugin targets (appended; see docs/edr/tmux.md) ---
+.PHONY: features-tmux loc-tmux
+
+# TMUX_LOC_CAP is the ratified LOC budget for the tmux plugin: 600 -> 800 (control
+# client + poll + read model) -> 860 after the B1/B2 bug fixes and review Shoulds
+# landed at a measured 813 (owner rule: measured + 5% rounded up to a multiple of
+# 10). See the LOC table in docs/edr/tmux.md.
+TMUX_LOC_CAP := 860
+
+# features-tmux runs only the tmux plugin's @local scenarios against a real tmux
+# server on a private -L socket (created and torn down per scenario). Requires the
+# tmux binary on PATH; CI installs it (see .github/workflows/ci.yml).
+features-tmux:
+	FEATURES_TAGS="@tmux && @local" go test ./features/ -run TestFeatures -v
+
+# loc-tmux prints the tmux plugin's non-comment non-blank non-test LOC and fails if
+# it exceeds TMUX_LOC_CAP. The sed program strips whole-line `//` comments and blank
+# lines; it is line-oriented and portable (BSD/GNU sed both accept -E with it),
+# matching the count reported in the EDR LOC table.
+loc-tmux:
+	@n=$$(find plugins/tmux -name '*.go' ! -name '*_test.go' -print0 \
+		| xargs -0 sed -E '/^[[:space:]]*\/\//d;/^[[:space:]]*$$/d' \
+		| grep -c '.'); \
+	echo "tmux plugin LOC: $$n (cap $(TMUX_LOC_CAP))"; \
+	if [ "$$n" -gt "$(TMUX_LOC_CAP)" ]; then \
+		echo "loc-tmux: $$n exceeds cap $(TMUX_LOC_CAP)" >&2; exit 1; \
+	fi
