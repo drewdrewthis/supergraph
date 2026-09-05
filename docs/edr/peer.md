@@ -173,6 +173,9 @@ The 700-line estimate was an owner-blessed estimate, not a cap. Measured actuals
 `plugins/internal/pluginconfig` (−21 in `peer.go`, measured 665→644). `graph/peer.resolvers.go` lives outside `plugins/peer/` so
 `make loc-peer` does not count it; it is listed for completeness against the estimate.
 
+`active` was moved to `plugins/internal/single.Ptr[Plugin]` (post-tier §A) — LOC-neutral
+(`atomic.Pointer` inline var swapped for the shared type), measured holds at **644**, cap stays 680.
+
 Actuals below are post-review (M1/M2/S1–S6 + owner user-test follow-ups): `peer.go` was split into
 `executor.go` (HTTP executor + wire types, S4) and `accessor.go` (`Peers`/`active`, S4); `ping` was
 deleted from `client.go` (M2) while the 4 MiB body limit + node cap (S1) were added; `mirror.go` grew

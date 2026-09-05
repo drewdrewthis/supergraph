@@ -19,11 +19,11 @@ import (
 	"path/filepath"
 	"strconv"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/drewdrewthis/supergraph/core"
 	"github.com/drewdrewthis/supergraph/plugins/internal/pluginconfig"
+	"github.com/drewdrewthis/supergraph/plugins/internal/single"
 )
 
 func init() { core.Register("claude", New) }
@@ -31,7 +31,7 @@ func init() { core.Register("claude", New) }
 // live is the running plugin instance, published in Migrate so the graph query
 // resolvers (graph/claude.resolvers.go) can read session state through the package
 // funcs below without a new core-injected Resolver field (the zero-core-edit seam).
-var live atomic.Pointer[Plugin]
+var live single.Ptr[Plugin]
 
 // Plugin is the claude plugin: one instance serves the hook HTTP route and the tail
 // loop, so it holds every shared dependency (store, captured emit, injected clock/fs).
@@ -86,7 +86,7 @@ func (p *Plugin) Migrate(ctx context.Context, s *core.Store) error {
 	if err := p.store.migrate(ctx); err != nil {
 		return err
 	}
-	live.Store(p)
+	live.Set(p)
 	return nil
 }
 
@@ -151,7 +151,7 @@ func (p *Plugin) doEmit(ctx context.Context, e core.Envelope) {
 
 // QuerySessions returns sessions optionally filtered by host and issue number.
 func QuerySessions(ctx context.Context, host *string, issue *int) []SessionRow {
-	p := live.Load()
+	p := live.Get()
 	if p == nil || p.store == nil {
 		return nil
 	}
@@ -161,7 +161,7 @@ func QuerySessions(ctx context.Context, host *string, issue *int) []SessionRow {
 
 // QuerySession returns one session by id, or nil.
 func QuerySession(ctx context.Context, sid string) *SessionRow {
-	p := live.Load()
+	p := live.Get()
 	if p == nil || p.store == nil {
 		return nil
 	}
@@ -171,7 +171,7 @@ func QuerySession(ctx context.Context, sid string) *SessionRow {
 
 // QueryInstances returns the ClaudeInstance projection (rows with a pane).
 func QueryInstances(ctx context.Context, host *string) []SessionRow {
-	p := live.Load()
+	p := live.Get()
 	if p == nil || p.store == nil {
 		return nil
 	}
