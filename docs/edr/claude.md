@@ -33,6 +33,13 @@ Read off the live box, not from docs:
 
 ---
 
+> **Implementation note (tail mechanism):** the transcript tail is a **periodic poll scan** of
+> `projectsDir` (default every `scanIntervalSeconds`), **not** an fsnotify watcher. fsnotify would add a
+> new module dependency for no AC-visible gain: every claude AC drives the tail by an explicit "scan
+> once" step, and the backstop only needs to heal within one interval, not sub-file-flush. A poll scan
+> keeps the plugin dependency-free and the byte-offset cursor (below) makes each scan resume-cheap. The
+> two-channel design (push hook + pull tail) is unchanged; only the pull trigger is a ticker, not inotify.
+
 ## Decision: event source = **both** (hooks primary, transcript tail secondary)
 
 Same shape as the github plugin's "webhooks primary, reconcile backstop": a **push** channel for
@@ -136,19 +143,31 @@ a new transcript field is dropped by default, not leaked. **AC-CLAUDE-PRIVACY** 
 dump the db after a session with prompts/tool calls and assert **no prompt/response/tool_input bytes
 are present**.
 
-## Install story — hook registration is optional, idempotent
+## Install story — hook registration is OPT-IN, idempotent (owner decision C1)
 
 Because the **tail is the correctness floor**, the hook is a latency/pane/​input enhancement, never a
 correctness dependency — a box that never installs the hook still gets every session via the tail
-(minus live-`input` state and `pane`). Registration:
+(minus live-`input` state and `pane`). So hook install is **opt-in, default off**:
 
-- **`supergraph install` extends to merge the claude hook block into `~/.claude/settings.json`**
-  (a `cmd/` delta, counted separately like github's CLI, **not** in the plugin LOC budget). The merge is
-  **additive + idempotent**: it appends one `command` entry (`supergraph claude-hook`, a thin stdin→POST
-  forwarder) per event array, **deduped by command string** — running it twice adds nothing (the
-  existing `settings.json` already holds many hook arrays; we never clobber them). **AC-CLAUDE-INSTALL-IDEMPOTENT**.
-- **Documented one-liner fallback** (for users who hand-edit): a `settings.json` snippet in the plugin
-  README wiring the 7 events to `curl -s -XPOST 127.0.0.1:7788/plugins/claude/hook -d @-`.
+- **Bare `supergraph install` never writes a settings file.** It **PRINTS the exact hook JSON block**
+  (the 7 lifecycle events, each wiring a `supergraph claude-hook` command) to stdout for the user to
+  paste into their own `~/.claude/settings.json`. This is the safe default: we do not touch a user's
+  settings unless asked.
+- **`supergraph install --install-hook --settings <path>`** opts in to writing: it merges the block
+  into the `--settings <path>` file (default `~/.claude/settings.json`; tests pass a temp path so the
+  real one is never touched). The merge is **additive + idempotent**: it appends one `command` entry
+  (`supergraph claude-hook`, a thin stdin→POST forwarder) per event array, **deduped by command
+  string** — running it twice adds nothing, and pre-existing unrelated hooks are never clobbered.
+  **AC-CLAUDE-INSTALL-IDEMPOTENT**.
+- **Hook auth (AC-CLAUDE-HOOK-AUTH):** the `/plugins/claude/hook` route sits behind **core's own
+  bearer-auth middleware**, which wraps every route when `listen` is non-loopback
+  (`server.New`/`core.ListenIsLoopback`). On such an instance a hook POST without/with a wrong Bearer
+  is rejected **by core, before the claude handler runs** — 401, no envelope, no row. The printed/merged
+  hook command therefore **includes the box's configured token** (`-H "Authorization: Bearer <token>"`)
+  so the local forwarder authenticates. On a loopback-only box no token is needed (core leaves loopback
+  open), matching the zero-config local case.
+- **Settings-reload latency gap:** a freshly-merged hook starts firing only after Claude Code reloads
+  its settings — another reason the tail, not the hook, is the correctness floor.
 - **Uninstall** removes only entries whose command matches ours.
 
 ## SQLite state (add-only, `IF NOT EXISTS`)
@@ -161,44 +180,62 @@ correctness dependency — a box that never installs the hook still gets every s
 
 ```graphql
 extend type Query {
-  claudeSessions(hostId: String): [ClaudeSession!]!
+  claudeSessions(hostId: String, issueNumber: Int): [ClaudeSession!]!
   claudeSession(sessionId: String!): ClaudeSession
+  claudeInstances(hostId: String): [ClaudeInstance!]!
 }
-extend type Subscription { claudeSessionUpdated(hostId: String): ClaudeSession! }
+extend type Subscription { claudeSessionUpdated(hostId: String): ClaudeEvent! }
 
 type ClaudeSession { hostId: String!, sessionId: String!, cwd: String!, gitBranch: String,
   issueNumber: Int, model: String, state: String!, lastTool: String, toolCalls: Int!,
-  prNumber: Int, prUrl: String, lastEventAt: Time!, staleSince: Time }
+  prNumber: Int, prUrl: String, startedAt: Time!, lastEventAt: Time!, staleSince: Time }
 type ClaudeInstance { hostId: String!, pane: String!, pid: Int!, session: ClaudeSession!, staleSince: Time }
+# ClaudeEvent mirrors core.Envelope (Payload flattened to a string), matching TemplateEvent/GithubEvent
+# so the subscription resolver stays a plain envelope→model mapping — and so AC-CLAUDE-PRIVACY can read
+# the emitted payload straight off the socket and assert it carries no prompt/response/tool_input bytes.
+type ClaudeEvent { ts: Time!, type: String!, v: Int!, key: String!, payload: String! }
 ```
-Types keep the `Claude*` prefix (no upstream to match, PRD §6). `touching(issueNumber)` (core) fans
-into `claudeSessions` filtered by `issueNumber` for S4.
+Types keep the `Claude*` prefix (no upstream to match, PRD §6). The `issueNumber` filter on
+`claudeSessions` is the claude half of S4 (**AC-CLAUDE-S4-HALF**); the umbrella `touching(issueNumber)`
+join (core, over github+claude, with the absent-source `staleSince` marker) stays PRD-`@pending`.
+**Deviations from the first sketch** (kept minimal, both to serve the sharpened ACs and reuse the proven
+template/github patterns): the subscription returns a raw `ClaudeEvent` envelope (not `ClaudeSession`)
+so the privacy AC can inspect the emitted payload; `claudeInstances` and the `issueNumber` filter are
+added for the PANE and S4-half ACs; `startedAt` is surfaced.
 
 ## Config keys `[plugins.claude]`
 
-`hostId` (else hostname), `projectsDir` (default `~/.claude/projects`), `stateThresholdSeconds`
-(stale lag, default 300), `pidLiveness` (bool, default true), `installHook` (bool — whether
-`supergraph install` writes the settings.json block, default true), `settingsPath`
-(default `~/.claude/settings.json`, test override), `projectsDir` override drives `@local` tests.
+`hostId` (else hostname), `projectsDir` (default `~/.claude/projects`), `pidLiveness` (bool, default
+true), `scanIntervalSeconds` (tail poll cadence, default 5), `settingsPath` (default
+`~/.claude/settings.json`, test override), `projectsDir` override drives `@local` tests. Stale-lag is
+core's global `lagThresholdSeconds` (the plugin does not duplicate it); the plugin's own liveness signal
+is the pid-liveness sweep. Hook install is a `supergraph install --install-hook` CLI flag (owner
+decision C1, default off), **not** a plugin config key — the plugin never writes settings itself.
 
 ## LOC budget (prod, cap **700**; tests excluded)
 
 Table shows target **Actual** LOC (EDR strip formula: non-comment, non-blank). CLI hook-install delta
 lives in `cmd/supergraph/` (~50) and is counted separately, like github's.
 
-| File (`plugins/claude/`) | Target | Responsibility |
-|---|---:|---|
-| `claude.go` | 110 | wiring: `Register`/`New`/`Name`/`Migrate`/`Start`/`HTTPRoutes`/`CursorReporter`/config |
-| `keys.go` | 70 | key grammar (`session:`/`instance:`) + event→key + `issueNumber` from branch |
-| `store.go` | 150 | SQLite `claude_sessions`: upsert, get, list, `issueNumber` filter, stale-scan, pid-liveness |
-| `hook.go` | 110 | `HTTPRoutes` `/hook`: parse hook payload → `reducer` → emit; pane/input path |
-| `reducer.go` | 100 | ported state machine (Start/Prompt/Pre/Post/Notification/Stop/End) shared by hook + tail |
-| `tail.go` | 120 | fsnotify `projectsDir` watcher + JSONL parse + byte-offset cursor + backfill + enrich |
-| `redact.go` | 30 | whitelist projection: build the stored row, drop prompt/response/tool_input bodies |
-| **Total** | **690** | cap **700**; CLI delta (~50) counted separately |
+| File (`plugins/claude/`) | Target | **Actual** | Responsibility |
+|---|---:|---:|---|
+| `claude.go` | 110 | **153** | wiring: `Register`/`New`/`Name`/`Migrate`/`Start`/`HTTPRoutes`/`CursorReporter`/config + query funcs |
+| `keys.go` | 70 | **29** | key grammar (`session:`/`instance:`) + `issueNumber` from branch + PR# from URL |
+| `store.go` | 150 | **224** | SQLite `claude_sessions`+`claude_folds`: fold/dedup upsert, enrichment COALESCE, get/list/instances, stale-scan |
+| `hook.go` | 110 | **62** | `HTTPRoutes` `/hook`: parse+validate payload → `reducer` → emit; pane/input path |
+| `reducer.go` | 100 | **34** | ported state machine (Start/Prompt/Pre/Post/Notification/Stop/End) shared by hook + tail |
+| `tail.go` | 120 | **99** | poll-scan `projectsDir` (ticker) + JSONL parse + byte-offset cursor + backfill + enrich + pid-liveness sweep |
+| `redact.go` | 30 | **76** | whitelist projection: hook + transcript record → body-free foldInput/enrichment |
+| **Total** | **690** | **677** | cap **700** (measured `make loc-claude`); CLI delta counted separately |
+
+CLI delta (`cmd/supergraph/install.go`, counted separately like github's): **150** actual — it holds the
+opt-in `install` (print-block + idempotent `--install-hook` merge) **and** the `claude-hook` stdin→POST
+forwarder, more than the ~50 first sketched because both the merge and the forwarder live there.
 
 - **AC-CLAUDE-LOC** guards it: a CI step counts non-comment, non-blank prod lines under
-  `plugins/claude` excluding `*_test.go` and fails > 700 (same `sed`/`wc` formula as `make loc-github`).
+  `plugins/claude` excluding `*_test.go` and fails > **720** (same `sed`/`wc` formula as `make
+  loc-github`). Measured total **677**; the guard is set to measured + 5% rounded up to a multiple of 10
+  (**720**) per the owner rule — the 700 in the table above is the original estimate, not the guard.
 
 ## Failure modes
 
@@ -222,19 +259,27 @@ tmux-session round-trip.
 **PRD ids claimed (claude scope):**
 - **F1** — a claude event is ingest-to-queryable p95 < 1 s (hook POST → query), over 20 samples.
 - **F5** — the claude plugin panicking shows `stale` while `_health` + tmux/github keep answering.
-- **S4** — a query for issue #N returns ≥ 1 `ClaudeSession` row, source-tagged; an absent source shows
-  a `staleSince` marker, never omission.
+- **S4 (claude half only)** — **AC-CLAUDE-S4-HALF**: a `claudeSessions` query filtered by `issueNumber`
+  returns ≥ 1 source-tagged `ClaudeSession` row. The umbrella S4 (join over github+claude, absent-source
+  `staleSince` marker) stays PRD-`@pending` until the `touching` resolver lands.
+
+**Deferred (owner decision C3):** subagent / background (`isSidechain`, `sessionKind:bg`) sessions are
+out of scope for v1 — the tail records only top-level sessions; a `@pending` AC will cover them later.
 
 **Plugin ACs `@AC-CLAUDE-*`:**
 `HOOK-INGEST` (a SessionStart→UserPromptSubmit→PreToolUse→Stop hook sequence folds `idle→working→idle`,
-queryable) · `STATE-MACHINE` (`Notification` permission→`input`; the `"waiting for your input"` nag
+queryable) · `HOOK-AUTH` (on a non-loopback token-configured instance a hook POST without/with a wrong
+Bearer is 401 via core middleware — no row, no envelope; the correct token passes) · `HOOK-SCHEMA` (an
+unknown `hook_event_name` or a non-numeric `issue_number` → 400, nothing stored) · `STATE-MACHINE`
+(`Notification` permission→`input`; the `"waiting for your input"` nag
 stays `idle`; `Stop`→`idle`) · `PANE` (`TMUX_PANE` at hook time builds a `ClaudeInstance{pane,pid}`
 joining to a `TmuxPane`) · `ISSUE-JOIN` (`issueNumber` from `gitBranch` + confirmed by `pr-link`, drives
 S4) · `TAIL-BACKFILL` (a session with **no** hook events is discovered by the transcript tail within one
 scan) · `TAIL-ENRICH` (the tail adds `gitBranch`/`model`/`prNumber`/`prUrl` the hook lacks) · `STALE`
 (negative control: a session whose `pid` is dead shows `staleSince` with no `SessionEnd`) · `PRIVACY`
-(negative control: after a session with prompts + tool calls, the db holds **no** prompt/response/
-tool_input bytes) · `INSTALL-IDEMPOTENT` (the settings.json hook merge runs twice → no duplicate hook
+(negative control: after a session with prompts + tool calls, **none** of the db, the emitted envelopes
+observed on a live `claudeSessionUpdated` subscription, or the `claudeSession` GraphQL result hold any
+prompt/response/tool_input bytes) · `INSTALL-IDEMPOTENT` (the settings.json hook merge runs twice → no duplicate hook
 entries, existing hooks untouched) · `DEDUP` (the same transition via hook **and** tail → one row, no
 double-count) · `CURSOR` (the per-transcript byte offset persists across restart and resumes) ·
 `ZEROCORE` (`git diff --stat core/` = 0) · `LOC` (prod LOC ≤ 700).

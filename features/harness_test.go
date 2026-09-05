@@ -79,6 +79,8 @@ type cfgOpts struct {
 	lag              float64
 	templateInterval int
 	templatePanic    bool
+	claudePanic      bool
+	nonLoopback      bool // bind 0.0.0.0 + require a bearer token (AC-CLAUDE-HOOK-AUTH)
 }
 
 // world is one scenario's mutable state. A fresh world is created per scenario in
@@ -138,6 +140,20 @@ type world struct {
 
 	// service scenarios (AC-CORE-7a/7b / -14, gated by FEATURES_SERVICE)
 	svc bool
+
+	// claude plugin scenarios
+	claudeProjectsDir  string
+	claudeSettingsPath string
+	token              string   // bearer token for a non-loopback instance (AC-CLAUDE-HOOK-AUTH)
+	cfgListen          string   // server bind address (may be non-loopback); w.listen stays the client addr
+	claudeFrames       []string // raw subscription frames captured (AC-CLAUDE-PRIVACY)
+	lastStatus         int
+	dedupTS            string
+	s8Path             string
+	s8Offset           int64
+	lastSessions       []map[string]any
+	settingsOrig       []byte
+	p95Store           time.Duration
 }
 
 func (w *world) init() error {
@@ -148,6 +164,12 @@ func (w *world) init() error {
 	w.dataDir = dir
 	w.cfgPath = filepath.Join(dir, "config.toml")
 	w.listen = freePort()
+	w.cfgListen = w.listen
+	w.claudeProjectsDir = filepath.Join(dir, "projects")
+	w.claudeSettingsPath = filepath.Join(dir, "settings.json")
+	if err := os.MkdirAll(w.claudeProjectsDir, 0o755); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -188,16 +210,33 @@ func (w *world) writeConfig(o cfgOpts) error {
 	if !o.omitHostID {
 		fmt.Fprintf(&b, "hostId = %q\n", "test")
 	}
-	fmt.Fprintf(&b, "listen = %q\n", w.listen)
+	if o.nonLoopback {
+		// Bind 0.0.0.0 so core's bearer middleware engages; the client still talks to
+		// 127.0.0.1 (covered by the 0.0.0.0 bind).
+		_, port, _ := net.SplitHostPort(w.listen)
+		w.cfgListen = "0.0.0.0:" + port
+		w.token = "good-token"
+	}
+	fmt.Fprintf(&b, "listen = %q\n", w.cfgListen)
 	fmt.Fprintf(&b, "dataDir = %q\n", w.dataDir)
 	if o.lag > 0 {
 		fmt.Fprintf(&b, "lagThresholdSeconds = %f\n", o.lag)
+	}
+	if w.token != "" {
+		fmt.Fprintf(&b, "[tokens]\nlocal = %q\n", w.token)
 	}
 	b.WriteString("[plugins.template]\n")
 	if o.templateInterval > 0 {
 		fmt.Fprintf(&b, "intervalSeconds = %d\n", o.templateInterval)
 	}
 	if o.templatePanic {
+		b.WriteString("panic = true\n")
+	}
+	b.WriteString("[plugins.claude]\n")
+	fmt.Fprintf(&b, "projectsDir = %q\n", w.claudeProjectsDir)
+	fmt.Fprintf(&b, "settingsPath = %q\n", w.claudeSettingsPath)
+	b.WriteString("scanIntervalSeconds = 1\n")
+	if o.claudePanic {
 		b.WriteString("panic = true\n")
 	}
 	return os.WriteFile(w.cfgPath, []byte(b.String()), 0o644)
@@ -242,7 +281,11 @@ func (w *world) waitHealth(d time.Duration) error {
 		if w.serve != nil && w.serve.exited() {
 			return fmt.Errorf("serve exited early: %s", w.serve.stderr.String())
 		}
-		resp, err := client.Get("http://" + w.listen + "/health")
+		req, _ := http.NewRequest(http.MethodGet, "http://"+w.listen+"/health", nil)
+		if w.token != "" {
+			req.Header.Set("Authorization", "Bearer "+w.token)
+		}
+		resp, err := client.Do(req)
 		if err == nil {
 			body, _ := io.ReadAll(resp.Body)
 			resp.Body.Close()
@@ -321,7 +364,11 @@ func (w *world) runCLI(args ...string) {
 
 func (w *world) getHealth() ([]map[string]any, []byte, error) {
 	client := http.Client{Timeout: 2 * time.Second}
-	resp, err := client.Get("http://" + w.listen + "/health")
+	req, _ := http.NewRequest(http.MethodGet, "http://"+w.listen+"/health", nil)
+	if w.token != "" {
+		req.Header.Set("Authorization", "Bearer "+w.token)
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, nil, err
 	}

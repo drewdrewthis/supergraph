@@ -149,6 +149,9 @@ func InitializeScenario(sc *godog.ScenarioContext) {
 
 	// --- AC-CORE-7a/7b / -14 (service, gated by FEATURES_SERVICE) ---
 	registerServiceSteps(sc, w)
+
+	// --- claude plugin (@claude) ---
+	registerClaudeSteps(sc, w)
 }
 
 // ---------- shared ----------
@@ -844,17 +847,21 @@ func (w *world) ac4Induce() error {
 }
 
 func (w *world) ac4WaitStale() error {
-	deadline := time.Now().Add(6 * time.Second)
+	// Shared by the template AC-CORE-4 and the claude @F5 scenarios: wait until the
+	// induced-panic plugin (whichever was armed) reaches stale. fakeok never panics.
+	deadline := time.Now().Add(8 * time.Second)
 	for time.Now().Before(deadline) {
 		rows, _, err := w.getHealth()
 		if err == nil {
-			if r := findRow(rows, "template"); r != nil && r["state"] == "stale" {
-				return nil
+			for _, name := range []string{"template", "claude"} {
+				if r := findRow(rows, name); r != nil && r["state"] == "stale" {
+					return nil
+				}
 			}
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	return fmt.Errorf("template did not reach stale after induced panic")
+	return fmt.Errorf("no plugin reached stale after induced panic")
 }
 
 func (w *world) ac4TemplateStale() error {

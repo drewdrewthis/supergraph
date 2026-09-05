@@ -1,0 +1,55 @@
+# claude plugin's GraphQL contribution (the S5 zero-core-edit seam): typed session
+# and instance queries plus a raw-envelope subscription. Adding these files (plus the
+# blank import in graph/plugins_import.go) is the whole seam — no edit under core/.
+
+extend type Query {
+  # claudeSessions lists sessions, optionally by host and/or issue number. The
+  # issueNumber filter is the claude half of S4 (AC-CLAUDE-S4-HALF).
+  claudeSessions(hostId: String, issueNumber: Int): [ClaudeSession!]!
+  claudeSession(sessionId: String!): ClaudeSession
+  claudeInstances(hostId: String): [ClaudeInstance!]!
+}
+
+extend type Subscription {
+  # claudeSessionUpdated fans this plugin's own envelopes (Source "claude") to core's
+  # websocket. It returns the raw ClaudeEvent envelope so AC-CLAUDE-PRIVACY can assert
+  # the emitted payload carries no prompt/response/tool_input bytes.
+  claudeSessionUpdated(hostId: String): ClaudeEvent!
+}
+
+type ClaudeSession {
+  hostId: String!
+  sessionId: String!
+  cwd: String!
+  gitBranch: String
+  issueNumber: Int
+  model: String
+  state: String!
+  lastTool: String
+  toolCalls: Int!
+  prNumber: Int
+  prUrl: String
+  startedAt: Time!
+  lastEventAt: Time!
+  staleSince: Time
+}
+
+# ClaudeInstance is the projection of sessions pinned to a tmux pane+pid; its pane is
+# the join key a TmuxPane row keys on.
+type ClaudeInstance {
+  hostId: String!
+  pane: String!
+  pid: Int!
+  session: ClaudeSession!
+  staleSince: Time
+}
+
+# ClaudeEvent mirrors core.Envelope (payload flattened to a string), matching the
+# TemplateEvent/GithubEvent shape so the subscription resolver is a plain mapping.
+type ClaudeEvent {
+  ts: Time!
+  type: String!
+  v: Int!
+  key: String!
+  payload: String!
+}
