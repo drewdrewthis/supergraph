@@ -1,0 +1,16 @@
+# peer plugin's GraphQL contribution (extend only — zero core diff). The data
+# fan-out (issues/slots/tmux rows across a box) rides the /plugins/peer/graphql
+# executor keyed by the origin's @host grammar; this field exposes only per-peer
+# liveness + last-seen, the source of the F8 "stale since T" view.
+extend type Query {
+  peers: [Peer!]!
+}
+
+type Peer {
+  hostId: String!
+  url: String!
+  lastSeenAt: Time
+  staleSince: Time
+  lagSeconds: Float!
+  mirroredKeys: Int!
+}

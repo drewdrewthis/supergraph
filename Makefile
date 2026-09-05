@@ -1,7 +1,7 @@
 # supergraph dev harness. `make dev` is the one-command bring-up (AC-CORE-15):
 # it builds, points every plugin db at a throwaway .dev/data dir (never the real
 # ~/.local/share), and runs the server in the foreground with the template plugin.
-.PHONY: build build-harness generate test features features-red features-pending features-github loc-github dev dev-check
+.PHONY: build build-harness generate test features features-red features-pending features-github loc-github features-peer loc-peer dev dev-check
 include mk/version.mk
 
 BIN := bin/supergraph
@@ -56,6 +56,26 @@ loc-github:
 	echo "plugins/github prod LOC: $$count"; \
 	if [ "$$count" -gt 1350 ]; then \
 		echo "loc-github: $$count LOC exceeds the 1350 budget" >&2; \
+		exit 1; \
+	fi
+
+# features-peer runs only the peer plugin's @local scenarios (AC-PEER-*),
+# excluding @pending (@live) ones. The binary is built with -tags harness so the
+# harness-only fakeremote source executor is compiled into the second process.
+features-peer:
+	FEATURES_TAGS="@peer && ~@pending" go test ./features/ -run TestFeatures -v
+
+# loc-peer guards the plugins/peer/** prod LOC budget (docs/edr/peer.md): prod code
+# only (no _test.go), comments/blank lines stripped, fails when the total exceeds
+# 700 (AC-PEER-LOC). Same portable formula as loc-github — POSIX [[:space:]] (not
+# \s, which BSD/macOS sed does not honor). There is no internal/fake dir to exclude:
+# the seeded remote lives in plugins/fakeremote (a separate, harness-only package).
+loc-peer:
+	@files=$$(find plugins/peer -name '*.go' ! -name '*_test.go' 2>/dev/null); \
+	if [ -z "$$files" ]; then count=0; else count=$$(echo "$$files" | xargs sed -E '/^[[:space:]]*\/\//d;/^[[:space:]]*$$/d' | wc -l | tr -d ' '); fi; \
+	echo "plugins/peer prod LOC: $$count"; \
+	if [ "$$count" -gt 690 ]; then \
+		echo "loc-peer: $$count LOC exceeds the 690 budget" >&2; \
 		exit 1; \
 	fi
 

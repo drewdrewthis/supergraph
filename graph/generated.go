@@ -54,8 +54,18 @@ type ComplexityRoot struct {
 		State       func(childComplexity int) int
 	}
 
+	Peer struct {
+		HostID       func(childComplexity int) int
+		LagSeconds   func(childComplexity int) int
+		LastSeenAt   func(childComplexity int) int
+		MirroredKeys func(childComplexity int) int
+		StaleSince   func(childComplexity int) int
+		URL          func(childComplexity int) int
+	}
+
 	Query struct {
 		Health       func(childComplexity int) int
+		Peers        func(childComplexity int) int
 		Ping         func(childComplexity int) int
 		TemplatePing func(childComplexity int) int
 	}
@@ -82,6 +92,7 @@ type ComplexityRoot struct {
 type QueryResolver interface {
 	Health(ctx context.Context) ([]core.HealthStatus, error)
 	Ping(ctx context.Context) (string, error)
+	Peers(ctx context.Context) ([]model.Peer, error)
 	TemplatePing(ctx context.Context) (string, error)
 }
 type SubscriptionResolver interface {
@@ -170,6 +181,43 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Health.State(childComplexity), true
 
+	case "Peer.hostId":
+		if e.ComplexityRoot.Peer.HostID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Peer.HostID(childComplexity), true
+	case "Peer.lagSeconds":
+		if e.ComplexityRoot.Peer.LagSeconds == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Peer.LagSeconds(childComplexity), true
+	case "Peer.lastSeenAt":
+		if e.ComplexityRoot.Peer.LastSeenAt == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Peer.LastSeenAt(childComplexity), true
+	case "Peer.mirroredKeys":
+		if e.ComplexityRoot.Peer.MirroredKeys == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Peer.MirroredKeys(childComplexity), true
+	case "Peer.staleSince":
+		if e.ComplexityRoot.Peer.StaleSince == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Peer.StaleSince(childComplexity), true
+	case "Peer.url":
+		if e.ComplexityRoot.Peer.URL == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Peer.URL(childComplexity), true
+
 	case "Query.health":
 		if e.ComplexityRoot.Query.Health == nil {
 			break
@@ -177,6 +225,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Query.Health(childComplexity), true
 
+	case "Query.peers":
+		if e.ComplexityRoot.Query.Peers == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Query.Peers(childComplexity), true
 	case "Query.ping":
 		if e.ComplexityRoot.Query.Ping == nil {
 			break
@@ -379,6 +433,23 @@ type GithubEvent {
   payload: String!
 }
 `, BuiltIn: false},
+	{Name: "../plugins/peer/schema/peer.graphqls", Input: `# peer plugin's GraphQL contribution (extend only — zero core diff). The data
+# fan-out (issues/slots/tmux rows across a box) rides the /plugins/peer/graphql
+# executor keyed by the origin's @host grammar; this field exposes only per-peer
+# liveness + last-seen, the source of the F8 "stale since T" view.
+extend type Query {
+  peers: [Peer!]!
+}
+
+type Peer {
+  hostId: String!
+  url: String!
+  lastSeenAt: Time
+  staleSince: Time
+  lagSeconds: Float!
+  mirroredKeys: Int!
+}
+`, BuiltIn: false},
 	{Name: "../plugins/template/schema/template.graphqls", Input: `# template plugin's GraphQL contribution. Adding this file (plus the blank import
 # in graph/plugins_import.go) is the whole S5 zero-core-edit seam in action.
 extend type Query {
@@ -436,6 +507,24 @@ func (ec *executionContext) childFields_Health(ctx context.Context, field graphq
 		return ec.fieldContext_Health_state(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type Health", field.Name)
+}
+
+func (ec *executionContext) childFields_Peer(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "hostId":
+		return ec.fieldContext_Peer_hostId(ctx, field)
+	case "url":
+		return ec.fieldContext_Peer_url(ctx, field)
+	case "lastSeenAt":
+		return ec.fieldContext_Peer_lastSeenAt(ctx, field)
+	case "staleSince":
+		return ec.fieldContext_Peer_staleSince(ctx, field)
+	case "lagSeconds":
+		return ec.fieldContext_Peer_lagSeconds(ctx, field)
+	case "mirroredKeys":
+		return ec.fieldContext_Peer_mirroredKeys(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type Peer", field.Name)
 }
 
 func (ec *executionContext) childFields_TemplateEvent(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -888,6 +977,144 @@ func (ec *executionContext) fieldContext_Health_state(_ context.Context, field g
 	return graphql.NewScalarFieldContext("Health", field, false, false, errors.New("field of type HealthState does not have child fields"))
 }
 
+func (ec *executionContext) _Peer_hostId(ctx context.Context, field graphql.CollectedField, obj *model.Peer) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Peer_hostId(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.HostID, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Peer_hostId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("Peer", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _Peer_url(ctx context.Context, field graphql.CollectedField, obj *model.Peer) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Peer_url(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.URL, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Peer_url(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("Peer", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _Peer_lastSeenAt(ctx context.Context, field graphql.CollectedField, obj *model.Peer) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Peer_lastSeenAt(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.LastSeenAt, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *time.Time) graphql.Marshaler {
+			return ec.marshalOTime2ᚖtimeᚐTime(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_Peer_lastSeenAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("Peer", field, false, false, errors.New("field of type Time does not have child fields"))
+}
+
+func (ec *executionContext) _Peer_staleSince(ctx context.Context, field graphql.CollectedField, obj *model.Peer) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Peer_staleSince(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.StaleSince, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *time.Time) graphql.Marshaler {
+			return ec.marshalOTime2ᚖtimeᚐTime(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_Peer_staleSince(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("Peer", field, false, false, errors.New("field of type Time does not have child fields"))
+}
+
+func (ec *executionContext) _Peer_lagSeconds(ctx context.Context, field graphql.CollectedField, obj *model.Peer) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Peer_lagSeconds(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.LagSeconds, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v float64) graphql.Marshaler {
+			return ec.marshalNFloat2float64(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Peer_lagSeconds(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("Peer", field, false, false, errors.New("field of type Float does not have child fields"))
+}
+
+func (ec *executionContext) _Peer_mirroredKeys(ctx context.Context, field graphql.CollectedField, obj *model.Peer) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Peer_mirroredKeys(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.MirroredKeys, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Peer_mirroredKeys(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("Peer", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
 func (ec *executionContext) _Query_health(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -941,6 +1168,38 @@ func (ec *executionContext) _Query_ping(ctx context.Context, field graphql.Colle
 }
 func (ec *executionContext) fieldContext_Query_ping(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("Query", field, true, true, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _Query_peers(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Query_peers(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.Query().Peers(ctx)
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []model.Peer) graphql.Marshaler {
+			return ec.marshalNPeer2ᚕgithubᚗcomᚋdrewdrewthisᚋsupergraphᚋgraphᚋmodelᚐPeerᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Query_peers(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_Peer(ctx, field)
+		},
+	}
+	return fc, nil
 }
 
 func (ec *executionContext) _Query_templatePing(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
@@ -2448,6 +2707,69 @@ func (ec *executionContext) _Health(ctx context.Context, sel ast.SelectionSet, o
 	return out
 }
 
+var peerImplementors = []string{"Peer"}
+
+func (ec *executionContext) _Peer(ctx context.Context, sel ast.SelectionSet, obj *model.Peer) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, peerImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("Peer")
+		case "hostId":
+			out.Values[i] = ec._Peer_hostId(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "url":
+			out.Values[i] = ec._Peer_url(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "lastSeenAt":
+			out.Values[i] = ec._Peer_lastSeenAt(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "staleSince":
+			out.Values[i] = ec._Peer_staleSince(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "lagSeconds":
+			out.Values[i] = ec._Peer_lagSeconds(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "mirroredKeys":
+			out.Values[i] = ec._Peer_mirroredKeys(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
 var queryImplementors = []string{"Query"}
 
 func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) graphql.Marshaler {
@@ -2500,6 +2822,28 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 					}
 				}()
 				res = ec._Query_ping(ctx, field)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "peers":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_peers(ctx, field)
 				if res == graphql.Null {
 					atomic.AddUint32(&fs.Invalids, 1)
 				}
@@ -3130,6 +3474,26 @@ func (ec *executionContext) marshalNInt2int(ctx context.Context, sel ast.Selecti
 		}
 	}
 	return res
+}
+
+func (ec *executionContext) marshalNPeer2githubᚗcomᚋdrewdrewthisᚋsupergraphᚋgraphᚋmodelᚐPeer(ctx context.Context, sel ast.SelectionSet, v model.Peer) graphql.Marshaler {
+	return ec._Peer(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNPeer2ᚕgithubᚗcomᚋdrewdrewthisᚋsupergraphᚋgraphᚋmodelᚐPeerᚄ(ctx context.Context, sel ast.SelectionSet, v []model.Peer) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNPeer2githubᚗcomᚋdrewdrewthisᚋsupergraphᚋgraphᚋmodelᚐPeer(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
 }
 
 func (ec *executionContext) unmarshalNString2string(ctx context.Context, v any) (string, error) {

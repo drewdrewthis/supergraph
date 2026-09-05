@@ -8,6 +8,8 @@ package graph
 import (
 	// github is the event-invalidated caching proxy plugin (S5, EDR docs/edr/github.md).
 	_ "github.com/drewdrewthis/supergraph/plugins/github"
+	// peer is the multi-box federation plugin (EDR docs/edr/peer.md).
+	_ "github.com/drewdrewthis/supergraph/plugins/peer"
 	// template is the reference plugin (PRD §6 template plugin).
 	_ "github.com/drewdrewthis/supergraph/plugins/template"
 )

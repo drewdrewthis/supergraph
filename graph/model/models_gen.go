@@ -14,6 +14,15 @@ type GithubEvent struct {
 	Payload string    `json:"payload"`
 }
 
+type Peer struct {
+	HostID       string     `json:"hostId"`
+	URL          string     `json:"url"`
+	LastSeenAt   *time.Time `json:"lastSeenAt,omitempty"`
+	StaleSince   *time.Time `json:"staleSince,omitempty"`
+	LagSeconds   float64    `json:"lagSeconds"`
+	MirroredKeys int        `json:"mirroredKeys"`
+}
+
 type Query struct {
 }
 
