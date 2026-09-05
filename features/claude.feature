@@ -191,10 +191,10 @@ Feature: Claude plugin — session state from lifecycle hooks + transcript tail
     Then no duplicate `supergraph claude-hook` entry is added to any event array
 
   @claude @local @AC-CLAUDE-LOC
-  Scenario: Production LOC for the claude plugin stays within the 790-line budget
+  Scenario: Production LOC for the claude plugin stays within the 750-line budget
     Given the claude plugin source under `plugins/claude`
     When `make loc-claude` counts non-comment, non-blank prod lines excluding tests
-    Then the count is 790 or fewer
+    Then the count is 750 or fewer
 
   @claude @local @AC-CLAUDE-ZEROCORE
   Scenario: The claude plugin compiles in without touching core
@@ -229,7 +229,7 @@ Feature: Claude plugin — session state from lifecycle hooks + transcript tail
   # AC-CLAUDE-STALE           → dead pid shows staleSince without a SessionEnd
   # AC-CLAUDE-PRIVACY         → prompt/response/tool_input bodies never persisted, emitted (WS), or served (GraphQL)
   # AC-CLAUDE-INSTALL-IDEMPOTENT → settings.json hook merge is additive + idempotent
-  # AC-CLAUDE-LOC             → prod LOC <= 790 (measured 745 + 5% headroom)
+  # AC-CLAUDE-LOC             → prod LOC <= 750 (measured 710 + 5% headroom; helpers moved to plugins/internal/pluginconfig)
   # AC-CLAUDE-ZEROCORE        → git diff --stat core/ = 0
 
   # <!-- ACs ready for ac-reviewer -->

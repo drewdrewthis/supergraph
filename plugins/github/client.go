@@ -9,6 +9,8 @@ import (
 	"log"
 	"net/http"
 	"time"
+
+	"github.com/drewdrewthis/supergraph/plugins/internal/pluginconfig"
 )
 
 // client.go is the plugin's shared GitHub HTTP + rate-limit layer: every REST and
@@ -116,7 +118,7 @@ func (p *Plugin) logGraphQLRate(ctx context.Context, data map[string]any) {
 	if !ok {
 		return
 	}
-	rem := toInt(rl["remaining"])
+	rem := pluginconfig.ToInt(rl["remaining"])
 	resetAt, _ := time.Parse(time.RFC3339, fmt.Sprint(rl["resetAt"]))
 	log.Printf("github: rate graphql remaining=%d resetAt=%s", rem, resetAt.Format(time.RFC3339))
 	p.floorPause(ctx, rem, resetAt, floorThresholdGQL)

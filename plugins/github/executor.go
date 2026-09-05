@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/drewdrewthis/supergraph/plugins/internal/pluginconfig"
 	"github.com/vektah/gqlparser/v2/ast"
 	"github.com/vektah/gqlparser/v2/parser"
 )
@@ -107,7 +108,7 @@ func (p *Plugin) handleGraphQL(w http.ResponseWriter, r *http.Request) {
 		Variables map[string]any `json:"variables"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "bad request", readErrStatus(err))
+		http.Error(w, "bad request", pluginconfig.ReadErrStatus(err))
 		return
 	}
 	ctx := r.Context()

@@ -94,7 +94,7 @@ func registerClaudeSteps(sc *godog.ScenarioContext, w *world) {
 	sc.Step(lit("no duplicate \x60supergraph claude-hook\x60 entry is added to any event array"), w.assertNoDuplicate)
 	sc.Step(lit("the claude plugin source under \x60plugins/claude\x60"), noop)
 	sc.Step(lit("\x60make loc-claude\x60 counts non-comment, non-blank prod lines excluding tests"), w.runLocClaude)
-	sc.Step(lit("the count is 790 or fewer"), w.assertLocOK)
+	sc.Step(lit("the count is 750 or fewer"), w.assertLocOK)
 	sc.Step(lit("the claude plugin package and its blank import in graph/plugins_import.go"), noop)
 	sc.Step(lit("\x60git diff --stat core/\x60 is run after the claude plugin compiles in"), w.runGitDiffCore)
 	sc.Step(lit("it reports 0 core files changed"), w.assertNoCoreDiff)

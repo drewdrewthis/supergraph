@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/drewdrewthis/supergraph/core"
+	"github.com/drewdrewthis/supergraph/plugins/internal/pluginconfig"
 )
 
 func init() { core.Register("peer", New) }
@@ -66,15 +67,15 @@ func New(cfg core.PluginConfig) (core.Plugin, error) {
 		hostID:         cfg.HostID,
 		staleThreshold: 30 * time.Second,
 		backoffMax:     60 * time.Second,
-		remotePlugin:   strOr(cfg.Raw, "remotePlugin", ""),
+		remotePlugin:   pluginconfig.Str(cfg.Raw, "remotePlugin", ""),
 	}
-	if n := numOr(cfg.Raw, "staleThresholdSeconds", 0); n > 0 {
+	if n := pluginconfig.Num(cfg.Raw, "staleThresholdSeconds", 0); n > 0 {
 		c.staleThreshold = time.Duration(n * float64(time.Second))
 	}
-	if n := numOr(cfg.Raw, "backoffMaxSeconds", 0); n > 0 {
+	if n := pluginconfig.Num(cfg.Raw, "backoffMaxSeconds", 0); n > 0 {
 		c.backoffMax = time.Duration(n * float64(time.Second))
 	}
-	if n := numOr(cfg.Raw, "mirrorTTLSeconds", 0); n > 0 {
+	if n := pluginconfig.Num(cfg.Raw, "mirrorTTLSeconds", 0); n > 0 {
 		c.mirrorTTL = time.Duration(n * float64(time.Second))
 	}
 	c.peers = parsePeers(cfg.Raw)
@@ -168,10 +169,6 @@ func (p *Plugin) peerByHost(host string) (peerCfg, bool) {
 	return peerCfg{}, false
 }
 
-// --- config coercion (toml decodes to string/int64/float64/bool/[]any/map) ---
-// TODO: strOr/numOr duplicate plugins/github/github.go's copies; a shared core
-// helper would fold them, but that is a core change (LOCKED) — left duplicated.
-
 func parsePeers(raw map[string]any) []peerCfg {
 	if raw == nil {
 		return nil
@@ -187,37 +184,13 @@ func parsePeers(raw map[string]any) []peerCfg {
 			continue
 		}
 		pr := peerCfg{
-			HostID: strOr(m, "hostId", ""),
-			URL:    strOr(m, "url", ""),
-			Token:  strOr(m, "token", ""),
+			HostID: pluginconfig.Str(m, "hostId", ""),
+			URL:    pluginconfig.Str(m, "url", ""),
+			Token:  pluginconfig.Str(m, "token", ""),
 		}
 		if pr.HostID != "" && pr.URL != "" {
 			out = append(out, pr)
 		}
 	}
 	return out
-}
-
-func strOr(raw map[string]any, k, def string) string {
-	if raw != nil {
-		if v, ok := raw[k].(string); ok && v != "" {
-			return v
-		}
-	}
-	return def
-}
-
-func numOr(raw map[string]any, k string, def float64) float64 {
-	if raw == nil {
-		return def
-	}
-	switch n := raw[k].(type) {
-	case float64:
-		return n
-	case int64:
-		return float64(n)
-	case int:
-		return float64(n)
-	}
-	return def
 }

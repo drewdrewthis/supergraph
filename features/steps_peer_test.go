@@ -100,7 +100,7 @@ func registerPeerSteps(sc *godog.ScenarioContext) {
 	sc.Step(lit("`git diff --stat origin/main -- core server` reports no files changed"), pw.thenZeroCoreDiff)
 	sc.Step(lit("no file under core/ imports a plugin package"), pw.thenNoCoreImports)
 	sc.Step(lit("the peer plugin source under `plugins/peer/`"), noop)
-	sc.Step(lit("the count is at most 700"), pw.thenLocUnder700)
+	sc.Step(lit("the count is at most 680"), pw.thenLocUnderCap)
 
 	registerPeerLiveSteps(sc)
 }
@@ -540,14 +540,14 @@ func (pw *peerWorld) thenNoCoreImports() error {
 
 var locCountRe = regexp.MustCompile(`prod LOC:\s*(\d+)`)
 
-func (pw *peerWorld) thenLocUnder700() error {
+func (pw *peerWorld) thenLocUnderCap() error {
 	m := locCountRe.FindStringSubmatch(pw.locOut)
 	if m == nil {
 		return fmt.Errorf("could not parse loc-peer output:\n%s", pw.locOut)
 	}
 	n, _ := strconv.Atoi(m[1])
-	if n > 700 {
-		return fmt.Errorf("peer prod LOC %d exceeds 700", n)
+	if n > 680 {
+		return fmt.Errorf("peer prod LOC %d exceeds 680", n)
 	}
 	return nil
 }

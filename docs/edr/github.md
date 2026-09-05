@@ -26,17 +26,18 @@ reconcile revalidation loop that heals every mutable kind (P1). Table shows **Ac
 LOC (EDR strip formula), not aspirational budgets.
 | Package/file (`plugins/github/`) | Actual | Responsibility |
 |---|---:|---|
-| `github.go` | 182 | plugin wiring: `Register`/`New`/`Name`/`Migrate`/`Start`/`HTTPRoutes`/`CursorReporter`/config |
+| `github.go` | 145 | plugin wiring: `Register`/`New`/`Name`/`Migrate`/`Start`/`HTTPRoutes`/`CursorReporter`/config |
 | `keys.go` | 185 | key grammar as a **data table** (`kindSpecs`): parse + object→key + event→key + REST path + typename + `safeName` (S1) |
-| `client.go` | 105 | shared GitHub HTTP + rate-limit layer: REST/GraphQL calls, auth, ratelog, floor-pause |
+| `client.go` | 106 | shared GitHub HTTP + rate-limit layer: REST/GraphQL calls, auth, ratelog, floor-pause |
 | `store.go` | 213 | SQLite `github_nodes`+`github_tags`+`github_hooks`+`github_deliveries`: upsert, get, purge, tag index, hooks, deliveries prune, non-pinned scan, pin |
 | `proxy.go` | 118 | read-through resolve: miss→fetch→store→serve; ETag/304; **singleflight (borrowed ~40)**; pin eval |
-| `webhook.go` | 62 | HMAC verify (1 MiB body cap, S2); event→key; purge; emit envelopes; delivery dedup |
-| `executor.go` | 254 | JSON-backed GraphQL executor + named-op loader + declared-key scoping (point/list) + list read path (U2) + body cap (S2) + parsed introspection allowlist (raw-query guard hardening) |
+| `webhook.go` | 63 | HMAC verify (1 MiB body cap, S2); event→key; purge; emit envelopes; delivery dedup |
+| `executor.go` | 255 | JSON-backed GraphQL executor + named-op loader + declared-key scoping (point/list) + list read path (U2) + body cap (S2) + parsed introspection allowlist (raw-query guard hardening) |
 | `ingest.go` | 116 | `gh webhook forward` supervisor (backoff) + redelivery + `/notifications` poll (flag) |
 | `reconcile.go` | 110 | discovery `/user/repos` + hook creation + since-cursor + revalidation (P1) + deliveries prune (S3) |
-| **Total** | **1345** | cap **1350**; CLI delta in `cmd/supergraph/` (~60) is counted separately, not in this budget |
+| **Total** | **1311** | cap **1350**; CLI delta in `cmd/supergraph/` (~60) is counted separately, not in this budget |
 - **AC-GH-LOC** guards it: a CI step (`make loc-github`) runs `find plugins/github -name '*.go' ! -name '*_test.go' -not -path '*/fakegh/*' | xargs sed -E '/^[[:space:]]*\/\//d;/^[[:space:]]*$/d' | wc -l` and fails > 1350 (POSIX `[[:space:]]`, portable across GNU/BSD sed).
+- −39 (1345→1311 measured): the `strOr`/`boolOr`/`intOr`/`toInt`/`readErrStatus` config helpers moved to `plugins/internal/pluginconfig`; cap held at **1350** (measured × 1.05 rounds above it and the cap never rises).
 
 ## Cache key = object id (full grammar)
 Every cached node and every purge target is one canonical key. `@<hostId>` suffix is **optional**,

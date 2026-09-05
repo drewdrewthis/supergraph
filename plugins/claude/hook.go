@@ -3,10 +3,11 @@ package claude
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"io"
 	"net/http"
 	"regexp"
+
+	"github.com/drewdrewthis/supergraph/plugins/internal/pluginconfig"
 )
 
 // maxHookBody caps an inbound hook POST. Claude Code hook payloads are small (a few
@@ -34,7 +35,7 @@ func (p *Plugin) handleHook(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxHookBody)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		http.Error(w, "bad body", readErrStatus(err))
+		http.Error(w, "bad body", pluginconfig.ReadErrStatus(err))
 		return
 	}
 	var hp hookPayload
@@ -80,17 +81,4 @@ func (p *Plugin) emitForFold(ctx context.Context, fi foldInput) {
 	if fi.pane != "" {
 		p.emit(ctx, "claude.instance.updated", instanceKey(fi.pane, p.hostID), map[string]any{"sid": fi.sid, "pane": fi.pane, "pid": fi.pid})
 	}
-}
-
-// readErrStatus maps a body read error to 413 when the MaxBytesReader cap tripped,
-// else 400 for an ordinary malformed body.
-//
-// TODO: identical to plugins/github/github.go's readErrStatus (and strOr/boolOr/intOr
-// in claude.go) — fold into a shared plugins/internal/pluginconfig on a follow-up.
-func readErrStatus(err error) int {
-	var mbe *http.MaxBytesError
-	if errors.As(err, &mbe) {
-		return http.StatusRequestEntityTooLarge
-	}
-	return http.StatusBadRequest
 }

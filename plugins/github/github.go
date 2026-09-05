@@ -7,7 +7,6 @@ package github
 
 import (
 	"context"
-	"errors"
 	"log"
 	"net/http"
 	"os"
@@ -15,17 +14,8 @@ import (
 	"time"
 
 	"github.com/drewdrewthis/supergraph/core"
+	"github.com/drewdrewthis/supergraph/plugins/internal/pluginconfig"
 )
-
-// readErrStatus maps a body read/decode error to 413 when a MaxBytesReader cap
-// tripped (S2), else 400 for an ordinary malformed body.
-func readErrStatus(err error) int {
-	var mbe *http.MaxBytesError
-	if errors.As(err, &mbe) {
-		return http.StatusRequestEntityTooLarge
-	}
-	return http.StatusBadRequest
-}
 
 func init() { core.Register("github", New) }
 
@@ -86,28 +76,28 @@ func New(cfg core.PluginConfig) (core.Plugin, error) {
 		},
 	}
 	raw := cfg.Raw
-	c.token = strOr(raw, "token", os.Getenv("GITHUB_TOKEN"))
-	c.baseURL = strOr(raw, "baseURL", c.baseURL)
-	c.graphqlURL = strOr(raw, "graphqlURL", c.graphqlURL)
-	c.ingress = strOr(raw, "ingress", c.ingress)
-	c.webhookSecret = strOr(raw, "webhookSecret", c.webhookSecret)
-	c.ghPath = strOr(raw, "ghPath", c.ghPath)
+	c.token = pluginconfig.Str(raw, "token", os.Getenv("GITHUB_TOKEN"))
+	c.baseURL = pluginconfig.Str(raw, "baseURL", c.baseURL)
+	c.graphqlURL = pluginconfig.Str(raw, "graphqlURL", c.graphqlURL)
+	c.ingress = pluginconfig.Str(raw, "ingress", c.ingress)
+	c.webhookSecret = pluginconfig.Str(raw, "webhookSecret", c.webhookSecret)
+	c.ghPath = pluginconfig.Str(raw, "ghPath", c.ghPath)
 	// EDR names this key tunnelURL (the box's externally reachable base under
 	// ingress=tunnel); selfURL stays accepted as an alias.
-	c.selfURL = strOr(raw, "tunnelURL", strOr(raw, "selfURL", c.selfURL))
-	c.notifications = boolOr(raw, "notifications", c.notifications)
-	if n := intOr(raw, "reconcileIntervalSeconds", 0); n > 0 {
+	c.selfURL = pluginconfig.Str(raw, "tunnelURL", pluginconfig.Str(raw, "selfURL", c.selfURL))
+	c.notifications = pluginconfig.Bool(raw, "notifications", c.notifications)
+	if n := pluginconfig.Int(raw, "reconcileIntervalSeconds", 0); n > 0 {
 		c.reconcileInterval = time.Duration(n) * time.Second
 	}
 	if pin, ok := subMap(raw, "pin"); ok {
-		c.pin.commits = boolOr(pin, "commits", c.pin.commits)
-		c.pin.releases = boolOr(pin, "releases", c.pin.releases)
-		c.pin.mergedPRsAfterDays = intOr(pin, "mergedPRsAfterDays", c.pin.mergedPRsAfterDays)
-		c.pin.closedIssuesAfterDays = intOr(pin, "closedIssuesAfterDays", c.pin.closedIssuesAfterDays)
+		c.pin.commits = pluginconfig.Bool(pin, "commits", c.pin.commits)
+		c.pin.releases = pluginconfig.Bool(pin, "releases", c.pin.releases)
+		c.pin.mergedPRsAfterDays = pluginconfig.Int(pin, "mergedPRsAfterDays", c.pin.mergedPRsAfterDays)
+		c.pin.closedIssuesAfterDays = pluginconfig.Int(pin, "closedIssuesAfterDays", c.pin.closedIssuesAfterDays)
 	}
 	if ttl, ok := subMap(raw, "ttl"); ok {
 		for kind, v := range ttl {
-			if n := toInt(v); n > 0 {
+			if n := pluginconfig.ToInt(v); n > 0 {
 				c.ttl[kind] = time.Duration(n) * time.Second
 			}
 		}
@@ -193,51 +183,10 @@ func sleepCtx(ctx context.Context, d time.Duration) {
 	}
 }
 
-// --- config coercion helpers (toml decodes to string/int64/float64/bool/map) ---
-
-func strOr(raw map[string]any, k, def string) string {
-	if raw != nil {
-		if v, ok := raw[k].(string); ok && v != "" {
-			return v
-		}
-	}
-	return def
-}
-
-func boolOr(raw map[string]any, k string, def bool) bool {
-	if raw != nil {
-		if v, ok := raw[k].(bool); ok {
-			return v
-		}
-	}
-	return def
-}
-
-func intOr(raw map[string]any, k string, def int) int {
-	if raw != nil {
-		if n := toInt(raw[k]); n != 0 {
-			return n
-		}
-	}
-	return def
-}
-
 func subMap(raw map[string]any, k string) (map[string]any, bool) {
 	if raw == nil {
 		return nil, false
 	}
 	m, ok := raw[k].(map[string]any)
 	return m, ok
-}
-
-func toInt(v any) int {
-	switch n := v.(type) {
-	case int:
-		return n
-	case int64:
-		return int(n)
-	case float64:
-		return int(n)
-	}
-	return 0
 }

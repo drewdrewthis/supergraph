@@ -130,7 +130,7 @@ Feature: tmux plugin — server-wide control-mode watcher over local SQLite
   Scenario: The tmux plugin stays within its LOC budget
     Given the tmux plugin source under `plugins/tmux/`
     When `make loc-tmux` counts non-comment non-blank lines of the non-test Go files
-    Then the count is at most 860
+    Then the count is at most 820
 
   # ---------- Cross-box (needs the peer plugin + a second box) ----------
 
@@ -156,5 +156,5 @@ Feature: tmux plugin — server-wide control-mode watcher over local SQLite
   # AC-TMUX-ISOLATION:      "F5 tmux half — keeps answering when sibling panics" -> Scenario: tmux keeps answering when a sibling plugin panics
   # AC-TMUX-CURSOR:         "Cursor persists across restart" -> Scenario: The reconcile cursor persists across a restart
   # AC-TMUX-ZEROCORE:       "S5 — zero core edit" -> Scenario: Adding the tmux plugin touches zero files under core/
-  # AC-TMUX-LOC:            "LOC budget <= 860" -> Scenario: The tmux plugin stays within its LOC budget
+  # AC-TMUX-LOC:            "LOC budget <= 820" -> Scenario: The tmux plugin stays within its LOC budget
   # AC-TMUX-STALE-PEER:     "Stale peer (cross-box, @pending, was F8; F8 stays peer-owned in prd.feature)" -> Scenario: A stopped box shows its tmux data as stale on its peers within 30 seconds

@@ -16,8 +16,8 @@ may open any client connection from `Start`), its own SQLite, `emit`, `HTTPRoute
 `extend type Query` seam. Two *optional* core seams are listed below (§Core change requests) for a
 future push-based variant; **neither is required for the spike.**
 
-**Hard constraints (owner):** ≤ **700 LOC prod** for `plugins/peer/**` excluding tests (measured 665
-+ 5%; the 700 was an estimate, not a cap); the seeded remote lives in `plugins/fakeremote` (a separate
+**Hard constraints (owner):** ≤ **680 LOC prod** for `plugins/peer/**` excluding tests (measured 644
++ 5%; ratcheted 700→680 after the config helpers moved to `plugins/internal/pluginconfig`); the seeded remote lives in `plugins/fakeremote` (a separate
 harness-only package, not counted); **zero `core/` + `server/` diff**; per-peer bearer token; **loop rule — a peer plugin never
 re-serves peer-tagged rows** (PRD §6); F8 stale-since ≤ 30 s; `@local` boots **two** supergraph
 processes on loopback (the harness already supports per-scenario binary+port).
@@ -166,10 +166,11 @@ host's rows not refreshed within the TTL on each proxy call for that host, S2). 
 (test-only override → routes the whole fan-out at the seeded `fakeremote` executor; production leaves it
 empty and routes per op via `mirror.go`'s `opPlugins`; an op **no** plugin owns makes no hop, S3).
 
-## LOC budget (prod; measured actuals — cap **700** for `plugins/peer/**`; tests excluded)
+## LOC budget (prod; measured actuals — cap **680** for `plugins/peer/**`; tests excluded)
 The 700-line estimate was an owner-blessed estimate, not a cap. Measured actuals below; the
-`make loc-peer` gate is set to **700** = measured **665** + 5% (698.25) rounded up to a multiple of 10
-(per the owner's LOC-budget rule). `graph/peer.resolvers.go` lives outside `plugins/peer/` so
+`make loc-peer` gate is set to **680** = measured **644** + 5% (676.2) rounded up to a multiple of 10
+(per the owner's LOC-budget rule). Ratcheted 700→680 after the `strOr`/`numOr` config helpers moved to
+`plugins/internal/pluginconfig` (−21 in `peer.go`, measured 665→644). `graph/peer.resolvers.go` lives outside `plugins/peer/` so
 `make loc-peer` does not count it; it is listed for completeness against the estimate.
 
 Actuals below are post-review (M1/M2/S1–S6 + owner user-test follow-ups): `peer.go` was split into
@@ -180,16 +181,16 @@ the unknown-op guard (S3), TTL purge call (S2) and 401 warn (a); `store.go` grew
 
 | File (`plugins/peer/`) | Est. | Actual | Responsibility |
 |---|---:|---:|---|
-| `peer.go` | 150 | **167** | wiring: `Register`/`New`/`Name`/`Migrate`/`Start`/`Routes`/`Cursor`/config parse (executor + accessor now split out, S4) |
+| `peer.go` | 150 | **146** | wiring: `Register`/`New`/`Name`/`Migrate`/`Start`/`Routes`/`Cursor`/config parse (executor + accessor now split out, S4; `strOr`/`numOr` moved to `plugins/internal/pluginconfig`) |
 | `executor.go` | — | **47** | HTTP executor (`handleOp`, warm-read vs proxy, `servedNode`/`servedResult` wire shape, `maxBody`) — split from `peer.go` (S4) |
 | `accessor.go` | — | **34** | graph `peers` accessor (`Peers`, `PeerView`, the `active` singleton, D8) — split from `peer.go` (S4) |
 | `store.go` | 150 | **147** | `peer_nodes`+`peer_state`: upsert, per-host scan, foreign-host drop, `markSeen`/`markStale`, `purgeStale` (S2), `states` |
 | `client.go` | 130 | **127** | outbound POST (4 MiB `LimitReader` + node cap, S1) + `pluginLag` WS subscribe (graphql-transport-ws) + bearer (`ping` deleted, M2) |
 | `mirror.go` | 140 | **85** | pull-through proxy: `@hostId` routing, unknown-op guard (S3), loop guards (D5), tag + re-emit, TTL purge (S2), 401 warn (a) |
 | `liveness.go` | 100 | **58** | per-peer WS loop, backoff, `staleSince` transitions, `peer.stale` emit, 401 warn (a), injectable seams (S5) |
-| **`plugins/peer/` total** | 670 | **665** | **under the 700 gate** |
+| **`plugins/peer/` total** | 670 | **644** | **under the 680 gate** |
 | resolver (`graph/peer.resolvers.go`, delegates) | 30 | 24 | `peers` → `peer.Peers` accessor → store (not counted by `make loc-peer`) |
-- **AC-PEER-LOC** guards `plugins/peer/**` (same portable `sed` strip formula as `make loc-github`), fails > **700**.
+- **AC-PEER-LOC** guards `plugins/peer/**` (same portable `sed` strip formula as `make loc-github`), fails > **680**.
 
 ---
 
@@ -238,7 +239,7 @@ the real two-box run. Summary:
 - **@AC-PEER-RECONNECT** remote stopped → `staleSince` set < 30 s; restarted on the same port → within **4 s** (≤ 2 × a 2 s test `backoffMaxSeconds`) the backoff loop reconnects to `pluginLag` and `staleSince` clears; the next proxy refreshes the mirror.
 - **@AC-PEER-HEALTH** *(grounded by AC review)* `/health` shows a "peer" entry; with the remote never up and nothing mirrored, its `lastEventAt` **stays null** (state `starting`) — **no synthetic heartbeat is fabricated**; `peers` shows `staleSince` set, derived only from the failed connection attempt.
 - **@AC-PEER-ZEROCORE** `git diff --stat origin/main -- core server` = 0 files (integration/diff check) **and** no `core/` file imports a plugin package.
-- **@AC-PEER-LOC** `plugins/peer/**` prod LOC ≤ **700** (measured 665 + 5%).
+- **@AC-PEER-LOC** `plugins/peer/**` prod LOC ≤ **680** (measured 644 + 5%).
 
 ## AC review: applied (owner-confirmed decisions)
 Applied to `features/peer.feature` + this EDR per `~/.knowledge/.../acceptance-criteria.md`. Owner
