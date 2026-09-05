@@ -27,9 +27,7 @@ func Str(raw map[string]any, k, def string) string {
 
 // Int returns raw[k] coerced to int, else def. It accepts int, int64, float64
 // and a numeric string; a nil map, an absent key, or a non-numeric value yields
-// def. A stored numeric 0 returns 0 (not def) — the canonical type-switch
-// semantics. This intentionally fixes the earlier github copy, whose `n != 0`
-// guard mapped a legitimate 0-valued config back to the default.
+// def. A stored numeric 0 returns 0, not def.
 func Int(raw map[string]any, k string, def int) int {
 	if raw == nil {
 		return def

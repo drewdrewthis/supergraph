@@ -161,8 +161,6 @@ loc-tmux:
 	fi
 
 # --- shared internal helper targets ---
-.PHONY: loc-internal
-
 # loc-internal guards the plugins/internal/** shared-helper LOC budget: prod code
 # only (no _test.go), comments/blank lines stripped. Cap 100 = measured 89 x1.05
 # rounded up to a multiple of 10 (owner rule). Holds the extracted config-coercion

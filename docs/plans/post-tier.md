@@ -30,7 +30,7 @@ package; re-ratchet each plugin's LOC gate down to reflect the removal.
 use `intOr → int`; peer uses `numOr → float64`. Both must exist in the shared API.
 
 ### Proposed API (`plugins/internal/pluginconfig/pluginconfig.go`)
-Import path `github.com/drewdrewthis/supergraph/plugins/internal/pluginconfig`, alias `cfg`.
+Import path `github.com/drewdrewthis/supergraph/plugins/internal/pluginconfig`.
 ```go
 func Str(raw map[string]any, k, def string) string
 func Int(raw map[string]any, k string, def int) int          // accepts int/int64/float64

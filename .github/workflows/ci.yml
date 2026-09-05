@@ -83,6 +83,9 @@ jobs:
       - name: loc-internal (AC-PCFG-LOC, plugins/internal/** shared helpers <= 100 lines)
         run: make loc-internal
 
+      - name: loc-tmux (AC-TMUX-LOC, plugins/tmux/** prod code within budget)
+        run: make loc-tmux
+
       - name: peer zerocore (AC-PEER-ZEROCORE, the peer plugin touches neither core/ nor server/)
         run: |
           out=$(git diff --stat origin/main -- core server)
