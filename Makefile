@@ -1,7 +1,7 @@
 # supergraph dev harness. `make dev` is the one-command bring-up (AC-CORE-15):
 # it builds, points every plugin db at a throwaway .dev/data dir (never the real
 # ~/.local/share), and runs the server in the foreground with the template plugin.
-.PHONY: build build-harness generate test features features-red features-pending dev dev-check
+.PHONY: build build-harness generate test features features-red features-pending features-github loc-github dev dev-check
 include mk/version.mk
 
 BIN := bin/supergraph
@@ -39,6 +39,25 @@ features-red:
 # non-zero exit here is the expected/reportable state, not a failure to fix.
 features-pending:
 	FEATURES_TAGS=@pending go test ./features/ -run TestFeatures
+
+# features-github runs only the github plugin's @local scenarios (AC-GH-*),
+# excluding @pending (@live) ones.
+features-github:
+	FEATURES_TAGS="@github && ~@pending" go test ./features/ -run TestFeatures -v
+
+# loc-github guards the plugins/github/** LOC budget (docs/edr/github.md): prod
+# code only (no _test.go, no internal/fakegh), comments/blank lines stripped,
+# fails when the total exceeds 1350 (AC-GH-LOC; cap raised 800→1300→1350 by owner as
+# the security/reconcile/list-read batches landed). Uses POSIX [[:space:]] (not \s,
+# which BSD/macOS sed does not honor, silently under-stripping indented comments).
+loc-github:
+	@files=$$(find plugins/github -name '*.go' ! -name '*_test.go' -not -path '*/fakegh/*' 2>/dev/null); \
+	if [ -z "$$files" ]; then count=0; else count=$$(echo "$$files" | xargs sed -E '/^[[:space:]]*\/\//d;/^[[:space:]]*$$/d' | wc -l | tr -d ' '); fi; \
+	echo "plugins/github prod LOC: $$count"; \
+	if [ "$$count" -gt 1350 ]; then \
+		echo "loc-github: $$count LOC exceeds the 1350 budget" >&2; \
+		exit 1; \
+	fi
 
 # dev-config writes a throwaway config only if one is not already present, so a
 # hand-edited .dev/config.toml is never clobbered.

@@ -33,7 +33,7 @@ func rootCmd() *cobra.Command {
 	}
 	root.PersistentFlags().StringVar(&configPath, "config", core.DefaultConfigPath(),
 		"path to config.toml")
-	root.AddCommand(serveCmd(), queryCmd())
+	root.AddCommand(serveCmd(), queryCmd(), schemaCmd())
 	root.AddCommand(serviceCmds()...)
 	return root
 }

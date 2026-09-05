@@ -39,6 +39,7 @@ func InitializeScenario(sc *godog.ScenarioContext) {
 	})
 
 	registerPRDSteps(sc)
+	registerGithubSteps(sc)
 
 	// --- shared ---
 	sc.Step(lit("a supergraph server started with the template plugin and data dir <tmp>"), w.startDefaultServer)
@@ -457,26 +458,53 @@ func (w *world) ac6AddrInUse() error {
 func (w *world) wsOpen() error { return w.openSubscription("templateEvents") }
 
 func (w *world) wsEmit() error {
-	// Connection setup/ack already happened in wsOpen; the clock for the <1s
-	// bound starts here, at the emit trigger, not before.
-	w.wsEmitAt = time.Now()
-	return nil // server emits via the plugin's own tick on its own
+	// No trigger to fire here: the template plugin has no on-demand emit path,
+	// so this step is a no-op — the next tick (see plugins/template's Start)
+	// delivers the "matching event" on its own ~1s cadence. wsPushedWithin1s
+	// measures the <1s bound from the delivered envelope's own `ts` (stamped at
+	// emit time), not from any clock started in this step, since a step-local
+	// clock start lands at an arbitrary point in the tick cycle.
+	return nil
 }
 
 func (w *world) wsPushedWithin1s() error {
+	// The template plugin emits on its own ~1s ticker (see wsEmit); a subscribed
+	// client's clock-start at an arbitrary point in that cycle is uniformly
+	// distributed in [0,1s) against the NEXT tick, so it inevitably brushes the
+	// 1s bound under CI scheduling jitter even with no real latency regression.
+	// The honest measurement per AC-CORE-8 ("<1s from emit") is emit-to-receipt:
+	// the envelope's own `ts` (source-stamped at emit time in plugins/template's
+	// p.emit) versus receipt time here, not receipt time versus an arbitrary
+	// step-boundary clock start.
+	//
 	// Outer read deadline is generous (absorbs CI scheduling jitter reading the
-	// socket); the actual AC bound is asserted separately against elapsed time
-	// from the emit trigger, so a miss on either axis reports cleanly.
+	// socket); the AC bound itself is asserted against emit-to-receipt latency.
 	p, err := w.ws.nextPush(3 * time.Second)
 	if err != nil {
 		return err
 	}
-	elapsed := time.Since(w.wsEmitAt)
-	if elapsed >= time.Second {
-		return fmt.Errorf("push arrived after %s (>= 1s bound)", elapsed)
-	}
-	if _, ok := p["data"]; !ok {
+	received := time.Now()
+
+	data, ok := p["data"].(map[string]any)
+	if !ok {
 		return fmt.Errorf("push without data: %v", p)
+	}
+	evt, ok := data["templateEvents"].(map[string]any)
+	if !ok {
+		return fmt.Errorf("push data missing templateEvents: %v", p)
+	}
+	tsStr, ok := evt["ts"].(string)
+	if !ok {
+		return fmt.Errorf("push event missing ts: %v", evt)
+	}
+	emittedAt, err := time.Parse(time.RFC3339Nano, tsStr)
+	if err != nil {
+		return fmt.Errorf("parse event ts %q: %w", tsStr, err)
+	}
+
+	elapsed := received.Sub(emittedAt)
+	if elapsed >= time.Second {
+		return fmt.Errorf("push arrived %s after emit (>= 1s bound)", elapsed)
 	}
 	w.wsData = p
 	w.wsPushed = true

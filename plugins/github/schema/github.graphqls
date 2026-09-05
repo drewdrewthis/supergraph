@@ -1,0 +1,17 @@
+# github plugin's GraphQL contribution (S5 zero-core-edit seam): a subscription
+# that fans out the plugin's own envelopes (Source "github") to core's gqlgen
+# websocket, so S3 can measure webhook-receipt to subscription-push p95 over the
+# same Bus every plugin already emits onto — no edit under core/.
+extend type Subscription {
+  checkRunUpdated: GithubEvent!
+}
+
+# GithubEvent mirrors core.Envelope (Payload flattened to a string), matching the
+# TemplateEvent shape so the resolver stays a plain envelope->model mapping.
+type GithubEvent {
+  ts: Time!
+  type: String!
+  v: Int!
+  key: String!
+  payload: String!
+}

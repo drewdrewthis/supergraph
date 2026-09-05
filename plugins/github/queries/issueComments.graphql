@@ -1,0 +1,11 @@
+# op: issueComments
+# scope: repo:{owner}/{repo}
+# keys: comment:{owner}/{repo}/{id}
+query issueComments($owner: String!, $repo: String!, $number: Int!) {
+  repository(owner: $owner, name: $repo) {
+    issue(number: $number) {
+      comments(first: 100) { nodes { id body } }
+    }
+  }
+  rateLimit { remaining resetAt cost }
+}

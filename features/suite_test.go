@@ -53,6 +53,8 @@ func tagExpr() string {
 	if v := os.Getenv("FEATURES_TAGS"); v != "" {
 		return v
 	}
+	// features/steps_github_test.go now wires the github scenarios (EDR two-wave
+	// plan wave 2), so @github @local runs by default; @pending (@live) stays out.
 	expr := "~@unmet && ~@service && ~@pending"
 	if runtime.GOOS != "linux" {
 		expr += " && ~@linux"

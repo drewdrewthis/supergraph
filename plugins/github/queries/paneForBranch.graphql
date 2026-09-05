@@ -1,0 +1,10 @@
+# op: paneForBranch
+# scope: repo:{owner}/{repo}
+# keys: ref:{owner}/{repo}/{name}
+# pending: cross-plugin join with tmux panes lands in wave 2
+query paneForBranch($owner: String!, $repo: String!, $branch: String!) {
+  repository(owner: $owner, name: $repo) {
+    ref(qualifiedName: $branch) { name target { oid } }
+  }
+  rateLimit { remaining resetAt cost }
+}

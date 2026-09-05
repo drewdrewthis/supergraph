@@ -6,6 +6,14 @@ import (
 	"time"
 )
 
+type GithubEvent struct {
+	Ts      time.Time `json:"ts"`
+	Type    string    `json:"type"`
+	V       int       `json:"v"`
+	Key     string    `json:"key"`
+	Payload string    `json:"payload"`
+}
+
 type Query struct {
 }
 
