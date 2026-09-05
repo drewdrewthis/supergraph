@@ -90,6 +90,18 @@ jobs:
       - name: features-pending (report only, non-gating)
         run: FEATURES_TAGS=@pending go test ./features/ -run TestFeatures -count=1 || true
 
+      # --- claude plugin gates ---
+      - name: loc-claude (AC-CLAUDE-LOC, plugins/claude/** prod code <= 790 lines)
+        run: make loc-claude
+
+      - name: zerocore-claude (AC-CLAUDE-ZEROCORE, the claude plugin touches neither core/ nor server/)
+        run: |
+          git fetch origin main
+          git diff --quiet origin/main -- core/ server/
+
+      - name: claude plugin feature suite (@claude, @local only)
+        run: make features-claude
+
   cross-build:
     runs-on: ubuntu-latest
     steps:

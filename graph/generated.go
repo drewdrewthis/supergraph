@@ -38,6 +38,39 @@ type DirectiveRoot struct {
 }
 
 type ComplexityRoot struct {
+	ClaudeEvent struct {
+		Key     func(childComplexity int) int
+		Payload func(childComplexity int) int
+		Ts      func(childComplexity int) int
+		Type    func(childComplexity int) int
+		V       func(childComplexity int) int
+	}
+
+	ClaudeInstance struct {
+		HostID     func(childComplexity int) int
+		Pane       func(childComplexity int) int
+		Pid        func(childComplexity int) int
+		Session    func(childComplexity int) int
+		StaleSince func(childComplexity int) int
+	}
+
+	ClaudeSession struct {
+		Cwd         func(childComplexity int) int
+		GitBranch   func(childComplexity int) int
+		HostID      func(childComplexity int) int
+		IssueNumber func(childComplexity int) int
+		LastEventAt func(childComplexity int) int
+		LastTool    func(childComplexity int) int
+		Model       func(childComplexity int) int
+		PrNumber    func(childComplexity int) int
+		PrURL       func(childComplexity int) int
+		SessionID   func(childComplexity int) int
+		StaleSince  func(childComplexity int) int
+		StartedAt   func(childComplexity int) int
+		State       func(childComplexity int) int
+		ToolCalls   func(childComplexity int) int
+	}
+
 	GithubEvent struct {
 		Key     func(childComplexity int) int
 		Payload func(childComplexity int) int
@@ -64,16 +97,20 @@ type ComplexityRoot struct {
 	}
 
 	Query struct {
-		Health       func(childComplexity int) int
-		Peers        func(childComplexity int) int
-		Ping         func(childComplexity int) int
-		TemplatePing func(childComplexity int) int
+		ClaudeInstances func(childComplexity int, hostID *string) int
+		ClaudeSession   func(childComplexity int, sessionID string) int
+		ClaudeSessions  func(childComplexity int, hostID *string, issueNumber *int) int
+		Health          func(childComplexity int) int
+		Peers           func(childComplexity int) int
+		Ping            func(childComplexity int) int
+		TemplatePing    func(childComplexity int) int
 	}
 
 	Subscription struct {
-		CheckRunUpdated func(childComplexity int) int
-		PluginLag       func(childComplexity int, thresholdSeconds float64) int
-		TemplateEvents  func(childComplexity int) int
+		CheckRunUpdated      func(childComplexity int) int
+		ClaudeSessionUpdated func(childComplexity int, hostID *string) int
+		PluginLag            func(childComplexity int, thresholdSeconds float64) int
+		TemplateEvents       func(childComplexity int) int
 	}
 
 	TemplateEvent struct {
@@ -92,11 +129,15 @@ type ComplexityRoot struct {
 type QueryResolver interface {
 	Health(ctx context.Context) ([]core.HealthStatus, error)
 	Ping(ctx context.Context) (string, error)
+	ClaudeSessions(ctx context.Context, hostID *string, issueNumber *int) ([]model.ClaudeSession, error)
+	ClaudeSession(ctx context.Context, sessionID string) (*model.ClaudeSession, error)
+	ClaudeInstances(ctx context.Context, hostID *string) ([]model.ClaudeInstance, error)
 	Peers(ctx context.Context) ([]model.Peer, error)
 	TemplatePing(ctx context.Context) (string, error)
 }
 type SubscriptionResolver interface {
 	PluginLag(ctx context.Context, thresholdSeconds float64) (<-chan core.HealthStatus, error)
+	ClaudeSessionUpdated(ctx context.Context, hostID *string) (<-chan model.ClaudeEvent, error)
 	CheckRunUpdated(ctx context.Context) (<-chan model.GithubEvent, error)
 	TemplateEvents(ctx context.Context) (<-chan model.TemplateEvent, error)
 }
@@ -118,6 +159,153 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 	ec := newExecutionContext(nil, e, nil)
 	_ = ec
 	switch typeName + "." + field {
+
+	case "ClaudeEvent.key":
+		if e.ComplexityRoot.ClaudeEvent.Key == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClaudeEvent.Key(childComplexity), true
+	case "ClaudeEvent.payload":
+		if e.ComplexityRoot.ClaudeEvent.Payload == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClaudeEvent.Payload(childComplexity), true
+	case "ClaudeEvent.ts":
+		if e.ComplexityRoot.ClaudeEvent.Ts == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClaudeEvent.Ts(childComplexity), true
+	case "ClaudeEvent.type":
+		if e.ComplexityRoot.ClaudeEvent.Type == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClaudeEvent.Type(childComplexity), true
+	case "ClaudeEvent.v":
+		if e.ComplexityRoot.ClaudeEvent.V == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClaudeEvent.V(childComplexity), true
+
+	case "ClaudeInstance.hostId":
+		if e.ComplexityRoot.ClaudeInstance.HostID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClaudeInstance.HostID(childComplexity), true
+	case "ClaudeInstance.pane":
+		if e.ComplexityRoot.ClaudeInstance.Pane == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClaudeInstance.Pane(childComplexity), true
+	case "ClaudeInstance.pid":
+		if e.ComplexityRoot.ClaudeInstance.Pid == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClaudeInstance.Pid(childComplexity), true
+	case "ClaudeInstance.session":
+		if e.ComplexityRoot.ClaudeInstance.Session == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClaudeInstance.Session(childComplexity), true
+	case "ClaudeInstance.staleSince":
+		if e.ComplexityRoot.ClaudeInstance.StaleSince == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClaudeInstance.StaleSince(childComplexity), true
+
+	case "ClaudeSession.cwd":
+		if e.ComplexityRoot.ClaudeSession.Cwd == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClaudeSession.Cwd(childComplexity), true
+	case "ClaudeSession.gitBranch":
+		if e.ComplexityRoot.ClaudeSession.GitBranch == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClaudeSession.GitBranch(childComplexity), true
+	case "ClaudeSession.hostId":
+		if e.ComplexityRoot.ClaudeSession.HostID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClaudeSession.HostID(childComplexity), true
+	case "ClaudeSession.issueNumber":
+		if e.ComplexityRoot.ClaudeSession.IssueNumber == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClaudeSession.IssueNumber(childComplexity), true
+	case "ClaudeSession.lastEventAt":
+		if e.ComplexityRoot.ClaudeSession.LastEventAt == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClaudeSession.LastEventAt(childComplexity), true
+	case "ClaudeSession.lastTool":
+		if e.ComplexityRoot.ClaudeSession.LastTool == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClaudeSession.LastTool(childComplexity), true
+	case "ClaudeSession.model":
+		if e.ComplexityRoot.ClaudeSession.Model == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClaudeSession.Model(childComplexity), true
+	case "ClaudeSession.prNumber":
+		if e.ComplexityRoot.ClaudeSession.PrNumber == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClaudeSession.PrNumber(childComplexity), true
+	case "ClaudeSession.prUrl":
+		if e.ComplexityRoot.ClaudeSession.PrURL == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClaudeSession.PrURL(childComplexity), true
+	case "ClaudeSession.sessionId":
+		if e.ComplexityRoot.ClaudeSession.SessionID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClaudeSession.SessionID(childComplexity), true
+	case "ClaudeSession.staleSince":
+		if e.ComplexityRoot.ClaudeSession.StaleSince == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClaudeSession.StaleSince(childComplexity), true
+	case "ClaudeSession.startedAt":
+		if e.ComplexityRoot.ClaudeSession.StartedAt == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClaudeSession.StartedAt(childComplexity), true
+	case "ClaudeSession.state":
+		if e.ComplexityRoot.ClaudeSession.State == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClaudeSession.State(childComplexity), true
+	case "ClaudeSession.toolCalls":
+		if e.ComplexityRoot.ClaudeSession.ToolCalls == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClaudeSession.ToolCalls(childComplexity), true
 
 	case "GithubEvent.key":
 		if e.ComplexityRoot.GithubEvent.Key == nil {
@@ -218,6 +406,39 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Peer.URL(childComplexity), true
 
+	case "Query.claudeInstances":
+		if e.ComplexityRoot.Query.ClaudeInstances == nil {
+			break
+		}
+
+		args, err := ec.field_Query_claudeInstances_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Query.ClaudeInstances(childComplexity, args["hostId"].(*string)), true
+	case "Query.claudeSession":
+		if e.ComplexityRoot.Query.ClaudeSession == nil {
+			break
+		}
+
+		args, err := ec.field_Query_claudeSession_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Query.ClaudeSession(childComplexity, args["sessionId"].(string)), true
+	case "Query.claudeSessions":
+		if e.ComplexityRoot.Query.ClaudeSessions == nil {
+			break
+		}
+
+		args, err := ec.field_Query_claudeSessions_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Query.ClaudeSessions(childComplexity, args["hostId"].(*string), args["issueNumber"].(*int)), true
 	case "Query.health":
 		if e.ComplexityRoot.Query.Health == nil {
 			break
@@ -250,6 +471,17 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Subscription.CheckRunUpdated(childComplexity), true
+	case "Subscription.claudeSessionUpdated":
+		if e.ComplexityRoot.Subscription.ClaudeSessionUpdated == nil {
+			break
+		}
+
+		args, err := ec.field_Subscription_claudeSessionUpdated_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Subscription.ClaudeSessionUpdated(childComplexity, args["hostId"].(*string)), true
 	case "Subscription.pluginLag":
 		if e.ComplexityRoot.Subscription.PluginLag == nil {
 			break
@@ -415,6 +647,62 @@ type Subscription {
   pluginLag(thresholdSeconds: Float!): Health!
 }
 `, BuiltIn: false},
+	{Name: "../plugins/claude/schema/claude.graphqls", Input: `# claude plugin's GraphQL contribution (the S5 zero-core-edit seam): typed session
+# and instance queries plus a raw-envelope subscription. Adding these files (plus the
+# blank import in graph/plugins_import.go) is the whole seam — no edit under core/.
+
+extend type Query {
+  # claudeSessions lists sessions, optionally by host and/or issue number. The
+  # issueNumber filter is the claude half of S4 (AC-CLAUDE-S4-HALF).
+  claudeSessions(hostId: String, issueNumber: Int): [ClaudeSession!]!
+  claudeSession(sessionId: String!): ClaudeSession
+  claudeInstances(hostId: String): [ClaudeInstance!]!
+}
+
+extend type Subscription {
+  # claudeSessionUpdated fans this plugin's own envelopes (Source "claude") to core's
+  # websocket. It returns the raw ClaudeEvent envelope so AC-CLAUDE-PRIVACY can assert
+  # the emitted payload carries no prompt/response/tool_input bytes.
+  claudeSessionUpdated(hostId: String): ClaudeEvent!
+}
+
+type ClaudeSession {
+  hostId: String!
+  sessionId: String!
+  cwd: String!
+  gitBranch: String
+  issueNumber: Int
+  model: String
+  state: String!
+  lastTool: String
+  toolCalls: Int!
+  prNumber: Int
+  prUrl: String
+  startedAt: Time!
+  lastEventAt: Time!
+  staleSince: Time
+}
+
+# ClaudeInstance is the projection of sessions pinned to a tmux pane+pid; its pane is
+# the join key a TmuxPane row keys on.
+type ClaudeInstance {
+  hostId: String!
+  pane: String!
+  pid: Int!
+  session: ClaudeSession!
+  staleSince: Time
+}
+
+# ClaudeEvent mirrors core.Envelope (payload flattened to a string), matching the
+# TemplateEvent/GithubEvent shape so the subscription resolver is a plain mapping.
+type ClaudeEvent {
+  ts: Time!
+  type: String!
+  v: Int!
+  key: String!
+  payload: String!
+}
+`, BuiltIn: false},
 	{Name: "../plugins/github/schema/github.graphqls", Input: `# github plugin's GraphQL contribution (S5 zero-core-edit seam): a subscription
 # that fans out the plugin's own envelopes (Source "github") to core's gqlgen
 # websocket, so S3 can measure webhook-receipt to subscription-push p95 over the
@@ -482,6 +770,72 @@ var parsedSchema = gqlparser.MustLoadSchema(sources...)
 // childFields_* functions provide shared child field context lookups.
 // Each function is generated once per unique object type, deduplicating the
 // switch statements that were previously inlined in every fieldContext_* function.
+
+func (ec *executionContext) childFields_ClaudeEvent(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "ts":
+		return ec.fieldContext_ClaudeEvent_ts(ctx, field)
+	case "type":
+		return ec.fieldContext_ClaudeEvent_type(ctx, field)
+	case "v":
+		return ec.fieldContext_ClaudeEvent_v(ctx, field)
+	case "key":
+		return ec.fieldContext_ClaudeEvent_key(ctx, field)
+	case "payload":
+		return ec.fieldContext_ClaudeEvent_payload(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type ClaudeEvent", field.Name)
+}
+
+func (ec *executionContext) childFields_ClaudeInstance(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "hostId":
+		return ec.fieldContext_ClaudeInstance_hostId(ctx, field)
+	case "pane":
+		return ec.fieldContext_ClaudeInstance_pane(ctx, field)
+	case "pid":
+		return ec.fieldContext_ClaudeInstance_pid(ctx, field)
+	case "session":
+		return ec.fieldContext_ClaudeInstance_session(ctx, field)
+	case "staleSince":
+		return ec.fieldContext_ClaudeInstance_staleSince(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type ClaudeInstance", field.Name)
+}
+
+func (ec *executionContext) childFields_ClaudeSession(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "hostId":
+		return ec.fieldContext_ClaudeSession_hostId(ctx, field)
+	case "sessionId":
+		return ec.fieldContext_ClaudeSession_sessionId(ctx, field)
+	case "cwd":
+		return ec.fieldContext_ClaudeSession_cwd(ctx, field)
+	case "gitBranch":
+		return ec.fieldContext_ClaudeSession_gitBranch(ctx, field)
+	case "issueNumber":
+		return ec.fieldContext_ClaudeSession_issueNumber(ctx, field)
+	case "model":
+		return ec.fieldContext_ClaudeSession_model(ctx, field)
+	case "state":
+		return ec.fieldContext_ClaudeSession_state(ctx, field)
+	case "lastTool":
+		return ec.fieldContext_ClaudeSession_lastTool(ctx, field)
+	case "toolCalls":
+		return ec.fieldContext_ClaudeSession_toolCalls(ctx, field)
+	case "prNumber":
+		return ec.fieldContext_ClaudeSession_prNumber(ctx, field)
+	case "prUrl":
+		return ec.fieldContext_ClaudeSession_prUrl(ctx, field)
+	case "startedAt":
+		return ec.fieldContext_ClaudeSession_startedAt(ctx, field)
+	case "lastEventAt":
+		return ec.fieldContext_ClaudeSession_lastEventAt(ctx, field)
+	case "staleSince":
+		return ec.fieldContext_ClaudeSession_staleSince(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type ClaudeSession", field.Name)
+}
 
 func (ec *executionContext) childFields_GithubEvent(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
@@ -679,6 +1033,70 @@ func (ec *executionContext) field_Query___type_args(ctx context.Context, rawArgs
 	return args, nil
 }
 
+func (ec *executionContext) field_Query_claudeInstances_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "hostId",
+		func(ctx context.Context, v any) (*string, error) {
+			return ec.unmarshalOString2ᚖstring(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["hostId"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Query_claudeSession_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "sessionId",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNString2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["sessionId"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Query_claudeSessions_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "hostId",
+		func(ctx context.Context, v any) (*string, error) {
+			return ec.unmarshalOString2ᚖstring(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["hostId"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "issueNumber",
+		func(ctx context.Context, v any) (*int, error) {
+			return ec.unmarshalOInt2ᚖint(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["issueNumber"] = arg1
+	return args, nil
+}
+
+func (ec *executionContext) field_Subscription_claudeSessionUpdated_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "hostId",
+		func(ctx context.Context, v any) (*string, error) {
+			return ec.unmarshalOString2ᚖstring(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["hostId"] = arg0
+	return args, nil
+}
+
 func (ec *executionContext) field_Subscription_pluginLag_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
@@ -752,6 +1170,567 @@ func (ec *executionContext) field___Type_fields_args(ctx context.Context, rawArg
 // endregion ***************************** args.gotpl *****************************
 
 // region    **************************** field.gotpl *****************************
+
+func (ec *executionContext) _ClaudeEvent_ts(ctx context.Context, field graphql.CollectedField, obj *model.ClaudeEvent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ClaudeEvent_ts(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Ts, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v time.Time) graphql.Marshaler {
+			return ec.marshalNTime2timeᚐTime(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ClaudeEvent_ts(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ClaudeEvent", field, false, false, errors.New("field of type Time does not have child fields"))
+}
+
+func (ec *executionContext) _ClaudeEvent_type(ctx context.Context, field graphql.CollectedField, obj *model.ClaudeEvent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ClaudeEvent_type(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Type, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ClaudeEvent_type(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ClaudeEvent", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _ClaudeEvent_v(ctx context.Context, field graphql.CollectedField, obj *model.ClaudeEvent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ClaudeEvent_v(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.V, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ClaudeEvent_v(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ClaudeEvent", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _ClaudeEvent_key(ctx context.Context, field graphql.CollectedField, obj *model.ClaudeEvent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ClaudeEvent_key(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Key, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ClaudeEvent_key(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ClaudeEvent", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _ClaudeEvent_payload(ctx context.Context, field graphql.CollectedField, obj *model.ClaudeEvent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ClaudeEvent_payload(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Payload, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ClaudeEvent_payload(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ClaudeEvent", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _ClaudeInstance_hostId(ctx context.Context, field graphql.CollectedField, obj *model.ClaudeInstance) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ClaudeInstance_hostId(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.HostID, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ClaudeInstance_hostId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ClaudeInstance", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _ClaudeInstance_pane(ctx context.Context, field graphql.CollectedField, obj *model.ClaudeInstance) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ClaudeInstance_pane(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Pane, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ClaudeInstance_pane(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ClaudeInstance", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _ClaudeInstance_pid(ctx context.Context, field graphql.CollectedField, obj *model.ClaudeInstance) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ClaudeInstance_pid(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Pid, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ClaudeInstance_pid(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ClaudeInstance", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _ClaudeInstance_session(ctx context.Context, field graphql.CollectedField, obj *model.ClaudeInstance) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ClaudeInstance_session(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Session, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.ClaudeSession) graphql.Marshaler {
+			return ec.marshalNClaudeSession2ᚖgithubᚗcomᚋdrewdrewthisᚋsupergraphᚋgraphᚋmodelᚐClaudeSession(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ClaudeInstance_session(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ClaudeInstance",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_ClaudeSession(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ClaudeInstance_staleSince(ctx context.Context, field graphql.CollectedField, obj *model.ClaudeInstance) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ClaudeInstance_staleSince(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.StaleSince, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *time.Time) graphql.Marshaler {
+			return ec.marshalOTime2ᚖtimeᚐTime(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_ClaudeInstance_staleSince(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ClaudeInstance", field, false, false, errors.New("field of type Time does not have child fields"))
+}
+
+func (ec *executionContext) _ClaudeSession_hostId(ctx context.Context, field graphql.CollectedField, obj *model.ClaudeSession) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ClaudeSession_hostId(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.HostID, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ClaudeSession_hostId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ClaudeSession", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _ClaudeSession_sessionId(ctx context.Context, field graphql.CollectedField, obj *model.ClaudeSession) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ClaudeSession_sessionId(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.SessionID, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ClaudeSession_sessionId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ClaudeSession", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _ClaudeSession_cwd(ctx context.Context, field graphql.CollectedField, obj *model.ClaudeSession) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ClaudeSession_cwd(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Cwd, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ClaudeSession_cwd(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ClaudeSession", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _ClaudeSession_gitBranch(ctx context.Context, field graphql.CollectedField, obj *model.ClaudeSession) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ClaudeSession_gitBranch(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.GitBranch, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_ClaudeSession_gitBranch(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ClaudeSession", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _ClaudeSession_issueNumber(ctx context.Context, field graphql.CollectedField, obj *model.ClaudeSession) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ClaudeSession_issueNumber(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.IssueNumber, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *int) graphql.Marshaler {
+			return ec.marshalOInt2ᚖint(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_ClaudeSession_issueNumber(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ClaudeSession", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _ClaudeSession_model(ctx context.Context, field graphql.CollectedField, obj *model.ClaudeSession) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ClaudeSession_model(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Model, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_ClaudeSession_model(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ClaudeSession", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _ClaudeSession_state(ctx context.Context, field graphql.CollectedField, obj *model.ClaudeSession) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ClaudeSession_state(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.State, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ClaudeSession_state(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ClaudeSession", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _ClaudeSession_lastTool(ctx context.Context, field graphql.CollectedField, obj *model.ClaudeSession) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ClaudeSession_lastTool(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.LastTool, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_ClaudeSession_lastTool(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ClaudeSession", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _ClaudeSession_toolCalls(ctx context.Context, field graphql.CollectedField, obj *model.ClaudeSession) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ClaudeSession_toolCalls(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.ToolCalls, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ClaudeSession_toolCalls(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ClaudeSession", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _ClaudeSession_prNumber(ctx context.Context, field graphql.CollectedField, obj *model.ClaudeSession) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ClaudeSession_prNumber(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.PrNumber, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *int) graphql.Marshaler {
+			return ec.marshalOInt2ᚖint(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_ClaudeSession_prNumber(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ClaudeSession", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _ClaudeSession_prUrl(ctx context.Context, field graphql.CollectedField, obj *model.ClaudeSession) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ClaudeSession_prUrl(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.PrURL, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_ClaudeSession_prUrl(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ClaudeSession", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _ClaudeSession_startedAt(ctx context.Context, field graphql.CollectedField, obj *model.ClaudeSession) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ClaudeSession_startedAt(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.StartedAt, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v time.Time) graphql.Marshaler {
+			return ec.marshalNTime2timeᚐTime(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ClaudeSession_startedAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ClaudeSession", field, false, false, errors.New("field of type Time does not have child fields"))
+}
+
+func (ec *executionContext) _ClaudeSession_lastEventAt(ctx context.Context, field graphql.CollectedField, obj *model.ClaudeSession) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ClaudeSession_lastEventAt(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.LastEventAt, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v time.Time) graphql.Marshaler {
+			return ec.marshalNTime2timeᚐTime(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ClaudeSession_lastEventAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ClaudeSession", field, false, false, errors.New("field of type Time does not have child fields"))
+}
+
+func (ec *executionContext) _ClaudeSession_staleSince(ctx context.Context, field graphql.CollectedField, obj *model.ClaudeSession) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ClaudeSession_staleSince(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.StaleSince, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *time.Time) graphql.Marshaler {
+			return ec.marshalOTime2ᚖtimeᚐTime(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_ClaudeSession_staleSince(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ClaudeSession", field, false, false, errors.New("field of type Time does not have child fields"))
+}
 
 func (ec *executionContext) _GithubEvent_ts(ctx context.Context, field graphql.CollectedField, obj *model.GithubEvent) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
@@ -1176,6 +2155,138 @@ func (ec *executionContext) fieldContext_Query_ping(_ context.Context, field gra
 	return graphql.NewScalarFieldContext("Query", field, true, true, errors.New("field of type String does not have child fields"))
 }
 
+func (ec *executionContext) _Query_claudeSessions(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Query_claudeSessions(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Query().ClaudeSessions(ctx, fc.Args["hostId"].(*string), fc.Args["issueNumber"].(*int))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []model.ClaudeSession) graphql.Marshaler {
+			return ec.marshalNClaudeSession2ᚕgithubᚗcomᚋdrewdrewthisᚋsupergraphᚋgraphᚋmodelᚐClaudeSessionᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Query_claudeSessions(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_ClaudeSession(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Query_claudeSessions_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Query_claudeSession(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Query_claudeSession(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Query().ClaudeSession(ctx, fc.Args["sessionId"].(string))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.ClaudeSession) graphql.Marshaler {
+			return ec.marshalOClaudeSession2ᚖgithubᚗcomᚋdrewdrewthisᚋsupergraphᚋgraphᚋmodelᚐClaudeSession(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_Query_claudeSession(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_ClaudeSession(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Query_claudeSession_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Query_claudeInstances(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Query_claudeInstances(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Query().ClaudeInstances(ctx, fc.Args["hostId"].(*string))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []model.ClaudeInstance) graphql.Marshaler {
+			return ec.marshalNClaudeInstance2ᚕgithubᚗcomᚋdrewdrewthisᚋsupergraphᚋgraphᚋmodelᚐClaudeInstanceᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Query_claudeInstances(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_ClaudeInstance(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Query_claudeInstances_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _Query_peers(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -1345,6 +2456,50 @@ func (ec *executionContext) fieldContext_Subscription_pluginLag(ctx context.Cont
 	}()
 	ctx = graphql.WithFieldContext(ctx, fc)
 	if fc.Args, err = ec.field_Subscription_pluginLag_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Subscription_claudeSessionUpdated(ctx context.Context, field graphql.CollectedField) (ret func(ctx context.Context) graphql.Marshaler) {
+	return graphql.ResolveFieldStream(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Subscription_claudeSessionUpdated(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Subscription().ClaudeSessionUpdated(ctx, fc.Args["hostId"].(*string))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v model.ClaudeEvent) graphql.Marshaler {
+			return ec.marshalNClaudeEvent2githubᚗcomᚋdrewdrewthisᚋsupergraphᚋgraphᚋmodelᚐClaudeEvent(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Subscription_claudeSessionUpdated(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Subscription",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_ClaudeEvent(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Subscription_claudeSessionUpdated_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
 		ec.Error(ctx, err)
 		return fc, err
 	}
@@ -2597,6 +3752,225 @@ func (ec *executionContext) fieldContext___Type_isOneOf(_ context.Context, field
 
 // region    **************************** object.gotpl ****************************
 
+var claudeEventImplementors = []string{"ClaudeEvent"}
+
+func (ec *executionContext) _ClaudeEvent(ctx context.Context, sel ast.SelectionSet, obj *model.ClaudeEvent) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, claudeEventImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("ClaudeEvent")
+		case "ts":
+			out.Values[i] = ec._ClaudeEvent_ts(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "type":
+			out.Values[i] = ec._ClaudeEvent_type(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "v":
+			out.Values[i] = ec._ClaudeEvent_v(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "key":
+			out.Values[i] = ec._ClaudeEvent_key(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "payload":
+			out.Values[i] = ec._ClaudeEvent_payload(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
+var claudeInstanceImplementors = []string{"ClaudeInstance"}
+
+func (ec *executionContext) _ClaudeInstance(ctx context.Context, sel ast.SelectionSet, obj *model.ClaudeInstance) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, claudeInstanceImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("ClaudeInstance")
+		case "hostId":
+			out.Values[i] = ec._ClaudeInstance_hostId(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "pane":
+			out.Values[i] = ec._ClaudeInstance_pane(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "pid":
+			out.Values[i] = ec._ClaudeInstance_pid(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "session":
+			out.Values[i] = ec._ClaudeInstance_session(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "staleSince":
+			out.Values[i] = ec._ClaudeInstance_staleSince(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
+var claudeSessionImplementors = []string{"ClaudeSession"}
+
+func (ec *executionContext) _ClaudeSession(ctx context.Context, sel ast.SelectionSet, obj *model.ClaudeSession) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, claudeSessionImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("ClaudeSession")
+		case "hostId":
+			out.Values[i] = ec._ClaudeSession_hostId(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "sessionId":
+			out.Values[i] = ec._ClaudeSession_sessionId(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "cwd":
+			out.Values[i] = ec._ClaudeSession_cwd(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "gitBranch":
+			out.Values[i] = ec._ClaudeSession_gitBranch(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "issueNumber":
+			out.Values[i] = ec._ClaudeSession_issueNumber(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "model":
+			out.Values[i] = ec._ClaudeSession_model(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "state":
+			out.Values[i] = ec._ClaudeSession_state(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "lastTool":
+			out.Values[i] = ec._ClaudeSession_lastTool(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "toolCalls":
+			out.Values[i] = ec._ClaudeSession_toolCalls(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "prNumber":
+			out.Values[i] = ec._ClaudeSession_prNumber(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "prUrl":
+			out.Values[i] = ec._ClaudeSession_prUrl(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "startedAt":
+			out.Values[i] = ec._ClaudeSession_startedAt(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "lastEventAt":
+			out.Values[i] = ec._ClaudeSession_lastEventAt(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "staleSince":
+			out.Values[i] = ec._ClaudeSession_staleSince(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
 var githubEventImplementors = []string{"GithubEvent"}
 
 func (ec *executionContext) _GithubEvent(ctx context.Context, sel ast.SelectionSet, obj *model.GithubEvent) graphql.Marshaler {
@@ -2840,6 +4214,72 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 			}
 
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "claudeSessions":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_claudeSessions(ctx, field)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "claudeSession":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_claudeSession(ctx, field)
+				if res == graphql.RequiredNull {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "claudeInstances":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_claudeInstances(ctx, field)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
 		case "peers":
 			field := field
 
@@ -2934,6 +4374,8 @@ func (ec *executionContext) _Subscription(ctx context.Context, sel ast.Selection
 	switch fields[0].Name {
 	case "pluginLag":
 		return ec._Subscription_pluginLag(ctx, fields[0])
+	case "claudeSessionUpdated":
+		return ec._Subscription_claudeSessionUpdated(ctx, fields[0])
 	case "checkRunUpdated":
 		return ec._Subscription_checkRunUpdated(ctx, fields[0])
 	case "templateEvents":
@@ -3409,6 +4851,60 @@ func (ec *executionContext) marshalNBoolean2bool(ctx context.Context, sel ast.Se
 	return res
 }
 
+func (ec *executionContext) marshalNClaudeEvent2githubᚗcomᚋdrewdrewthisᚋsupergraphᚋgraphᚋmodelᚐClaudeEvent(ctx context.Context, sel ast.SelectionSet, v model.ClaudeEvent) graphql.Marshaler {
+	return ec._ClaudeEvent(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNClaudeInstance2githubᚗcomᚋdrewdrewthisᚋsupergraphᚋgraphᚋmodelᚐClaudeInstance(ctx context.Context, sel ast.SelectionSet, v model.ClaudeInstance) graphql.Marshaler {
+	return ec._ClaudeInstance(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNClaudeInstance2ᚕgithubᚗcomᚋdrewdrewthisᚋsupergraphᚋgraphᚋmodelᚐClaudeInstanceᚄ(ctx context.Context, sel ast.SelectionSet, v []model.ClaudeInstance) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNClaudeInstance2githubᚗcomᚋdrewdrewthisᚋsupergraphᚋgraphᚋmodelᚐClaudeInstance(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNClaudeSession2githubᚗcomᚋdrewdrewthisᚋsupergraphᚋgraphᚋmodelᚐClaudeSession(ctx context.Context, sel ast.SelectionSet, v model.ClaudeSession) graphql.Marshaler {
+	return ec._ClaudeSession(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNClaudeSession2ᚕgithubᚗcomᚋdrewdrewthisᚋsupergraphᚋgraphᚋmodelᚐClaudeSessionᚄ(ctx context.Context, sel ast.SelectionSet, v []model.ClaudeSession) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNClaudeSession2githubᚗcomᚋdrewdrewthisᚋsupergraphᚋgraphᚋmodelᚐClaudeSession(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNClaudeSession2ᚖgithubᚗcomᚋdrewdrewthisᚋsupergraphᚋgraphᚋmodelᚐClaudeSession(ctx context.Context, sel ast.SelectionSet, v *model.ClaudeSession) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._ClaudeSession(ctx, sel, v)
+}
+
 func (ec *executionContext) unmarshalNFloat2float64(ctx context.Context, v any) (float64, error) {
 	res, err := graphql.UnmarshalFloatContext(ctx, v)
 	return res, graphql.ErrorOnPath(ctx, err)
@@ -3705,6 +5201,31 @@ func (ec *executionContext) marshalOBoolean2ᚖbool(ctx context.Context, sel ast
 	_ = sel
 	_ = ctx
 	res := graphql.MarshalBoolean(*v)
+	return res
+}
+
+func (ec *executionContext) marshalOClaudeSession2ᚖgithubᚗcomᚋdrewdrewthisᚋsupergraphᚋgraphᚋmodelᚐClaudeSession(ctx context.Context, sel ast.SelectionSet, v *model.ClaudeSession) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._ClaudeSession(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalOInt2ᚖint(ctx context.Context, v any) (*int, error) {
+	if v == nil {
+		return nil, nil
+	}
+	res, err := graphql.UnmarshalInt(v)
+	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalOInt2ᚖint(ctx context.Context, sel ast.SelectionSet, v *int) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	_ = sel
+	_ = ctx
+	res := graphql.MarshalInt(*v)
 	return res
 }
 

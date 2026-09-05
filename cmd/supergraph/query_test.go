@@ -110,7 +110,7 @@ func TestRunNamedQuery_PostsOpAndVariablesToPluginEndpoint(t *testing.T) {
 	defer srv.Close()
 
 	err := runNamedQuery(srv.URL+"/plugins/github/graphql", "openIssues",
-		[]string{"owner=acme", "repo=widgets"}, dir)
+		[]string{"owner=acme", "repo=widgets"}, dir, true)
 	if err != nil {
 		t.Fatalf("runNamedQuery() error: %v", err)
 	}
@@ -139,14 +139,14 @@ func TestRunNamedQuery_SurfacesGraphQLErrors(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	err := runNamedQuery(srv.URL, "issue", nil, dir)
+	err := runNamedQuery(srv.URL, "issue", nil, dir, true)
 	if err == nil {
 		t.Fatal("expected error for graphql errors payload")
 	}
 }
 
 func TestRunNamedQuery_ErrorsWhenOpFileMissing(t *testing.T) {
-	if err := runNamedQuery("http://unused.invalid", "nope", nil, t.TempDir()); err == nil {
+	if err := runNamedQuery("http://unused.invalid", "nope", nil, t.TempDir(), true); err == nil {
 		t.Fatal("expected error when named op file is missing")
 	}
 }

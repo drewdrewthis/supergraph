@@ -28,6 +28,10 @@ Feature: PRD user-story and failure-surface acceptance criteria
   # S3 (check-run webhook → subscription push < 1s) is owned by the github plugin and proven in
   # features/github.feature (@S3). Removed here to avoid a duplicate, weaker pending contract.
 
+  # Umbrella S4 stays @pending: it needs the cross-plugin `touching` join over BOTH github
+  # and claude rows plus the absent-source staleSince marker. The claude HALF is proven now
+  # by claude.feature @AC-CLAUDE-S4-HALF (a claudeSessions query filtered by issueNumber);
+  # this umbrella flips green only once the github side and the `touching` resolver land.
   @pending @plugin-tier @S4
   Scenario: S4 — one query joins github and claude rows by issue, marking absent sources
     Given the plugin tier for "claude" is implemented
@@ -46,6 +50,9 @@ Feature: PRD user-story and failure-surface acceptance criteria
     When the acceptance criterion is exercised: "a plugin stops emitting real events"
     Then evidence is captured: "within 60s `/health` shows state stale with growing lagSeconds derived from the plugin's last real event, via `/health` screenshots and a lag log"
 
+  # F1's claude half is proven now by claude.feature @F1 (hook POST → queryable p95 < 1s over
+  # 20 samples); its github half by github.feature @F1. This umbrella covers both sources at
+  # once and stays @pending until the github ingest tier lands.
   @pending @plugin-tier @F1
   Scenario: F1 Freshness — claude events become queryable in under 1 second
     Given the plugin tier for "claude" is implemented
@@ -61,6 +68,9 @@ Feature: PRD user-story and failure-surface acceptance criteria
     When the acceptance criterion is exercised: "two orchestrators race to claim one new issue via assignee or the grinding label"
     Then evidence is captured: "exactly one ship run happens and the loser sees the existing claim, via two logs and one PR"
 
+  # F5's claude-specific proof is now claude.feature @F5 (the claude plugin panics in Start →
+  # goes stale while a sibling plugin and /health keep answering). This umbrella stays
+  # @pending as the whole-tier statement (incl. tmux) until those tiers land.
   @pending @plugin-tier @F5
   Scenario: F5 Panic isolation — a panicking plugin goes stale without taking others down
     Given the plugin tier for "claude" is implemented
@@ -86,14 +96,14 @@ Feature: PRD user-story and failure-surface acceptance criteria
   # S1: "Issue-open to PR-open p95 <= 15min, zero human action" → Scenario: S1 — issue-open to PR-open stays under 15 minutes with zero human action
   # S2: "Cross-box free-slot query p95 < 1s warm" → Scenario: S2 — cross-box free-slot query answers warm in under 1 second
   # S3: "Webhook receipt to subscription push p95 < 1s" → owned by github plugin: features/github.feature @S3
-  # S4: "One query joins github + claude by issue, source-tagged, stale marker on absence" → Scenario: S4 — one query joins github and claude rows by issue, marking absent sources
+  # S4: "One query joins github + claude by issue, source-tagged, stale marker on absence" → Scenario: S4 — one query joins github and claude rows by issue, marking absent sources  (claude half live: claude.feature @AC-CLAUDE-S4-HALF)
   # S5: "Template plugin compiles in, zero core diff" → Scenario: S5 — the template plugin compiles in and serves without touching core
   # S6: "/health reports last real event per plugin; stale + growing lag within 60s of stall" → Scenario: S6 — /health reports each plugin's last real event and marks a stalled one stale
-  # F1: "Freshness — ingest-to-queryable p95 < 1s" → claude half here (F1 Freshness — claude events); github half: features/github.feature @F1
+  # F1: "Freshness — ingest-to-queryable p95 < 1s" → claude half here (F1 Freshness — claude events); github half: features/github.feature @F1  (claude half live: claude.feature @F1)
   # F2: "Reconcile — dropped webhook healed" → owned by github plugin: features/github.feature @F2
   # F3: "New repo appears with zero config within one reconcile" → owned by github plugin: features/github.feature @F3
   # F4: "Double-dispatch — exactly one ship run, loser sees claim" → Scenario: F4 Double-dispatch — two racing orchestrators yield exactly one ship run
-  # F5: "Panic isolation — stale plugin, others keep answering" → Scenario: F5 Panic isolation — a panicking plugin goes stale without taking others down
+  # F5: "Panic isolation — stale plugin, others keep answering" → Scenario: F5 Panic isolation — a panicking plugin goes stale without taking others down  (claude proof live: claude.feature @F5)
   # F6: "/health reports last real event per plugin; healthy plugin lagSeconds < 60" → Scenario: F6 — /health reports each plugin's last real event so a healthy plugin shows low lag
   # F7: "Quota — GitHub API calls < 500/hour at 20 repos" → owned by github plugin: features/github.feature @F7
   # F8: "Stale peer — stale since T within 30s, no peer-of-peer rows" → Scenario: F8 Stale peer — a stopped box is marked stale on its peers within 30 seconds

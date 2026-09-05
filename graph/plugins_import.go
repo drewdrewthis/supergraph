@@ -12,4 +12,7 @@ import (
 	_ "github.com/drewdrewthis/supergraph/plugins/peer"
 	// template is the reference plugin (PRD §6 template plugin).
 	_ "github.com/drewdrewthis/supergraph/plugins/template"
+
+	// claude ingests Claude Code session state (docs/edr/claude.md).
+	_ "github.com/drewdrewthis/supergraph/plugins/claude"
 )

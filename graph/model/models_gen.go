@@ -6,6 +6,39 @@ import (
 	"time"
 )
 
+type ClaudeEvent struct {
+	Ts      time.Time `json:"ts"`
+	Type    string    `json:"type"`
+	V       int       `json:"v"`
+	Key     string    `json:"key"`
+	Payload string    `json:"payload"`
+}
+
+type ClaudeInstance struct {
+	HostID     string         `json:"hostId"`
+	Pane       string         `json:"pane"`
+	Pid        int            `json:"pid"`
+	Session    *ClaudeSession `json:"session"`
+	StaleSince *time.Time     `json:"staleSince,omitempty"`
+}
+
+type ClaudeSession struct {
+	HostID      string     `json:"hostId"`
+	SessionID   string     `json:"sessionId"`
+	Cwd         string     `json:"cwd"`
+	GitBranch   *string    `json:"gitBranch,omitempty"`
+	IssueNumber *int       `json:"issueNumber,omitempty"`
+	Model       *string    `json:"model,omitempty"`
+	State       string     `json:"state"`
+	LastTool    *string    `json:"lastTool,omitempty"`
+	ToolCalls   int        `json:"toolCalls"`
+	PrNumber    *int       `json:"prNumber,omitempty"`
+	PrURL       *string    `json:"prUrl,omitempty"`
+	StartedAt   time.Time  `json:"startedAt"`
+	LastEventAt time.Time  `json:"lastEventAt"`
+	StaleSince  *time.Time `json:"staleSince,omitempty"`
+}
+
 type GithubEvent struct {
 	Ts      time.Time `json:"ts"`
 	Type    string    `json:"type"`
