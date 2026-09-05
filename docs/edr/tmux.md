@@ -16,9 +16,10 @@ credentials or hardware. Its reason to exist in the spike is the **local warm fr
 plugin's**, so this feature owns only `AC-TMUX-FREESLOTS-WARM`, not S2) and the
 **issue ↔ branch/worktree** join the github plugin already reserves as `paneForBranch @pending`.
 
-**Hard constraints (owner / PRD):** ≤ **860 LOC prod** for `plugins/tmux/**` excluding tests
-(600 sketch → 800 for the control client + poll + read model → **860** once the user-test bug
-fixes B1/B2 and review Shoulds landed; measured actual **813**, see §LOC budget);
+**Hard constraints (owner / PRD):** ≤ **820 LOC prod** for `plugins/tmux/**` excluding tests
+(600 sketch → 800 for the control client + poll + read model → 860 for the user-test bug fixes
+B1/B2 and review Shoulds → **820** after the config helpers moved to `plugins/internal/pluginconfig`;
+measured actual **776**, see §LOC budget);
 **zero core diff** (S5); Linux + macOS from one binary; single tmux server per box (v1); no
 mutation of the user's tmux config (see D2); freshness is event-driven with a reconcile floor
 (honest-staleness, mirrors github's AC-GH-STALE).
@@ -162,27 +163,28 @@ extend type Subscription { tmuxEvents: TmuxEvent! }
 - `hostId` is parsed from the key, not stored as a column (github convention).
 - Cursor: `snapshot:lastAt` (last successful reconcile time) in core's `cursors` table; `Cursor()` reports it.
 
-## LOC budget (prod, cap **860**; tests excluded) — measured actuals
+## LOC budget (prod, cap **820**; tests excluded) — measured actuals
 
 Strip formula (portable GNU/BSD sed), run by `make loc-tmux`:
-`find plugins/tmux -name '*.go' ! -name '*_test.go' | xargs sed -E '/^[[:space:]]*\/\//d;/^[[:space:]]*$/d' | wc -l` — fails > 860.
+`find plugins/tmux -name '*.go' ! -name '*_test.go' | xargs sed -E '/^[[:space:]]*\/\//d;/^[[:space:]]*$/d' | wc -l` — fails > 820.
 
-**Cap 600 → 800 → 860:** the control-mode client + reconcile poll + SQLite read model + flattened
+**Cap 600 → 800 → 860 → 820:** the control-mode client + reconcile poll + SQLite read model + flattened
 resolver seam landed at **770** (600 sketch overrun, owner-ratified 800). The user-test bug fixes
 (B1 once-per-transition `server.down`, B2 probe-before-attach + `minStableAttach` backoff guard) and
-the review Shoulds (S-A change-detected `pane.updated`, S-B scan-error/reply-frame handling) added
-real per-file work to a measured **813**; per the owner rule the cap is set to **measured + 5%
-rounded up to a multiple of 10 = 860**. No compression for the number.
+the review Shoulds (S-A change-detected `pane.updated`, S-B scan-error/reply-frame handling) took it to
+**813** (cap 860). The `strOr`/`intOr`/`strsOr` config helpers then moved to `plugins/internal/pluginconfig`
+(−37 in `tmux.go`), dropping the measure to **776**; per the owner rule the cap is set to **measured + 5%
+rounded up to a multiple of 10 = 820**. No compression for the number.
 
 | File (`plugins/tmux/`) | Actual | Responsibility |
 |---|---:|---|
-| `tmux.go` | 164 | wiring: `init`/`New`/`Name`/`Migrate`/`Start` (dormant when unconfigured) + `Cursor` + config parse/defaults + `attach`/`serverAlive`/clock/exec seams + `atomic.Pointer` singleton |
+| `tmux.go` | 127 | wiring: `init`/`New`/`Name`/`Migrate`/`Start` (dormant when unconfigured) + `Cursor` + config parse/defaults (coercion via `plugins/internal/pluginconfig`) + `attach`/`serverAlive`/clock/exec seams + `atomic.Pointer` singleton |
 | `keys.go` | 79 | key grammar data table: parse + object→key + typename + host split + free/busy classifier |
 | `control.go` | 144 | control-mode client: probe-gated `tmux -C attach`, hold stdin, `refresh-client -f no-output`, structural-notification → reconcile trigger, `%begin/%end/%error` skip + scan-error log, once-per-transition `server.down`, `minStableAttach` + backoff reconnect |
 | `snapshot.go` | 158 | `list-panes -a`/`list-sessions` parse → upsert; reconcile diff → new/changed `pane.updated` + `pane.closed`/`staleSince`; `tmux.snapshot` emit (only on success — owner T1); git-branch resolve; free/busy recompute |
 | `store.go` | 218 | SQLite: migrate tables, upsert session/pane, scan, markStale/markAllStale, `livePaneRows`/`livePaneKeys`, scan-free, paneForBranch join |
 | `resolver.go` | 50 | exported read funcs for sessions/panes/slots/freeSlots/paneForBranch via the package-singleton seam (no `core.Registry` instance accessor exists; server injects only Health/Lag/Events) |
-| **Total** | **813** | cap **860**; no `cmd/` delta (serves via gqlgen glob seam, D6) |
+| **Total** | **776** | cap **820**; no `cmd/` delta (serves via gqlgen glob seam, D6) |
 
 **Deviations from the sketch, attributed (every real one):**
 - **Schema flattened to scalars** — the sketch's nested `TmuxServer`/`TmuxWindow` object types and
@@ -280,8 +282,8 @@ running binary + real tmux this turn**. `T` = `reconcileIntervalSeconds` (test u
 - **AC-TMUX-ZEROCORE (S5).** After adding `plugins/tmux/**` + the `graph/plugins_import.go` blank
   import + regenerated `graph/`, `git diff --stat core/` reports **0 files changed** and `/health`
   serves a `tmux` entry. **Evidence:** empty `git diff --stat core/` + `/health` showing `tmux`.
-- **AC-TMUX-LOC.** The strip-formula count for `plugins/tmux/**` (excluding `*_test.go`) is **≤ 860**
-  (measured **813**). **Evidence:** `make loc-tmux` output ≤ 860.
+- **AC-TMUX-LOC.** The strip-formula count for `plugins/tmux/**` (excluding `*_test.go`) is **≤ 820**
+  (measured **776**). **Evidence:** `make loc-tmux` output ≤ 820.
 - **AC-TMUX-STALE-PEER (cross-box, @pending; peer-owned).** After the peer plugin exists, a stopped box
   shows its tmux data as `stale since T` on a peer **< 30 s**, with no peer-of-peer rows. **@pending** —
   needs the peer plugin + a second box. Tagged `@AC-TMUX-STALE-PEER` (a tmux-scoped cross-reference; F8

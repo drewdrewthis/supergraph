@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/drewdrewthis/supergraph/core"
+	"github.com/drewdrewthis/supergraph/plugins/internal/pluginconfig"
 )
 
 func init() { core.Register("claude", New) }
@@ -65,14 +66,14 @@ func New(cfg core.PluginConfig) (core.Plugin, error) {
 		now:           func() time.Time { return time.Now().UTC() },
 	}
 	raw := cfg.Raw
-	p.projectsDir = strOr(raw, "projectsDir", p.projectsDir)
-	p.settingsPath = strOr(raw, "settingsPath", p.settingsPath)
-	p.pidLiveness = boolOr(raw, "pidLiveness", p.pidLiveness)
-	p.retentionDays = intOr(raw, "retentionDays", p.retentionDays)
-	if n := intOr(raw, "scanIntervalSeconds", 0); n > 0 {
+	p.projectsDir = pluginconfig.Str(raw, "projectsDir", p.projectsDir)
+	p.settingsPath = pluginconfig.Str(raw, "settingsPath", p.settingsPath)
+	p.pidLiveness = pluginconfig.Bool(raw, "pidLiveness", p.pidLiveness)
+	p.retentionDays = pluginconfig.Int(raw, "retentionDays", p.retentionDays)
+	if n := pluginconfig.Int(raw, "scanIntervalSeconds", 0); n > 0 {
 		p.scanInterval = time.Duration(n) * time.Second
 	}
-	p.panicInject = boolOr(raw, "panic", os.Getenv("SUPERGRAPH_CLAUDE_PANIC") == "1")
+	p.panicInject = pluginconfig.Bool(raw, "panic", os.Getenv("SUPERGRAPH_CLAUDE_PANIC") == "1")
 	return p, nil
 }
 
@@ -176,41 +177,4 @@ func QueryInstances(ctx context.Context, host *string) []SessionRow {
 	}
 	rows, _ := p.store.instances(ctx, host)
 	return rows
-}
-
-// --- small config/format helpers (toml decodes to string/int64/float64/bool) ---
-//
-// TODO: strOr/boolOr/intOr are copied from plugins/github/github.go (and readErrStatus
-// in hook.go); consolidate into a shared plugins/internal/pluginconfig on a follow-up.
-
-func strOr(raw map[string]any, k, def string) string {
-	if raw != nil {
-		if v, ok := raw[k].(string); ok && v != "" {
-			return v
-		}
-	}
-	return def
-}
-
-func boolOr(raw map[string]any, k string, def bool) bool {
-	if raw != nil {
-		if v, ok := raw[k].(bool); ok {
-			return v
-		}
-	}
-	return def
-}
-
-func intOr(raw map[string]any, k string, def int) int {
-	if raw != nil {
-		switch n := raw[k].(type) {
-		case int:
-			return n
-		case int64:
-			return int(n)
-		case float64:
-			return int(n)
-		}
-	}
-	return def
 }

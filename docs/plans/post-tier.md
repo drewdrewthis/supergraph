@@ -59,13 +59,14 @@ nil-map, wrong-type, int64/float64 coercion, MaxBytesError mapping).
 Formula lives in `Makefile` (`loc-<plugin>`, POSIX `[[:space:]]` strip). Numbers below are
 **estimates** — coder MUST run `make loc-<p>` on the post-move tree and set the cap from the
 real number; keep the current cap if `ceil(measured×1.05)` would exceed it.
-| Plugin | cap now | measured now | est. after move | est. new cap |
+| Plugin | cap before | measured before | measured after move | new cap (×1.05, round up to 10) |
 |---|---|---|---|---|
-| github | 1350 | 1350 | ~1301 | **1350** (unchanged; +5% > 1350) |
-| claude | 790 | 745 | ~710 | **746** |
-| peer   | 700 | 665 | ~643 | **676** |
-| tmux   | 800 | ~770 | ~734 | **771** |
-New package needs its own budget: add `loc-pluginconfig` (cap ~55) OR a `loc-internal` umbrella
+| github | 1350 | 1350 | 1311 | **1350** (unchanged; 1311×1.05 rounds to 1380 > 1350, cap never rises) |
+| claude | 790 | 745 | 710 | **750** |
+| peer   | 700 | 665 | 644 | **680** |
+| tmux   | 860 | 813 | 776 | **820** |
+| internal (new) | — | — | 89 | **100** |
+New package needs its own budget: added `loc-internal` (cap **100**) as a single umbrella
 — **decision for owner**: recommend a single `loc-internal` gate so future `plugins/internal/*`
 helpers share one budget. Wire it into the `dev-check`/CI aggregate that already runs `loc-*`.
 
@@ -174,7 +175,8 @@ Steps + exact commands (all in results doc):
 Report t_stale and t_recover with the raw poll log.
 
 ### Blocked on owner creds (grep `@live @pending` across `features/*.feature`)
-18 `@live` scenarios, all `@pending` until creds/boxes exist:
+10 `@live` scenarios (scenario tag lines only; a bare `grep -c` counts 18 by including comment
+lines), all `@pending` until creds/boxes exist:
 - **github (needs `GITHUB_TOKEN`+`GITHUB_ORG`)** — `@F2` `@F3` `@F7` `@AC-GH-FORWARD`
   `@AC-GH-NOTIFY-304` `@AC-GH-RATELOG` (`features/github.feature:194-228`).
 - **peer (needs a real second box / non-loopback mesh)** — `@S2` `@F8` `@AC-PEER-AUTH`

@@ -10,6 +10,7 @@ import (
 	"net/http"
 
 	"github.com/drewdrewthis/supergraph/core"
+	"github.com/drewdrewthis/supergraph/plugins/internal/pluginconfig"
 )
 
 // handleWebhook receives a GitHub webhook (direct, forwarded, or redelivered),
@@ -26,7 +27,7 @@ func (p *Plugin) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxWebhookBody)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		http.Error(w, "bad body", readErrStatus(err))
+		http.Error(w, "bad body", pluginconfig.ReadErrStatus(err))
 		return
 	}
 	if !p.verifySignature(body, r.Header.Get("X-Hub-Signature-256")) {

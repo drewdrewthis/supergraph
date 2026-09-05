@@ -227,7 +227,7 @@ core's global `lagThresholdSeconds` (the plugin does not duplicate it); the plug
 is the pid-liveness sweep. Hook install is a `supergraph install --install-hook` CLI flag (owner
 decision C1, default off), **not** a plugin config key — the plugin never writes settings itself.
 
-## LOC budget (prod, guard **790**; tests excluded)
+## LOC budget (prod, guard **750**; tests excluded)
 
 Table shows target vs **Actual** LOC (EDR strip formula: non-comment, non-blank). CLI hook-install delta
 lives in `cmd/supergraph/` and is counted separately, like github's. The **Actual** column is measured
@@ -236,14 +236,14 @@ measure (677).
 
 | File (`plugins/claude/`) | Target | **Actual** | Δ | Responsibility (and what the batch added) |
 |---|---:|---:|---:|---|
-| `claude.go` | 110 | **156** | +3 | wiring + query funcs; +`retentionDays` config, softened privacy doc, helper-dedup TODO (S2/S4/S7) |
+| `claude.go` | 110 | **128** | −25 | wiring + query funcs; +`retentionDays` config, softened privacy doc; `strOr`/`boolOr`/`intOr` moved to `plugins/internal/pluginconfig` (S2/S4/S7) |
 | `keys.go` | 70 | **29** | 0 | key grammar (`session:`/`instance:`) + `issueNumber` from branch + PR# from URL |
 | `store.go` | 150 | **255** | +31 | fold/dedup/enrich/get/list/instances/stale-scan; +`prune` retention sweep (S2) |
-| `hook.go` | 110 | **67** | +5 | `/hook` parse+validate→reducer→emit; +`validSessionID` format gate (S3) |
+| `hook.go` | 110 | **60** | −7 | `/hook` parse+validate→reducer→emit; +`validSessionID` format gate (S3); `readErrStatus` moved to `plugins/internal/pluginconfig` |
 | `reducer.go` | 100 | **34** | 0 | ported state machine shared by hook + tail |
 | `tail.go` | 120 | **128** | +29 | poll-scan + JSONL parse + offset cursor + backfill/enrich + stale sweep; +capped `readLine` + retention call (S1/S2) |
 | `redact.go` | 30 | **76** | 0 | whitelist projection: hook + transcript record → body-free foldInput/enrichment (comment softened, S4) |
-| **Total** | **690** | **745** | +68 | guard **790** = measured 745 + 5% rounded up to a multiple of 10 (owner rule) |
+| **Total** | **690** | **710** | +33 | guard **750** = measured 710 + 5% rounded up to a multiple of 10 (owner rule); ratcheted 790→750 after the config helpers moved to `plugins/internal/pluginconfig` (−35) |
 
 CLI delta (`cmd/supergraph/install.go`, counted separately like github's): **183** actual (was 150) — the
 opt-in `install` (print-block + idempotent, now **atomic** `--install-hook` merge that refuses to
@@ -251,9 +251,9 @@ overwrite an unparseable file, M1) **and** the `claude-hook` stdin→POST forwar
 pick, S6). The `query --op --plugin` client change lives in `cmd/supergraph/query.go`, also separate.
 
 - **AC-CLAUDE-LOC** guards it: a CI step counts non-comment, non-blank prod lines under
-  `plugins/claude` excluding `*_test.go` and fails > **790** (same `sed`/`wc` formula as `make
-  loc-github`). Measured total **745**; the guard is measured + 5% rounded up to a multiple of 10
-  (**790**) per the owner rule — the Target column is the original estimate, not the guard.
+  `plugins/claude` excluding `*_test.go` and fails > **750** (same `sed`/`wc` formula as `make
+  loc-github`). Measured total **710**; the guard is measured + 5% rounded up to a multiple of 10
+  (**750**) per the owner rule — the Target column is the original estimate, not the guard.
 
 ## Failure modes
 

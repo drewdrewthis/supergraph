@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/drewdrewthis/supergraph/core"
+	"github.com/drewdrewthis/supergraph/plugins/internal/pluginconfig"
 )
 
 func init() { core.Register("tmux", New) }
@@ -77,17 +78,17 @@ func New(cfg core.PluginConfig) (core.Plugin, error) {
 		tmuxPath:            "tmux",
 		configured:          len(cfg.Raw) > 0,
 	}
-	c.socket = strOr(cfg.Raw, "socket", c.socket)
-	c.eventSource = strOr(cfg.Raw, "eventSource", c.eventSource)
-	c.slotKind = strOr(cfg.Raw, "slotKind", c.slotKind)
-	c.tmuxPath = strOr(cfg.Raw, "tmuxPath", c.tmuxPath)
-	if n := intOr(cfg.Raw, "reconcileIntervalSeconds", 0); n > 0 {
+	c.socket = pluginconfig.Str(cfg.Raw, "socket", c.socket)
+	c.eventSource = pluginconfig.Str(cfg.Raw, "eventSource", c.eventSource)
+	c.slotKind = pluginconfig.Str(cfg.Raw, "slotKind", c.slotKind)
+	c.tmuxPath = pluginconfig.Str(cfg.Raw, "tmuxPath", c.tmuxPath)
+	if n := pluginconfig.Int(cfg.Raw, "reconcileIntervalSeconds", 0); n > 0 {
 		c.reconcileInterval = time.Duration(n) * time.Second
 	}
-	if n := intOr(cfg.Raw, "reconnectBackoffMaxSeconds", 0); n > 0 {
+	if n := pluginconfig.Int(cfg.Raw, "reconnectBackoffMaxSeconds", 0); n > 0 {
 		c.reconnectBackoffMax = time.Duration(n) * time.Second
 	}
-	if xs := strsOr(cfg.Raw, "idleShells"); xs != nil {
+	if xs := pluginconfig.Strs(cfg.Raw, "idleShells"); xs != nil {
 		c.idleShells = xs
 	}
 
@@ -170,51 +171,4 @@ func sleepCtx(ctx context.Context, d time.Duration) {
 	case <-ctx.Done():
 	case <-t.C:
 	}
-}
-
-// --- config coercion helpers (toml decodes to string/int64/float64/bool/[]any) ---
-//
-// TODO: strOr/intOr/strsOr are duplicated verbatim across the github/peer/claude/tmux
-// plugins. The approved follow-up is a shared plugins/internal/pluginconfig package;
-// left here until that lands so this PR stays scoped to the tmux plugin.
-
-func strOr(raw map[string]any, k, def string) string {
-	if raw != nil {
-		if v, ok := raw[k].(string); ok && v != "" {
-			return v
-		}
-	}
-	return def
-}
-
-func intOr(raw map[string]any, k string, def int) int {
-	if raw == nil {
-		return def
-	}
-	switch n := raw[k].(type) {
-	case int:
-		return n
-	case int64:
-		return int(n)
-	case float64:
-		return int(n)
-	}
-	return def
-}
-
-func strsOr(raw map[string]any, k string) []string {
-	if raw == nil {
-		return nil
-	}
-	xs, ok := raw[k].([]any)
-	if !ok {
-		return nil
-	}
-	out := make([]string, 0, len(xs))
-	for _, v := range xs {
-		if s, ok := v.(string); ok {
-			out = append(out, s)
-		}
-	}
-	return out
 }
