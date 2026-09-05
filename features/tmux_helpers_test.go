@@ -10,7 +10,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strings"
 	"time"
 
@@ -42,7 +41,6 @@ type tmuxWorld struct {
 	branchDir   string
 	mainDir     string
 	branchPanes []paneJSON
-	coreDiff    string
 	locOut      string
 }
 
@@ -301,19 +299,6 @@ func (g *tmuxWorld) realPaneCount() (int, error) {
 		}
 	}
 	return n, nil
-}
-
-func p95(durs []time.Duration) time.Duration {
-	if len(durs) == 0 {
-		return 0
-	}
-	s := append([]time.Duration(nil), durs...)
-	sort.Slice(s, func(i, j int) bool { return s[i] < s[j] })
-	idx := (len(s)*95 + 99) / 100
-	if idx >= len(s) {
-		idx = len(s) - 1
-	}
-	return s[idx]
 }
 
 // writeStubTmux writes a stub tmux binary (a shell script) that answers -V,

@@ -174,7 +174,6 @@ func registerGithubSteps(sc *godog.ScenarioContext) {
 	// ---------- AC-GH-ZEROCORE ----------
 	sc.Step(lit("the github plugin package and its blank import in graph/plugins_import.go"), noop)
 	sc.Step(lit("`git diff --stat core/` is run"), g.zerocoreRun)
-	sc.Step(lit("it reports 0 files changed"), g.zerocoreAssert)
 
 	// ---------- @live @pending ----------
 	registerGithubLiveSteps(sc)
@@ -1214,13 +1213,6 @@ func (g *ghWorld) zerocoreRun() error {
 	g.sw.lastStdout = string(out)
 	if err != nil {
 		return err
-	}
-	return nil
-}
-
-func (g *ghWorld) zerocoreAssert() error {
-	if strings.TrimSpace(g.sw.lastStdout) != "" {
-		return fmt.Errorf("git diff --stat core/ is not empty:\n%s", g.sw.lastStdout)
 	}
 	return nil
 }

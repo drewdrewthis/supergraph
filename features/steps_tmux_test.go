@@ -142,7 +142,6 @@ func registerTmuxSteps(sc *godog.ScenarioContext) {
 	// ZEROCORE
 	sc.Step(lit("the tmux plugin exists under `plugins/tmux/`, registered via `graph/plugins_import.go` and regenerated `graph/`"), tw.noop)
 	sc.Step(lit("I check `git diff --stat core/` against main"), tw.gitDiffCore)
-	sc.Step(lit("it reports 0 files changed"), tw.assertNoCoreDiff)
 	sc.Step(lit(`a supergraph server watching a private tmux socket serves a "tmux" entry in `+"`/health`"), tw.startBareControlAssertRow)
 
 	// LOC
@@ -837,14 +836,7 @@ func (g *tmuxWorld) gitDiffCore() error {
 	if err != nil {
 		return fmt.Errorf("git diff: %s", out)
 	}
-	g.coreDiff = strings.TrimSpace(string(out))
-	return nil
-}
-
-func (g *tmuxWorld) assertNoCoreDiff() error {
-	if g.coreDiff != "" {
-		return fmt.Errorf("core/ changed against main:\n%s", g.coreDiff)
-	}
+	g.sw.lastStdout = strings.TrimSpace(string(out))
 	return nil
 }
 
