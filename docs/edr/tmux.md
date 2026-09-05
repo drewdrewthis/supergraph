@@ -182,7 +182,7 @@ described) was moved to `plugins/internal/single.Ptr[Plugin]` — LOC-neutral, m
 
 | File (`plugins/tmux/`) | Actual | Responsibility |
 |---|---:|---|
-| `tmux.go` | 127 | wiring: `init`/`New`/`Name`/`Migrate`/`Start` (dormant when unconfigured) + `Cursor` + config parse/defaults (coercion via `plugins/internal/pluginconfig`) + `attach`/`serverAlive`/clock/exec seams + `atomic.Pointer` singleton |
+| `tmux.go` | 127 | wiring: `init`/`New`/`Name`/`Migrate`/`Start` (dormant when unconfigured) + `Cursor` + config parse/defaults (coercion via `plugins/internal/pluginconfig`) + `attach`/`serverAlive`/clock/exec seams + `single.Ptr` singleton |
 | `keys.go` | 79 | key grammar data table: parse + object→key + typename + host split + free/busy classifier |
 | `control.go` | 144 | control-mode client: probe-gated `tmux -C attach`, hold stdin, `refresh-client -f no-output`, structural-notification → reconcile trigger, `%begin/%end/%error` skip + scan-error log, once-per-transition `server.down`, `minStableAttach` + backoff reconnect |
 | `snapshot.go` | 158 | `list-panes -a`/`list-sessions` parse → upsert; reconcile diff → new/changed `pane.updated` + `pane.closed`/`staleSince`; `tmux.snapshot` emit (only on success — owner T1); git-branch resolve; free/busy recompute |

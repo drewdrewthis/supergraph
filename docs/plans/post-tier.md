@@ -106,15 +106,7 @@ skipping it is defensible — the atomic.Pointer body is 3 lines each.
 - **AC-PCFG-LOC** — after the move, each `make loc-{github,claude,peer,tmux}` passes at its re-ratcheted cap, where each cap = the post-move `make loc-<p>` measurement × 1.05 **rounded up to the next multiple of 10** (owner rule; matches the existing 1350/700/790/800 caps), and never above the prior cap; and a dedicated `loc-internal` (or `loc-pluginconfig`) gate — cap by the same rule — guards the new package and is added as its own step in `.github/workflows/ci.yml` (there is no `loc-*` aggregate target; each gate is a separate CI step). Evidence: each `make loc-<p>` stdout + the new CI step.
 - **AC-SINGLE-PTR** (if the singleton PR ships) — claude/peer/tmux singletons all route through `single.Ptr[Plugin]`; `grep -n 'sync.RWMutex' plugins/tmux/tmux.go` is empty; tests still read their own instance and a nil/unstarted ptr yields no-rows not a panic. Evidence: grep + green features.
 
-**Status: shipped.** `plugins/internal/single.Ptr[T]` added (`Set`/`Get`, wraps `atomic.Pointer[T]`,
-table + `-race` concurrent test). tmux's `current`/`currentMu` had already been migrated to
-`atomic.Pointer[Plugin]` by the earlier tmux fix pass (not the RWMutex this section describes) —
-confirmed via `grep -n 'sync.RWMutex' plugins/tmux/tmux.go` = empty before this PR too. All three
-(`peer.active`, `claude.live`, `tmux.active`) now declare `single.Ptr[Plugin]` and call
-`.Set`/`.Get`. Net LOC swap was a wash (removed `sync/atomic` import + inline var, added
-`plugins/internal/single` import): `make loc-peer/-claude/-tmux` measured **644/710/776**,
-unchanged from pre-PR — caps stay **680/750/820**. `make loc-internal` measured **90** (was 89),
-cap stays **100**.
+**Status: shipped in PR #14 (LOC-neutral).**
 
 ---
 

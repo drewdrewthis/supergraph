@@ -28,9 +28,7 @@ import (
 
 func init() { core.Register("claude", New) }
 
-// live is the running plugin instance, published in Migrate so the graph query
-// resolvers (graph/claude.resolvers.go) can read session state through the package
-// funcs below without a new core-injected Resolver field (the zero-core-edit seam).
+// live is the running plugin instance, published for graph/ resolvers; see plugins/internal/single.Ptr for the one-instance-per-process convention.
 var live single.Ptr[Plugin]
 
 // Plugin is the claude plugin: one instance serves the hook HTTP route and the tail

@@ -4,7 +4,10 @@
 // LOCKED, so this is the zero-core-edit seam — see docs/edr/peer.md, claude.md,
 // tmux.md). One process runs one instance of a given plugin, so a lock-free pointer
 // swap is sufficient: New/Migrate calls Set, resolvers call Get, and a nil/unstarted
-// Get yields the caller's own "no rows" zero value rather than a panic.
+// Get yields the caller's own "no rows" zero value rather than a panic. Ptr[T] wraps
+// atomic.Pointer[T] for a single T per process, allowing safe concurrent reads without
+// locks: Set replaces the pointer atomically, Get loads it, and the zero value (nil)
+// is safe to use — no panic on Get before Set.
 package single
 
 import "sync/atomic"
