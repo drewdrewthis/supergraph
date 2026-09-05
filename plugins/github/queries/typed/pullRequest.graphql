@@ -2,7 +2,7 @@
 #   supergraph query --plugin github --op pullRequest --var key=pr:o/r#8
 query pullRequest($key: String!) {
   pullRequest(key: $key) {
-    number title state url headRefName
+    number title state url updatedAt labels headRefName baseRefName
     tmuxPanes { key }
     claudeSessions { sessionId }
   }

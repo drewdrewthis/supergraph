@@ -17,15 +17,27 @@ import (
 	"github.com/drewdrewthis/supergraph/plugins/tmux"
 )
 
-// issueBranches is the set of git branches that link to issue N in a repo — the one
-// join key set both tmuxPanes and claudeSessions read, so the two sides can only
-// agree because they share issuekey.FromBranch (AC-GHQ-JOIN-CONSISTENT):
-//   - any tmux session branch that derives to N (the bare issueN branch path),
+// issueBranches returns the linked-branch set for obj, computed at most once per
+// request via the node's memo so the two sibling field resolvers (tmuxPanes,
+// claudeSessions) share the one join computation instead of each rebuilding it.
+func issueBranches(ctx context.Context, obj *github.IssueNode) map[string]struct{} {
+	return obj.Branches(func() map[string]struct{} {
+		return computeIssueBranches(ctx, obj.Owner, obj.Repo, obj.Number)
+	})
+}
+
+// computeIssueBranches is the set of git branches that link to issue N in a repo —
+// the one join key set both tmuxPanes and claudeSessions read, so the two sides can
+// only agree because they share issuekey.FromBranch (AC-GHQ-JOIN-CONSISTENT). Four
+// contributors feed it:
+//   - any tmux session branch that derives to N (the bare issueN branch path —
+//     load-bearing for AC-GHQ-BRANCH-REGEX, which seeds only a pane),
 //   - any claude session branch keyed to N by the same derivation,
-//   - the head branch of any cached PR whose head derives to N OR whose body/title
-//     closes #N via a GitHub closing keyword (AC-GHQ-PR-CLOSES; a bare #N mention
-//     does NOT link, AC-GHQ-MENTION-NOLINK).
-func issueBranches(ctx context.Context, owner, repo string, n int) map[string]struct{} {
+//   - the head branch of any cached PR whose head derives to N,
+//   - the head branch of any cached PR whose body/title closes #N via a GitHub
+//     closing keyword (AC-GHQ-PR-CLOSES; a bare #N mention does NOT link,
+//     AC-GHQ-MENTION-NOLINK).
+func computeIssueBranches(ctx context.Context, owner, repo string, n int) map[string]struct{} {
 	b := map[string]struct{}{}
 	if sess, err := tmux.Sessions(ctx, ""); err == nil {
 		for _, s := range sess {
@@ -56,10 +68,10 @@ func issueBranches(ctx context.Context, owner, repo string, n int) map[string]st
 
 // tmuxPanesForIssue returns every tmux pane on a branch linked to issue N, deduped
 // by pane key. An empty result renders as [] (never null — AC-GHQ-JOIN-EMPTY).
-func tmuxPanesForIssue(ctx context.Context, owner, repo string, n int) []model.TmuxPane {
+func tmuxPanesForIssue(ctx context.Context, obj *github.IssueNode) []model.TmuxPane {
 	seen := map[string]bool{}
 	var rows []tmux.PaneRow
-	for br := range issueBranches(ctx, owner, repo, n) {
+	for br := range issueBranches(ctx, obj) {
 		prs, err := tmux.PaneForBranch(ctx, br)
 		if err != nil {
 			continue
@@ -78,21 +90,39 @@ func tmuxPanesForIssue(ctx context.Context, owner, repo string, n int) []model.T
 // claudeSessionsForIssue returns every claude session keyed to issue N or on a
 // branch linked to N (the PR-closes path attaches a session whose own branch
 // derives to no issue — AC-GHQ-PR-CLOSES). Deduped by session id, [] when none.
-func claudeSessionsForIssue(ctx context.Context, owner, repo string, n int) []model.ClaudeSession {
-	branches := issueBranches(ctx, owner, repo, n)
+//
+// It leads with the issue-number-filtered QuerySessions(&N) (the sessions the shared
+// derivation keys straight to N, branch or not), then adds sessions sitting on a
+// linked branch that the join reached some other way (a PR-closes branch whose
+// session derives to a different/no issue). That second set can only be found by
+// branch, but claude exposes no branch filter and its issue_number is independently
+// settable (plugins/claude/redact.go), so a per-branch query would not be
+// behaviour-identical; the membership filter over the session list is (see the EDR
+// Deviations note).
+func claudeSessionsForIssue(ctx context.Context, obj *github.IssueNode) []model.ClaudeSession {
+	branches := issueBranches(ctx, obj)
 	seen := map[string]bool{}
 	out := make([]model.ClaudeSession, 0)
-	for _, cs := range claude.QuerySessions(ctx, nil, nil) {
-		_, inBranch := branches[cs.GitBranch]
-		if cs.IssueNumber != n && (cs.GitBranch == "" || !inBranch) {
-			continue
+	add := func(rows []claude.SessionRow) {
+		for _, cs := range rows {
+			if seen[cs.SessionID] {
+				continue
+			}
+			seen[cs.SessionID] = true
+			out = append(out, claudeSessionModel(cs))
 		}
-		if seen[cs.SessionID] {
-			continue
-		}
-		seen[cs.SessionID] = true
-		out = append(out, claudeSessionModel(cs))
 	}
+	add(claude.QuerySessions(ctx, nil, &obj.Number))
+	var onBranch []claude.SessionRow
+	for _, cs := range claude.QuerySessions(ctx, nil, nil) {
+		if cs.GitBranch == "" {
+			continue
+		}
+		if _, ok := branches[cs.GitBranch]; ok {
+			onBranch = append(onBranch, cs)
+		}
+	}
+	add(onBranch)
 	return out
 }
 

@@ -168,7 +168,7 @@ func registerGithubQuerySteps(sc *godog.ScenarioContext, g *ghWorld) {
 	})
 	sc.Step(re(`^it exits zero against the cap raised to measured plus five percent$`), func() error {
 		if locExit != 0 {
-			return fmt.Errorf("make loc-github exited %d, want 0 (cap 1540)", locExit)
+			return fmt.Errorf("make loc-github exited %d, want 0 (cap 1570)", locExit)
 		}
 		return nil
 	})
@@ -347,7 +347,9 @@ func (g *ghWorld) ghqSeedClaude(sid, branch string) error {
 // issueNumForBranch derives the issue number a branch encodes with the exact anchored
 // grammar the shared internal/issuekey package uses, so the test seeds claude rows the
 // way the plugin would. Kept as a local copy to keep the black-box harness independent
-// of the production package under test.
+// of the production package under test; the derivation grammar's own contract (the
+// positive/negative forms) is unit-tested in internal/issuekey/issuekey_test.go, which
+// is the source of truth — this copy only needs to agree with it.
 var ghqBranchRe = regexp.MustCompile(`^issue-?(\d+)([/-]|$)`)
 
 func issueNumForBranch(branch string) int {

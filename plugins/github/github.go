@@ -11,18 +11,18 @@ import (
 	"net/http"
 	"os"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/drewdrewthis/supergraph/core"
 	"github.com/drewdrewthis/supergraph/plugins/internal/pluginconfig"
+	"github.com/drewdrewthis/supergraph/plugins/internal/single"
 )
 
 // current is the running plugin instance, published in Migrate so the graph query
 // resolvers (graph/github_map.go) can read cached nodes through the exported
-// package funcs in query.go — mirroring tmux's `active` / claude's `live`. No
-// plugin imports another: the cross-plugin join lives in graph/ (D2).
-var current atomic.Pointer[Plugin]
+// package funcs in query.go — via the shared single.Ptr seam claude's `live` and
+// tmux use. No plugin imports another: the cross-plugin join lives in graph/ (D2).
+var current single.Ptr[Plugin]
 
 func init() { core.Register("github", New) }
 
@@ -130,7 +130,7 @@ func (p *Plugin) Migrate(ctx context.Context, s *core.Store) error {
 	if err := p.store.migrate(ctx); err != nil {
 		return err
 	}
-	current.Store(p)
+	current.Set(p)
 	return nil
 }
 

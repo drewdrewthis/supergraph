@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"strconv"
+	"sync"
 	"time"
 )
 
@@ -20,6 +21,25 @@ type IssueNode struct {
 	URL         string
 	UpdatedAt   *time.Time
 	Labels      []string
+	memo        *issueMemo
+}
+
+// issueMemo caches this issue's cross-plugin branch set so the two sibling field
+// resolvers (Issue.tmuxPanes / Issue.claudeSessions) compute the join once, not
+// twice (docs/edr/github-query.md D3). It hangs off the node because that is the one
+// per-request value both resolvers share; sync.Once makes gqlgen's concurrent field
+// resolution race-free. IssueNode holds a *pointer* to it (not the struct) so a
+// value copy of IssueNode in IssuesForRepo cannot trip go vet's copylocks.
+type issueMemo struct {
+	once sync.Once
+	set  map[string]struct{}
+}
+
+// Branches returns this issue's linked-branch set, running compute (the graph/ join)
+// at most once. Safe under concurrent sibling-field resolution.
+func (n *IssueNode) Branches(compute func() map[string]struct{}) map[string]struct{} {
+	n.memo.once.Do(func() { n.memo.set = compute() })
+	return n.memo.set
 }
 
 // PRNode is the typed projection of a cached pull-request node. HeadRefName is the
@@ -86,7 +106,16 @@ func mapIssue(key string, raw []byte) *IssueNode {
 		Owner: owner, Repo: repo, Number: number,
 		Title: j.Title, State: j.State, URL: j.URL,
 		UpdatedAt: parseUpdated(j.UpdatedAt), Labels: labelsOf(j),
+		memo: &issueMemo{},
 	}
+}
+
+// safeKey rejects a key whose owner/repo segments are not allowlist-safe, so a
+// crafted key cannot drive a cache read with an unvalidated scope (S1). Repo-less
+// kinds pass on their empty repo.
+func safeKey(key string) bool {
+	p := parseKey(key)
+	return safeName(p["owner"]) && safeName(p["repo"])
 }
 
 // mapPR builds a PRNode from a cache key plus its stored JSON body.
@@ -109,8 +138,8 @@ func mapPR(key string, raw []byte) *PRNode {
 // Issue returns the cached issue at key, or nil on a miss (never an upstream hop —
 // D1, AC-GHQ-HIT/MISS). A wrong-kind key returns nil.
 func Issue(ctx context.Context, key string) *IssueNode {
-	p := current.Load()
-	if p == nil || p.store == nil || kindOf(key) != "issue" {
+	p := current.Get()
+	if p == nil || p.store == nil || kindOf(key) != "issue" || !safeKey(key) {
 		return nil
 	}
 	n, _ := p.store.get(ctx, key)
@@ -122,8 +151,8 @@ func Issue(ctx context.Context, key string) *IssueNode {
 
 // PullRequest returns the cached pull request at key, or nil on a miss.
 func PullRequest(ctx context.Context, key string) *PRNode {
-	p := current.Load()
-	if p == nil || p.store == nil || kindOf(key) != "pr" {
+	p := current.Get()
+	if p == nil || p.store == nil || kindOf(key) != "pr" || !safeKey(key) {
 		return nil
 	}
 	n, _ := p.store.get(ctx, key)
@@ -136,8 +165,8 @@ func PullRequest(ctx context.Context, key string) *PRNode {
 // IssuesForRepo returns the cached issue nodes under a repo scope, or an empty
 // slice for a cold repo (D1, AC-GHQ-LIST). It never hops upstream.
 func IssuesForRepo(ctx context.Context, owner, repo string) []IssueNode {
-	p := current.Load()
-	if p == nil || p.store == nil {
+	p := current.Get()
+	if p == nil || p.store == nil || !safeName(owner) || !safeName(repo) {
 		return nil
 	}
 	nodes, _ := p.store.nodesByKind(ctx, "issue", owner+"/"+repo)
@@ -151,8 +180,8 @@ func IssuesForRepo(ctx context.Context, owner, repo string) []IssueNode {
 // CachedPRs returns the cached pull-request nodes under a repo scope, for the
 // join's closing-keyword / head-branch link scan (D3). Cache-only, never upstream.
 func CachedPRs(ctx context.Context, owner, repo string) []PRNode {
-	p := current.Load()
-	if p == nil || p.store == nil {
+	p := current.Get()
+	if p == nil || p.store == nil || !safeName(owner) || !safeName(repo) {
 		return nil
 	}
 	nodes, _ := p.store.nodesByKind(ctx, "pr", owner+"/"+repo)

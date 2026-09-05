@@ -128,16 +128,21 @@ Feature: GitHub typed Query + the PRD first cross-plugin join
     # for AC-GHQ-PR-CLOSES); the branch also has no `issue-?N` prefix, so nothing attaches.
 
   @github @local @AC-GHQ-JOIN-VIA-PR-HEADREF
-  Scenario: A PR head branch that derives to #N attaches its pane even with no claude session
+  Scenario: A PR head branch reaches the join only via the cached PR head-branch contributor
     Given a supergraph server started with the github plugin and data dir <tmp>
     And issue `issue:o/r#5` is in the store
-    And pull request `pr:o/r#8` is in the store with headRefName "issue5/spike-core" and body ""
-    And a tmux pane `pane:issue5-spike:0.0@boxA` is on branch "issue5/spike-core"
-    And no claude session is on any branch deriving to issue 5
-    When `issue` is queried for key `issue:o/r#5` selecting `tmuxPanes`
-    Then the response tmuxPanes contains pane key `pane:issue5-spike:0.0@boxA`
-    # Exercises the PR-headRefName branch-set contributor in isolation (no claude session
-    # feeding the branch), distinct from AC-GHQ-JOIN-HIT where the session supplies it.
+    And pull request `pr:o/r#8` is in the store with headRefName "feature/widget" and body "Closes #5"
+    And a tmux pane `pane:widget:0.0@boxA` is on branch "feature/widget"
+    And a claude session `sess-5` is on branch "feature/widget"
+    When `issue` is queried for key `issue:o/r#5` selecting `tmuxPanes` and `claudeSessions`
+    Then the response tmuxPanes contains pane key `pane:widget:0.0@boxA`
+    And the response claudeSessions contains session id `sess-5`
+    # "feature/widget" derives to NO issue, so neither the tmux-session contributor nor
+    # the claude-issue-number filter can attach it. The branch reaches #5 only because
+    # the cached PR's headRefName is added to the branch set by the closing-keyword scan
+    # of its body ("Closes #5") — the PR head-branch contributor in isolation. Distinct
+    # from AC-GHQ-JOIN-HIT, where the branch self-derives (issue5/...) and the pane's own
+    # tmux session and the claude session each supply it directly.
 
   @github @local @AC-GHQ-P95
   Scenario: The one-query PRD join is sub-second at p95 on a warm cache over 20 samples

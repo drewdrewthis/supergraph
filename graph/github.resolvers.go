@@ -14,12 +14,12 @@ import (
 
 // TmuxPanes resolves the panes joined to this issue (the join lives in graph/, D2).
 func (r *issueResolver) TmuxPanes(ctx context.Context, obj *github.IssueNode) ([]model.TmuxPane, error) {
-	return tmuxPanesForIssue(ctx, obj.Owner, obj.Repo, obj.Number), nil
+	return tmuxPanesForIssue(ctx, obj), nil
 }
 
 // ClaudeSessions resolves the claude sessions joined to this issue.
 func (r *issueResolver) ClaudeSessions(ctx context.Context, obj *github.IssueNode) ([]model.ClaudeSession, error) {
-	return claudeSessionsForIssue(ctx, obj.Owner, obj.Repo, obj.Number), nil
+	return claudeSessionsForIssue(ctx, obj), nil
 }
 
 // TmuxPanes resolves the panes on this PR's head branch (D3).

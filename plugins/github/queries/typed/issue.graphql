@@ -3,7 +3,7 @@
 #   supergraph query --plugin github --op issue --var key=issue:o/r#5
 query issue($key: String!) {
   issue(key: $key) {
-    number title state url
+    number title state url updatedAt labels
     tmuxPanes { key }
     claudeSessions { sessionId }
   }

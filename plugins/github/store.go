@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/drewdrewthis/supergraph/core"
@@ -191,14 +192,25 @@ func (s *store) nonPinnedNodes(ctx context.Context) ([]*node, error) {
 	return out, rows.Err()
 }
 
+// escapeLike escapes the SQL LIKE metacharacters ('%','_') and the escape char
+// itself so a literal matches only itself under `LIKE ? ESCAPE '\'`.
+func escapeLike(s string) string {
+	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(s)
+}
+
 // nodesByKind returns every cached object node of one kind under a repo scope
 // (e.g. kind "issue", scope "o/r"), keyed as `<kind>:<scope>#<n>`. List results
 // (typename "_list") are excluded. It backs the typed issuesForRepo / cached-PR
 // reads (docs/edr/github-query.md); a cold repo yields an empty slice.
 func (s *store) nodesByKind(ctx context.Context, kind, scope string) ([]*node, error) {
+	// The scope is untrusted (owner/repo off a GraphQL variable), so its own LIKE
+	// metacharacters must be escaped or a repo literally named "a_b" would match
+	// "axb" and a "%" scope would match every kind/repo (S1). Escape the literal
+	// prefix, keep the trailing '%' the wildcard, and declare the escape char.
+	pattern := escapeLike(kind+":"+scope+"#") + "%"
 	rows, err := s.db().QueryContext(ctx,
-		`SELECT key, node_json FROM github_nodes WHERE typename<>'_list' AND key LIKE ?`,
-		kind+":"+scope+"#%")
+		`SELECT key, node_json FROM github_nodes WHERE typename<>'_list' AND key LIKE ? ESCAPE '\'`,
+		pattern)
 	if err != nil {
 		return nil, err
 	}
