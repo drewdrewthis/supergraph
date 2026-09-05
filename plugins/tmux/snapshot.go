@@ -25,23 +25,26 @@ const (
 // NOTHING — so /health crosses to stale rather than reading a false snapshot
 // (owner T1, AC-TMUX-POLL-ERROR).
 func (p *Plugin) reconcile(ctx context.Context) error {
+	// A poll that cannot reach the server marks every local entity stale (no emit —
+	// owner T1). This is also what keeps entities stale after the server dies: it re-
+	// marks anything a reconcile that was in flight at server-death time upserted back
+	// to live AFTER watch's one-shot server.down ran (the control watcher and this
+	// poll write the store concurrently).
 	sessOut, err := p.run(ctx, p.tmuxArgs("list-sessions", "-F", sessFmt)...)
 	if err != nil {
+		_ = p.store.markAllStale(ctx, p.now())
 		return fmt.Errorf("tmux: list-sessions: %w", err)
 	}
 	paneOut, err := p.run(ctx, p.tmuxArgs("list-panes", "-a", "-F", paneFmt)...)
 	if err != nil {
+		_ = p.store.markAllStale(ctx, p.now())
 		return fmt.Errorf("tmux: list-panes: %w", err)
 	}
 	now := p.now()
 
-	prev, err := p.store.livePaneKeys(ctx)
+	prevLive, err := p.store.livePaneRows(ctx)
 	if err != nil {
 		return err
-	}
-	prevLive := map[string]bool{}
-	for _, k := range prev {
-		prevLive[k] = true
 	}
 
 	for _, sr := range parseSessions(p.hostID, sessOut, p.branchOf) {
@@ -53,11 +56,15 @@ func (p *Plugin) reconcile(ctx context.Context) error {
 	seen := map[string]bool{}
 	panes := parsePanes(p.hostID, paneOut, p.cfg.idleShells)
 	for _, pr := range panes {
+		old, existed := prevLive[pr.Key]
 		if err := p.store.upsertPane(ctx, pr, now); err != nil {
 			return err
 		}
 		seen[pr.Key] = true
-		if !prevLive[pr.Key] {
+		// Emit tmux.pane.updated for a NEW pane and for a live pane whose free/busy,
+		// command, or path changed since the stored row — a busied/freed slot is a
+		// read-model change downstream consumers must see, not only pane creation.
+		if !existed || paneChanged(old, pr) {
 			p.emitPane(ctx, "tmux.pane.updated", pr, now)
 		}
 	}
@@ -75,6 +82,14 @@ func (p *Plugin) reconcile(ctx context.Context) error {
 		map[string]any{"hostId": p.hostID, "paneCount": len(panes)}, now)
 	_ = p.store.core.SetCursor(ctx, "snapshot:lastAt", now.UTC().Format(rfc))
 	return nil
+}
+
+// paneChanged reports whether a live pane's reconcile-visible state moved: its
+// free/busy classification, current command, or current path (the fields a slot
+// consumer keys on). pid/active are excluded — a pane keeping the same command
+// through a pid churn is not a read-model change worth an event.
+func paneChanged(old, cur PaneRow) bool {
+	return old.Free != cur.Free || old.Cmd != cur.Cmd || old.Path != cur.Path
 }
 
 // parsePanes turns list-panes tab output into pane rows, classifying free/busy.

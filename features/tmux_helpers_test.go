@@ -10,7 +10,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/cucumber/godog"
@@ -68,7 +70,7 @@ func (g *tmuxWorld) cleanup() {
 		g.sw.stopServe()
 	}
 	if g.socket != "" {
-		_ = exec.Command("tmux", "-L", g.socket, "kill-server").Run()
+		killTmuxServer(g.socket)
 	}
 	for _, d := range []string{g.branchDir, g.mainDir} {
 		if d != "" {
@@ -77,6 +79,40 @@ func (g *tmuxWorld) cleanup() {
 	}
 	if g.sw != nil {
 		g.sw.cleanup()
+	}
+}
+
+// killTmuxServer tears down the scenario's private tmux server and VERIFIES nothing
+// on the socket survives (M3, ~2/7 runs leaked). kill-server can return non-zero
+// (server already exiting) and, worse, `stopServe` SIGKILLs the serve subprocess so
+// its control-mode `tmux -C attach` CHILD is orphaned (the ctx-kill never runs) and
+// can outlive the server death. So after kill-server we poll has-session until the
+// server is gone (≤2s), then ALWAYS pgrep the socket for any leftover `tmux -L
+// <socket>` process — server OR orphaned attach client — and SIGKILL it by pid,
+// logging when the fallback fired so a recurring leak stays visible.
+func killTmuxServer(socket string) {
+	_ = exec.Command("tmux", "-L", socket, "kill-server").Run()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if err := exec.Command("tmux", "-L", socket, "has-session").Run(); err != nil {
+			break // server gone; still sweep for orphaned attach clients below
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	out, err := exec.Command("pgrep", "-f", "tmux -L "+socket).Output()
+	if err != nil {
+		return // pgrep found nothing (or is absent): clean
+	}
+	killed := 0
+	for _, line := range strings.Fields(string(out)) {
+		if pid, perr := strconv.Atoi(line); perr == nil {
+			if kerr := syscall.Kill(pid, syscall.SIGKILL); kerr == nil {
+				killed++
+			}
+		}
+	}
+	if killed > 0 {
+		fmt.Fprintf(os.Stderr, "tmux cleanup: SIGKILLed %d leftover process(es) on socket %q (server or orphaned -C attach)\n", killed, socket)
 	}
 }
 
@@ -257,12 +293,16 @@ var idleShellCmds = map[string]bool{"zsh": true, "bash": true, "sh": true, "fish
 // satisfies want, RESENDING until it sticks. A freshly created pane's shell may
 // not yet be reading its PTY when send-keys returns, silently dropping the
 // keystrokes; retrying until tmux itself reports the expected command removes that
-// race. (Re-sending an idempotent-enough command like `sleep`/`C-c` is harmless.)
+// race. Each attempt is prefixed with `C-u` (kill-line) so a resend that follows a
+// dropped `Enter` starts from a CLEAN prompt — otherwise the resent text
+// concatenates onto the leftover partial line (`sleep 300sleep 300`), bash errors,
+// and the command never runs (the "current command stayed bash" flake). C-u at an
+// empty prompt is a no-op, so re-sending stays harmless.
 func (g *tmuxWorld) sendUntil(target string, want func(string) bool, keys ...string) error {
-	deadline := time.Now().Add(15 * time.Second)
+	deadline := time.Now().Add(20 * time.Second)
 	var lastCmd string
 	for time.Now().Before(deadline) {
-		args := append([]string{"send-keys", "-t", target}, keys...)
+		args := append([]string{"send-keys", "-t", target, "C-u"}, keys...)
 		if out, err := g.tmux(args...); err != nil {
 			return fmt.Errorf("send-keys %s: %s", target, out)
 		}

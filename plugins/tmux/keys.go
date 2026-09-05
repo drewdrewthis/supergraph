@@ -13,7 +13,6 @@ import (
 //
 //	server  := "tmuxServer:" <hostId>                       "@" <hostId>
 //	session := "session:"    <session>                      "@" <hostId>
-//	window  := "window:"     <session>":"<window>           "@" <hostId>
 //	pane    := "pane:"       <session>":"<window>"."<pane>   "@" <hostId>
 //
 // Each kind is one row in kindSpecs: adding a kind is a new row, not new code.
@@ -25,7 +24,6 @@ type kindSpec struct {
 var kindSpecs = []kindSpec{
 	{kind: "tmuxServer", typename: "TmuxServer"},
 	{kind: "session", typename: "TmuxSession"},
-	{kind: "window", typename: "TmuxWindow"},
 	{kind: "pane", typename: "TmuxPane"},
 }
 

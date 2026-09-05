@@ -103,6 +103,40 @@ func TestReconcileEmitsSnapshotAndHealsVanished(t *testing.T) {
 	}
 }
 
+// TestReconcileEmitsUpdatedOnBusyChange pins S-A: reconcile emits tmux.pane.updated
+// for a NEW pane and for a live pane whose free/busy (or cmd/path) changed — but NOT
+// for an unchanged pane on a later poll.
+func TestReconcileEmitsUpdatedOnBusyChange(t *testing.T) {
+	ctx := context.Background()
+	p, got := newReconcilePlugin(t, fakeRun("main\t/tmp\n", "main\t1\t0\t100\tzsh\t/tmp\t1\n"))
+
+	if err := p.reconcile(ctx); err != nil {
+		t.Fatalf("reconcile1: %v", err)
+	}
+	if !hasType(*got, "tmux.pane.updated") {
+		t.Fatal("first sighting must emit tmux.pane.updated")
+	}
+
+	// Same pane goes busy (zsh -> sleep, free -> busy): must re-emit updated.
+	*got = nil
+	p.run = fakeRun("main\t/tmp\n", "main\t1\t0\t100\tsleep\t/tmp\t0\n")
+	if err := p.reconcile(ctx); err != nil {
+		t.Fatalf("reconcile2: %v", err)
+	}
+	if !hasType(*got, "tmux.pane.updated") {
+		t.Fatal("free->busy change must emit tmux.pane.updated")
+	}
+
+	// No change on the next poll: must NOT re-emit (no event flood).
+	*got = nil
+	if err := p.reconcile(ctx); err != nil {
+		t.Fatalf("reconcile3: %v", err)
+	}
+	if hasType(*got, "tmux.pane.updated") {
+		t.Fatal("unchanged pane must not re-emit tmux.pane.updated")
+	}
+}
+
 func TestReconcileErrorEmitsNoSnapshot(t *testing.T) {
 	ctx := context.Background()
 	run := func(_ context.Context, args ...string) ([]byte, error) {

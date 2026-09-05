@@ -151,13 +151,11 @@ func InitializeScenario(sc *godog.ScenarioContext) {
 	// --- AC-CORE-7a/7b / -14 (service, gated by FEATURES_SERVICE) ---
 	registerServiceSteps(sc, w)
 
-<<<<<<< HEAD
 	// --- claude plugin (@claude) ---
 	registerClaudeSteps(sc, w)
-=======
+
 	// --- tmux plugin @local scenarios (real tmux on a private -L socket) ---
 	registerTmuxSteps(sc)
->>>>>>> 5409128 (feat(tmux): control-mode + reconcile-poll pane plugin, real-tmux godog steps, 15 scenarios; 770 LOC (cap 800))
 }
 
 // ---------- shared ----------

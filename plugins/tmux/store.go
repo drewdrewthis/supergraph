@@ -132,6 +132,28 @@ func (s *store) livePaneKeys(ctx context.Context) ([]string, error) {
 	return out, rows.Err()
 }
 
+// livePaneRows returns every non-stale pane keyed by pane key — the prior read
+// model the reconcile diff compares against to detect NEW panes, CHANGED panes
+// (free/busy, cmd, path), and vanished panes in one pass.
+func (s *store) livePaneRows(ctx context.Context) (map[string]PaneRow, error) {
+	rows, err := s.db().QueryContext(ctx,
+		`SELECT key, session, window, pane, pid, cmd, path, active, free, stale_since
+		 FROM tmux_panes WHERE stale_since IS NULL`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	out := map[string]PaneRow{}
+	for rows.Next() {
+		r, err := scanPane(rows)
+		if err != nil {
+			return nil, err
+		}
+		out[r.Key] = r
+	}
+	return out, rows.Err()
+}
+
 // scanPanes returns panes, optionally filtered by host (parsed from the key).
 func (s *store) scanPanes(ctx context.Context, host string) ([]PaneRow, error) {
 	rows, err := s.db().QueryContext(ctx,

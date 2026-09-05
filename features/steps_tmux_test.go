@@ -147,7 +147,7 @@ func registerTmuxSteps(sc *godog.ScenarioContext) {
 	// LOC
 	sc.Step(lit("the tmux plugin source under `plugins/tmux/`"), tw.noop)
 	sc.Step(lit("`make loc-tmux` counts non-comment non-blank lines of the non-test Go files"), tw.runLocTmux)
-	sc.Step(lit("the count is at most 800"), tw.assertLocWithinCap)
+	sc.Step(lit("the count is at most 860"), tw.assertLocWithinCap)
 
 	// STALE-PEER (@pending, peer-owned cross-box): register as honest pending stubs
 	// so the scenario reports "pending" rather than "undefined" (the evidence step is
@@ -861,11 +861,11 @@ func (g *tmuxWorld) runLocTmux() error {
 
 func (g *tmuxWorld) assertLocWithinCap() error {
 	// loc-tmux fails (non-zero) when over cap, so reaching here already implies
-	// within cap; assert the reported number is present and <= 800 defensively.
+	// within cap; assert the reported number is present and <= 860 defensively.
 	var n int
 	if _, err := fmt.Sscanf(strings.TrimSpace(strings.SplitN(g.locOut, ":", 2)[1]), "%d", &n); err == nil {
-		if n > 800 {
-			return fmt.Errorf("LOC %d exceeds cap 800", n)
+		if n > 860 {
+			return fmt.Errorf("LOC %d exceeds cap 860", n)
 		}
 	}
 	return nil

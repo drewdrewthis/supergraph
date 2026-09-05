@@ -106,7 +106,6 @@ dev-check: build-harness $(DEV_CONFIG)
 	done; \
 	if [ "$$ok" != "1" ]; then echo "dev-check: template not healthy within 10s" >&2; exit 1; fi
 
-<<<<<<< HEAD
 # --- claude plugin targets ---
 .PHONY: features-claude loc-claude
 
@@ -126,14 +125,16 @@ loc-claude:
 	if [ "$$count" -gt 790 ]; then \
 		echo "loc-claude: $$count LOC exceeds the 790 budget" >&2; \
 		exit 1; \
-=======
+	fi
+
 # --- tmux plugin targets (appended; see docs/edr/tmux.md) ---
 .PHONY: features-tmux loc-tmux
 
-# TMUX_LOC_CAP is the ratified LOC budget for the tmux plugin, raised 600 -> 800
-# when the control-mode client + reconcile poll + SQLite read model landed at ~770
-# (see the LOC table in docs/edr/tmux.md).
-TMUX_LOC_CAP := 800
+# TMUX_LOC_CAP is the ratified LOC budget for the tmux plugin: 600 -> 800 (control
+# client + poll + read model) -> 860 after the B1/B2 bug fixes and review Shoulds
+# landed at a measured 813 (owner rule: measured + 5% rounded up to a multiple of
+# 10). See the LOC table in docs/edr/tmux.md.
+TMUX_LOC_CAP := 860
 
 # features-tmux runs only the tmux plugin's @local scenarios against a real tmux
 # server on a private -L socket (created and torn down per scenario). Requires the
@@ -152,5 +153,4 @@ loc-tmux:
 	echo "tmux plugin LOC: $$n (cap $(TMUX_LOC_CAP))"; \
 	if [ "$$n" -gt "$(TMUX_LOC_CAP)" ]; then \
 		echo "loc-tmux: $$n exceeds cap $(TMUX_LOC_CAP)" >&2; exit 1; \
->>>>>>> 5409128 (feat(tmux): control-mode + reconcile-poll pane plugin, real-tmux godog steps, 15 scenarios; 770 LOC (cap 800))
 	fi

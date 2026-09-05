@@ -7,8 +7,8 @@ Mirrors the shape of [github EDR](./github.md).
 **Design (2026-09-05).** The tmux plugin is a **read model of the local tmux server**: one
 long-lived **control-mode client** (`tmux -C attach`) streams server-wide structural
 notifications into a per-plugin SQLite cache; a low-cadence **reconcile poll** (`list-panes -a`
-/ `list-sessions`) backstops missed events and recomputes free/busy. It serves
-`TmuxServer/Session/Window/Pane` + a `Slot` projection over one GraphQL endpoint via the gqlgen
+/ `list-sessions`) backstops missed events and recomputes free/busy. It serves flat
+`TmuxSession`/`TmuxPane` + a `Slot` (by `paneKey`) projection over one GraphQL endpoint via the gqlgen
 `extend type` glob seam — **no `HTTPRoutes`, no webhook, no fake server**: `@local` scenarios run
 against a **real tmux server on a temp socket** (`-L <name>`), which is hermetic and needs no
 credentials or hardware. Its reason to exist in the spike is the **local warm free-slot read**
@@ -16,8 +16,9 @@ credentials or hardware. Its reason to exist in the spike is the **local warm fr
 plugin's**, so this feature owns only `AC-TMUX-FREESLOTS-WARM`, not S2) and the
 **issue ↔ branch/worktree** join the github plugin already reserves as `paneForBranch @pending`.
 
-**Hard constraints (owner / PRD):** ≤ **800 LOC prod** for `plugins/tmux/**` excluding tests
-(raised from the 600 sketch to the ratified 800 — measured actual **770**, see §LOC budget);
+**Hard constraints (owner / PRD):** ≤ **860 LOC prod** for `plugins/tmux/**` excluding tests
+(600 sketch → 800 for the control client + poll + read model → **860** once the user-test bug
+fixes B1/B2 and review Shoulds landed; measured actual **813**, see §LOC budget);
 **zero core diff** (S5); Linux + macOS from one binary; single tmux server per box (v1); no
 mutation of the user's tmux config (see D2); freshness is event-driven with a reconcile floor
 (honest-staleness, mirrors github's AC-GH-STALE).
@@ -34,7 +35,7 @@ mutation of the user's tmux config (see D2); freshness is event-driven with a re
 | **D4** | **No fake tmux** | `@local` runs a **real** tmux server on a private socket (`tmux -L sg-test-<pid>`), created/torn down per scenario. Measured working (§Measurements). | An `internal/faketmux` httptest-style stub — pointless when the real dependency is a local, cheap, hermetic process. (github needs `fakegh` because GitHub is remote + credentialed; tmux is not.) |
 | **D5** | **Free/busy = idle-shell classification** | A pane is **free** when `pane_current_command ∈ idleShells` (default `["zsh","bash","sh","fish"]`), else **busy**. `Slot` is a projection over panes, not a stored table. | Storing an explicit slot table (derivable, would drift); claude-awareness in tmux (belongs to the claude plugin — see Owner Q2). |
 | **D6** | **Serve via gqlgen glob seam** | `plugins/tmux/schema/tmux.graphqls` uses `extend type Query`/`Subscription`; resolvers delegate through `core.Registry` — same seam the template plugin proves (AC-CORE-10b). No `cmd/` delta. | github's `HTTPRoutes` path — tmux has no webhook receiver, so the glob seam is the right (and simpler) one. |
-| **D7** | **Backoff reconnect** | On `%exit`/EOF (server died or was killed) the control client marks all local entities `staleSince` and **exponential-backoff reconnects**; a returning server re-attaches and a fresh poll re-populates. | Exit the plugin (would drop the source permanently); tight reconnect loop (busy-spins while tmux is down). |
+| **D7** | **Probe-gated backoff reconnect** | Each cycle **probes liveness with a read-only `list-sessions` BEFORE attaching** — a bare `tmux -C attach` on a dead socket makes tmux fork a *new* server (busy-spin + leaked clients), so a non-zero probe means down and the client never attaches (B2). On an up→down transition the client marks all local entities `staleSince` and emits `tmux.server.down` **exactly once**, then stays silent while down so `/health` lag crosses the stale threshold honestly (B1); it **exponential-backoffs to `reconnectBackoffMaxSeconds` (30 s cap)** and re-attaches when the server returns. An attach that falls out in **< 2 s** (`minStableAttach`) is a failed/immediate exit and does **not** reset the backoff. | Exit the plugin (drops the source permanently); attach-first (auto-spawns a server on a dead socket — B2); re-emitting `server.down` every reconnect (core records each emit as liveness, so `/health` never goes stale — B1). |
 
 ## Measurements (this machine — `tmux 3.6a`, `/opt/homebrew/bin/tmux`, darwin)
 
@@ -65,7 +66,6 @@ them), so the scope is unambiguous without escaping.
 key      := <kind>":"<scope>"@"<hostId>
 server   := "tmuxServer:" <hostId> "@" <hostId>          # scope == hostId
 session  := "session:"    <session>            "@" <hostId>
-window   := "window:"     <session>":"<window> "@" <hostId>
 pane     := "pane:"       <session>":"<window>"."<pane> "@" <hostId>
 ```
 `<window>`/`<pane>` are tmux indices (ints). Example: `pane:main:1.0@drudru-lan`.
@@ -76,16 +76,18 @@ pane     := "pane:"       <session>":"<window>"."<pane> "@" <hostId>
 
 ## Envelopes emitted (`{TS, Source:"tmux", Type, V:1, Key, Payload}`)
 
-`/health` `lastEventAt` derives from these; the star is `tmux.pane.*`:
+`/health` `lastEventAt` derives from these. **These four are the only envelopes emitted** — the
+session/window envelopes the sketch imagined are **not implemented** (sessions are upserted but
+carry no per-entity event; the read model is pane-centric):
 - **`tmux.pane.updated`** — `Payload={key,session,window,pane,pid,cmd,path,active,free}` — pane
-  added or changed (from `%window-add`/`%window-pane-changed`/`%layout-change`, or a reconcile diff).
-- **`tmux.pane.closed`** — `Payload={key}` — pane gone (layout no longer lists it, or reconcile miss); marks `staleSince`.
-- **`tmux.session.updated`** / **`tmux.session.closed`** — `Payload={key,worktree,branch}` / `{key}`.
-- **`tmux.window.updated`** / **`tmux.window.closed`** — `Payload={key}`.
+  **new** or **changed** vs the stored row (`free`/`busy`, `cmd`, or `path` moved) on a reconcile
+  diff. An unchanged pane on a later poll does **not** re-emit (no event flood — S-A).
+- **`tmux.pane.closed`** — `Payload={key}` — pane gone (reconcile miss); marks `staleSince`.
 - **`tmux.snapshot`** — `Payload={hostId,paneCount}` — one per **successful** reconcile poll; the
   liveness signal for a structurally-idle but alive server (§Freshness, Owner Q1).
-- **`tmux.server.down`** — `Payload={hostId}` — `%exit`/EOF from the control client; marks every
-  local session/window/pane `staleSince` (the local shape of F8's stale-peer, before the peer plugin).
+- **`tmux.server.down`** — `Payload={hostId}`, key `tmuxServer:<host>@<host>` — emitted **once per
+  up→down transition** (B1), never on repeated failed reconnects; marks every local session/pane
+  `staleSince` (the local shape of F8's stale-peer, before the peer plugin).
 
 Cross-plugin join: the claude plugin's `ClaudeInstance` keys on `pane:…@host` + `pid`; the github
 join is issue-number ↔ `session.branch`/`worktree` via `paneForBranch`.
@@ -106,29 +108,35 @@ Event-driven with a poll floor — same honesty as github's AC-GH-STALE.
 
 ## Reads / queries (`plugins/tmux/queries/*.graphql`, ~5)
 
-Named ops loaded and run via `supergraph query --op NAME` (core CLI; no `cmd/` delta):
-- **`freeSlots`** — `slots(hostId){ hostId kind free staleSince }` filtered `free:true` — the **S2** op.
-- **`sessions`** — `tmuxSessions(hostId){ … worktree branch lastSeenAt staleSince }`.
-- **`panes`** — `tmuxPanes(hostId){ … pid cmd path active free staleSince }`.
+The five ops ship as `plugins/tmux/queries/*.graphql`, posted as query text to core `/graphql` by
+`supergraph query --plugin tmux --op NAME [--var hostId=box]` (core CLI; no `cmd/` delta):
+- **`freeSlots`** — `freeSlots(hostId){ hostId kind free paneKey staleSince }` (server-side
+  `free:true`, non-stale) — the local warm-read half of **S2**.
+- **`sessions`** — `tmuxSessions(hostId){ hostId name worktree branch lastSeenAt staleSince }`.
+- **`panes`** — `tmuxPanes(hostId){ hostId key session window pane pid cmd path active free staleSince }`.
 - **`paneForBranch`** — `paneForBranch(branch){ … }` — the github/claude join (issue ↔ branch).
 - **`slotsForHost`** — full `slots(hostId)` (free + busy) for dashboards.
 
 ## Schema (`plugins/tmux/schema/tmux.graphqls`, `extend type` only)
 
-Non-GitHub types keep the `Tmux*` prefix (PRD §6). Fields from the PRD sketch:
+Non-GitHub types keep the `Tmux*` prefix (PRD §6). **Shipped schema — flattened to scalars**
+(the PRD sketch's nested `TmuxServer`/`TmuxWindow` objects and `Slot.pane`/`TmuxPane.window`
+object references were **dropped**: no AC exercises them and each would add a per-field resolver
+for no read the CLI ops make. `Slot` points at its pane by `paneKey` scalar; `tmuxEvents` is a
+flat `TmuxEvent` envelope, not a live `TmuxPane`):
 ```graphql
-type TmuxServer  { hostId: String!  lastSeenAt: Time  staleSince: Time }
 type TmuxSession { hostId: String!  name: String!  worktree: String  branch: String  lastSeenAt: Time  staleSince: Time }
-type TmuxWindow  { hostId: String!  session: TmuxSession!  index: Int!  name: String  staleSince: Time }
-type TmuxPane    { hostId: String!  window: TmuxWindow!  index: Int!  pid: Int!  cmd: String!  path: String  active: Boolean!  free: Boolean!  staleSince: Time }
-type Slot        { hostId: String!  kind: String!  free: Boolean!  pane: TmuxPane  staleSince: Time }
+type TmuxPane    { hostId: String!  key: String!  session: String!  window: Int!  pane: Int!  pid: Int!  cmd: String!  path: String  active: Boolean!  free: Boolean!  staleSince: Time }
+type Slot        { hostId: String!  kind: String!  free: Boolean!  paneKey: String  staleSince: Time }
+type TmuxEvent   { ts: Time!  type: String!  v: Int!  key: String!  payload: String! }
 extend type Query {
   tmuxSessions(hostId: String): [TmuxSession!]!
   tmuxPanes(hostId: String): [TmuxPane!]!
   slots(hostId: String): [Slot!]!
+  freeSlots(hostId: String): [Slot!]!
   paneForBranch(branch: String!): [TmuxPane!]!
 }
-extend type Subscription { tmuxEvents(hostId: String): TmuxPane! }
+extend type Subscription { tmuxEvents: TmuxEvent! }
 ```
 
 ## Config keys `[plugins.tmux]`
@@ -147,29 +155,51 @@ extend type Subscription { tmuxEvents(hostId: String): TmuxPane! }
 ## SQLite state (add-only, `IF NOT EXISTS`; cursors in core's `cursors` table)
 
 - `tmux_sessions(key TEXT PK, name, worktree, branch, last_seen_at, stale_since)`
-- `tmux_windows(key TEXT PK, session_key, idx, name, last_seen_at, stale_since)`
-- `tmux_panes(key TEXT PK, window_key, idx, pid, cmd, path, active INT, free INT, last_seen_at, stale_since)`
-- `hostId`/indices are parsed from the key, not stored as columns (github convention).
+- `tmux_panes(key TEXT PK, session, window INT, pane INT, pid INT, cmd, path, active INT, free INT, last_seen_at, stale_since)`
+- **No `tmux_windows` table** — the sketch's third table was dropped as YAGNI (the read model is
+  pane-centric; `session`/`window`/`pane` are denormalized onto `tmux_panes` for query-simple scans
+  and the branch join, so no key parsing happens in SQL).
+- `hostId` is parsed from the key, not stored as a column (github convention).
 - Cursor: `snapshot:lastAt` (last successful reconcile time) in core's `cursors` table; `Cursor()` reports it.
 
-## LOC budget (prod, cap **800**; tests excluded) — measured actuals
+## LOC budget (prod, cap **860**; tests excluded) — measured actuals
 
 Strip formula (portable GNU/BSD sed), run by `make loc-tmux`:
-`find plugins/tmux -name '*.go' ! -name '*_test.go' | xargs sed -E '/^[[:space:]]*\/\//d;/^[[:space:]]*$/d' | wc -l` — fails > 800.
+`find plugins/tmux -name '*.go' ! -name '*_test.go' | xargs sed -E '/^[[:space:]]*\/\//d;/^[[:space:]]*$/d' | wc -l` — fails > 860.
 
-**Cap raised 600 → 800:** the control-mode client + reconcile poll + SQLite read model + the flattened resolver seam landed at a measured **770**, over the 600 sketch; the owner ratified 800 rather than compress readable, single-responsibility files (no gold-plating — the overrun is real per-file work, itemized below).
+**Cap 600 → 800 → 860:** the control-mode client + reconcile poll + SQLite read model + flattened
+resolver seam landed at **770** (600 sketch overrun, owner-ratified 800). The user-test bug fixes
+(B1 once-per-transition `server.down`, B2 probe-before-attach + `minStableAttach` backoff guard) and
+the review Shoulds (S-A change-detected `pane.updated`, S-B scan-error/reply-frame handling) added
+real per-file work to a measured **813**; per the owner rule the cap is set to **measured + 5%
+rounded up to a multiple of 10 = 860**. No compression for the number.
 
 | File (`plugins/tmux/`) | Actual | Responsibility |
 |---|---:|---|
-| `tmux.go` | 166 | wiring: `init`/`New`/`Name`/`Migrate`/`Start` (dormant when unconfigured) + `Cursor` + config parse/defaults + injectable clock/exec seams |
-| `keys.go` | 80 | key grammar data table: parse + object→key + typename + host split + free/busy classifier |
-| `control.go` | 118 | control-mode client: spawn `tmux -C attach`, hold stdin, `refresh-client -f no-output`, structural-notification → reconcile trigger, `%exit`→`server.down`, version-gated `%pane-exited`, backoff reconnect |
-| `snapshot.go` | 156 | `list-panes -a`/`list-sessions` parse → upsert; reconcile diff → `*.closed`/`staleSince`; `tmux.snapshot` emit (only on success — owner T1); git-branch resolve; free/busy recompute |
-| `store.go` | 200 | SQLite: migrate tables, upsert session/pane, scan, markStale/markAllStale, livePaneKeys, scan-free, paneForBranch join |
+| `tmux.go` | 164 | wiring: `init`/`New`/`Name`/`Migrate`/`Start` (dormant when unconfigured) + `Cursor` + config parse/defaults + `attach`/`serverAlive`/clock/exec seams + `atomic.Pointer` singleton |
+| `keys.go` | 79 | key grammar data table: parse + object→key + typename + host split + free/busy classifier |
+| `control.go` | 144 | control-mode client: probe-gated `tmux -C attach`, hold stdin, `refresh-client -f no-output`, structural-notification → reconcile trigger, `%begin/%end/%error` skip + scan-error log, once-per-transition `server.down`, `minStableAttach` + backoff reconnect |
+| `snapshot.go` | 158 | `list-panes -a`/`list-sessions` parse → upsert; reconcile diff → new/changed `pane.updated` + `pane.closed`/`staleSince`; `tmux.snapshot` emit (only on success — owner T1); git-branch resolve; free/busy recompute |
+| `store.go` | 218 | SQLite: migrate tables, upsert session/pane, scan, markStale/markAllStale, `livePaneRows`/`livePaneKeys`, scan-free, paneForBranch join |
 | `resolver.go` | 50 | exported read funcs for sessions/panes/slots/freeSlots/paneForBranch via the package-singleton seam (no `core.Registry` instance accessor exists; server injects only Health/Lag/Events) |
-| **Total** | **770** | cap **800**; no `cmd/` delta (serves via gqlgen glob seam, D6) |
+| **Total** | **813** | cap **860**; no `cmd/` delta (serves via gqlgen glob seam, D6) |
 
-Deviations from the sketch, attributed: `store.go` +80 (denormalized pane columns for query-simple scans + the branch join; the sketch's 3rd `tmux_windows` table was dropped as YAGNI); `tmux.go` +86 (dormant-when-unconfigured Start so the plugin never attaches to the operator's real server unless `[plugins.tmux]` is set, plus injectable clock/exec/branch seams for hermetic unit tests); `snapshot.go` +36 (T1 emit-only-on-success + git-branch resolve). `resolver.go` −10 and `control.go` −32 (reconcile-on-any-structural-notification is simpler and more version-robust than per-delta parsing).
+**Deviations from the sketch, attributed (every real one):**
+- **Schema flattened to scalars** — the sketch's nested `TmuxServer`/`TmuxWindow` object types and
+  `Slot.pane`/`TmuxPane.window` references were dropped; `Slot` points by `paneKey` scalar. **Added**
+  `freeSlots(hostId)` query and a flat `TmuxEvent` envelope type; `tmuxEvents` returns `TmuxEvent!`,
+  not a live `TmuxPane`. No AC exercises the nested objects and each would only add resolver LOC.
+- **Session/window envelopes not implemented** — only `tmux.pane.updated`/`.closed`/`tmux.snapshot`/
+  `tmux.server.down` are emitted; the read model is pane-centric (sessions are upserted, not evented).
+- **`tmux_windows` table dropped (YAGNI)**; `session`/`window`/`pane` denormalized onto `tmux_panes`
+  (`store.go` heavier: query-simple scans + the branch join, no key parsing in SQL).
+- **Package-singleton seam** — `atomic.Pointer[Plugin]` (`active`) mirrors the peer/claude convention;
+  graph resolvers reach the live store through it because core exposes no `Registry` instance accessor.
+- **Poll + control reconcile, not per-delta parse** — any structural notification triggers a fresh
+  `list-panes` (simpler and more version-robust than parsing each `%`-delta); `control.go` grew for the
+  B1/B2 probe/backoff/transition logic and the S-B scan-error + reply-frame handling.
+- **`tmux.go` dormant-when-unconfigured** `Start` so the plugin never attaches to the operator's real
+  server unless `[plugins.tmux]` is set, plus injectable seams for hermetic unit tests.
 
 ## Failure modes
 
@@ -250,8 +280,8 @@ running binary + real tmux this turn**. `T` = `reconcileIntervalSeconds` (test u
 - **AC-TMUX-ZEROCORE (S5).** After adding `plugins/tmux/**` + the `graph/plugins_import.go` blank
   import + regenerated `graph/`, `git diff --stat core/` reports **0 files changed** and `/health`
   serves a `tmux` entry. **Evidence:** empty `git diff --stat core/` + `/health` showing `tmux`.
-- **AC-TMUX-LOC.** The strip-formula count for `plugins/tmux/**` (excluding `*_test.go`) is **≤ 800**
-  (measured **770**). **Evidence:** `make loc-tmux` output ≤ 800.
+- **AC-TMUX-LOC.** The strip-formula count for `plugins/tmux/**` (excluding `*_test.go`) is **≤ 860**
+  (measured **813**). **Evidence:** `make loc-tmux` output ≤ 860.
 - **AC-TMUX-STALE-PEER (cross-box, @pending; peer-owned).** After the peer plugin exists, a stopped box
   shows its tmux data as `stale since T` on a peer **< 30 s**, with no peer-of-peer rows. **@pending** —
   needs the peer plugin + a second box. Tagged `@AC-TMUX-STALE-PEER` (a tmux-scoped cross-reference; F8

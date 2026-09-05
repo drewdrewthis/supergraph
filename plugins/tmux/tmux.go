@@ -12,6 +12,7 @@ import (
 	"context"
 	"os/exec"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/drewdrewthis/supergraph/core"
@@ -27,6 +28,7 @@ type config struct {
 	idleShells          []string
 	slotKind            string
 	reconnectBackoffMax time.Duration
+	minStableAttach     time.Duration // a control attach shorter than this is a failed/immediate exit (B2)
 	tmuxPath            string
 	configured          bool // false ⇒ no [plugins.tmux] section: stay dormant
 }
@@ -44,27 +46,23 @@ type Plugin struct {
 	emitMu sync.RWMutex
 	emitFn core.Emit
 
-	now      func() time.Time
-	sleep    func(context.Context, time.Duration)
-	run      func(context.Context, ...string) ([]byte, error)
-	branchOf func(context.Context, string) string
+	now         func() time.Time
+	sleep       func(context.Context, time.Duration)
+	run         func(context.Context, ...string) ([]byte, error)
+	branchOf    func(context.Context, string) string
+	attach      func(context.Context) bool // one control-mode attach until exit; fake in tests (B1/B2)
+	serverAlive func(context.Context) bool // liveness probe that never spawns a server (B2)
 }
 
-// current is the running instance the graph resolvers delegate to (the plugin's own
+// active is the running instance the graph resolvers delegate to (the plugin's own
 // half of the "delegate through the registry" seam — core exposes no instance
 // accessor, and graph/ must reach the live store without a core edit). One server
-// process runs one tmux plugin, so a package singleton set in New is sufficient and
-// keeps the read path off the core-locked surface.
-var (
-	currentMu sync.RWMutex
-	current   *Plugin
-)
+// process runs one tmux plugin, so a package singleton set in New is sufficient.
+// atomic.Pointer matches the peer plugin's `active` / claude plugin's `live`
+// convention for the lock-free read path.
+var active atomic.Pointer[Plugin]
 
-func getCurrent() *Plugin {
-	currentMu.RLock()
-	defer currentMu.RUnlock()
-	return current
-}
+func getCurrent() *Plugin { return active.Load() }
 
 // New builds the plugin from its resolved config and registers it as the current
 // instance for the graph resolvers.
@@ -75,6 +73,7 @@ func New(cfg core.PluginConfig) (core.Plugin, error) {
 		idleShells:          []string{"zsh", "bash", "sh", "fish"},
 		slotKind:            "worker",
 		reconnectBackoffMax: 30 * time.Second,
+		minStableAttach:     2 * time.Second,
 		tmuxPath:            "tmux",
 		configured:          len(cfg.Raw) > 0,
 	}
@@ -103,9 +102,9 @@ func New(cfg core.PluginConfig) (core.Plugin, error) {
 	p.run = func(ctx context.Context, args ...string) ([]byte, error) {
 		return exec.CommandContext(ctx, p.cfg.tmuxPath, args...).Output() //nolint:gosec // G204: operator-configured tmux binary, not attacker input
 	}
-	currentMu.Lock()
-	current = p
-	currentMu.Unlock()
+	p.attach = p.attachOnce
+	p.serverAlive = p.probeAlive
+	active.Store(p)
 	return p, nil
 }
 
@@ -174,6 +173,10 @@ func sleepCtx(ctx context.Context, d time.Duration) {
 }
 
 // --- config coercion helpers (toml decodes to string/int64/float64/bool/[]any) ---
+//
+// TODO: strOr/intOr/strsOr are duplicated verbatim across the github/peer/claude/tmux
+// plugins. The approved follow-up is a shared plugins/internal/pluginconfig package;
+// left here until that lands so this PR stays scoped to the tmux plugin.
 
 func strOr(raw map[string]any, k, def string) string {
 	if raw != nil {

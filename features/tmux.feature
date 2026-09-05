@@ -10,7 +10,8 @@ Feature: tmux plugin — server-wide control-mode watcher over local SQLite
   # vanished entities staleSince. Keys are `pane:<session>:<window>.<pane>@<hostId>` (and the
   # session/window/server kinds). It serves via the gqlgen `extend type` glob seam — no webhook,
   # no HTTPRoutes. @local runs against a REAL tmux server on a private socket (`-L sg-test-<pid>`),
-  # created and torn down per scenario — hermetic, no credentials, no fake server. @pending only
+  # created per scenario and torn down with a VERIFIED kill (poll until the socket is gone, else
+  # SIGKILL the leaked server + attach pids) — hermetic, no credentials, no fake server. @pending only
   # where a second box + the peer plugin are needed. `T` = reconcileIntervalSeconds (test: short).
   #
   # OWNERSHIP: S2 (cross-box free-slot fan-out) is the PEER plugin's; this feature owns only the
@@ -129,7 +130,7 @@ Feature: tmux plugin — server-wide control-mode watcher over local SQLite
   Scenario: The tmux plugin stays within its LOC budget
     Given the tmux plugin source under `plugins/tmux/`
     When `make loc-tmux` counts non-comment non-blank lines of the non-test Go files
-    Then the count is at most 800
+    Then the count is at most 860
 
   # ---------- Cross-box (needs the peer plugin + a second box) ----------
 
@@ -155,5 +156,5 @@ Feature: tmux plugin — server-wide control-mode watcher over local SQLite
   # AC-TMUX-ISOLATION:      "F5 tmux half — keeps answering when sibling panics" -> Scenario: tmux keeps answering when a sibling plugin panics
   # AC-TMUX-CURSOR:         "Cursor persists across restart" -> Scenario: The reconcile cursor persists across a restart
   # AC-TMUX-ZEROCORE:       "S5 — zero core edit" -> Scenario: Adding the tmux plugin touches zero files under core/
-  # AC-TMUX-LOC:            "LOC budget <= 800" -> Scenario: The tmux plugin stays within its LOC budget
+  # AC-TMUX-LOC:            "LOC budget <= 860" -> Scenario: The tmux plugin stays within its LOC budget
   # AC-TMUX-STALE-PEER:     "Stale peer (cross-box, @pending, was F8; F8 stays peer-owned in prd.feature)" -> Scenario: A stopped box shows its tmux data as stale on its peers within 30 seconds

@@ -3,6 +3,7 @@ package tmux
 import (
 	"bufio"
 	"context"
+	"log"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -76,38 +77,70 @@ func leadingInt(s string) int {
 	return n
 }
 
-// watch is the supervised control-mode loop (D1, D7). It attaches one control
-// client, forwards every structural notification to the reconcile trigger, and on
-// %exit/EOF (server died or was killed) marks all local entities stale, emits
-// tmux.server.down, and exponential-backoff reconnects until ctx is done.
+// watch is the supervised control-mode loop (D1, D7). Each cycle it probes server
+// liveness WITHOUT attaching (a bare `tmux -C attach` against a dead socket makes
+// tmux fork a brand-new server — B2), attaches only when the server is up, forwards
+// every structural notification to the reconcile trigger, and reconnects with
+// exponential backoff until ctx is done.
+//
+// tmux.server.down is emitted exactly ONCE per up→down transition (B1): `up` starts
+// optimistic so the first real down announces once, then stays silent while down so
+// core's lag crosses the stale threshold honestly (owner T1). An attach that falls
+// out in under minStableAttach is a failed/immediate exit, not a held session, and
+// never resets the backoff (B2).
 func (p *Plugin) watch(ctx context.Context) {
 	backoff := time.Second
+	up := true
 	for ctx.Err() == nil {
-		attached := p.attachOnce(ctx)
-		if ctx.Err() != nil {
-			return
+		genuine := false
+		if p.serverAlive(ctx) {
+			start := p.now()
+			att := p.attach(ctx)
+			if ctx.Err() != nil {
+				return
+			}
+			genuine = att && p.now().Sub(start) >= p.cfg.minStableAttach
 		}
-		// The client returned: the server is gone (or never came up). Mark local
-		// state stale and, if it had actually been up, announce it.
-		if attached {
-			p.serverDown(ctx)
+		if genuine {
+			up = true
 			backoff = time.Second
+			continue // the held session ended; retry promptly without a false down
+		}
+		if up { // up→down transition: announce exactly once
+			p.serverDown(ctx)
+			up = false
 		}
 		p.sleep(ctx, backoff)
-		if backoff < p.cfg.reconnectBackoffMax {
-			backoff *= 2
-			if backoff > p.cfg.reconnectBackoffMax {
-				backoff = p.cfg.reconnectBackoffMax
-			}
-		}
+		backoff = nextBackoff(backoff, p.cfg.reconnectBackoffMax)
 	}
 }
 
-// attachOnce runs one `tmux -C attach` client until it exits. It returns true if the
-// client actually attached (produced output before exiting), false if the attach
-// failed outright (no server yet) so the caller does not emit a spurious
-// server.down. stdin is held open for the client's lifetime — closing it makes tmux
-// emit %exit immediately (EDR §Measurements).
+// nextBackoff doubles cur toward max (inclusive), never overshooting.
+func nextBackoff(cur, max time.Duration) time.Duration {
+	if cur >= max {
+		return max
+	}
+	if n := cur * 2; n < max {
+		return n
+	}
+	return max
+}
+
+// probeAlive reports whether the watched tmux server is up WITHOUT attaching to it.
+// `tmux -C attach` against a dead socket makes tmux fork a fresh server (B2), so
+// liveness is gated on a read-only list-sessions first; its non-zero exit ("no
+// server running") means down and the caller never attaches.
+func (p *Plugin) probeAlive(ctx context.Context) bool {
+	_, err := p.run(ctx, p.tmuxArgs("list-sessions")...)
+	return err == nil
+}
+
+// attachOnce runs one `tmux -C attach` client until it exits (the default `attach`
+// seam; unit tests swap in a fake). It returns true if the client actually attached
+// (produced output before exiting), false if the attach failed outright. The
+// CommandContext child is killed when ctx is cancelled and reaped in the defer, so
+// no attach process leaks on shutdown. stdin is held open for the client's lifetime
+// — closing it makes tmux emit %exit immediately (EDR §Measurements).
 func (p *Plugin) attachOnce(ctx context.Context) bool {
 	// tmuxPath/socket are operator config (not attacker input) and control mode is a
 	// passive read-only client (D2), so launching it here is intended.
@@ -139,9 +172,21 @@ func (p *Plugin) attachOnce(ctx context.Context) bool {
 		if strings.HasPrefix(line, "%exit") {
 			return true
 		}
+		// %begin/%end/%error bracket the reply block of any command we send
+		// (refresh-client above); they are not server notifications, so skip them
+		// explicitly rather than letting %error slip past as a non-structural line.
+		if strings.HasPrefix(line, "%begin") || strings.HasPrefix(line, "%end") || strings.HasPrefix(line, "%error") {
+			continue
+		}
 		if isStructural(line, p.version) {
 			p.triggerReconcile()
 		}
+	}
+	// A Scan loop ends on EOF or error; surface the error (ErrTooLong on an
+	// oversized frame, a read failure) so a truncated stream is not read as a clean
+	// server exit.
+	if err := sc.Err(); err != nil {
+		log.Printf("tmux: control-mode scan ended with error: %v", err)
 	}
 	return attached
 }
