@@ -113,7 +113,6 @@ type world struct {
 	ws       *wsClient
 	wsData   map[string]any
 	wsPushed bool
-	wsEmitAt time.Time // AC-CORE-8: clock start, set after connection setup/ack so the <1s bound measures only emit-to-receipt
 
 	// AC-CORE-12
 	bootStdout string
@@ -414,7 +413,10 @@ func (w *world) openSubscription(field string) error {
 			break
 		}
 	}
-	q := fmt.Sprintf("subscription { %s { payload v } }", field)
+	// ts is included so AC-CORE-8 can measure genuine emit-to-receipt latency
+	// (envelope TS, source-stamped at emit) instead of clock-starting at an
+	// arbitrary point in the plugin's own tick cycle.
+	q := fmt.Sprintf("subscription { %s { ts payload v } }", field)
 	if err := c.write(map[string]any{"id": "1", "type": "subscribe", "payload": map[string]any{"query": q}}); err != nil {
 		c.close()
 		return err
