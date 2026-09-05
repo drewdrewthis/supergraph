@@ -176,9 +176,13 @@ the review Shoulds (S-A change-detected `pane.updated`, S-B scan-error/reply-fra
 (−37 in `tmux.go`), dropping the measure to **776**; per the owner rule the cap is set to **measured + 5%
 rounded up to a multiple of 10 = 820**. No compression for the number.
 
+`active`/`getCurrent` (already `atomic.Pointer[Plugin]`, not the RWMutex the post-tier §A doc
+described) was moved to `plugins/internal/single.Ptr[Plugin]` — LOC-neutral, measured holds at
+**776**, cap stays 820.
+
 | File (`plugins/tmux/`) | Actual | Responsibility |
 |---|---:|---|
-| `tmux.go` | 127 | wiring: `init`/`New`/`Name`/`Migrate`/`Start` (dormant when unconfigured) + `Cursor` + config parse/defaults (coercion via `plugins/internal/pluginconfig`) + `attach`/`serverAlive`/clock/exec seams + `atomic.Pointer` singleton |
+| `tmux.go` | 127 | wiring: `init`/`New`/`Name`/`Migrate`/`Start` (dormant when unconfigured) + `Cursor` + config parse/defaults (coercion via `plugins/internal/pluginconfig`) + `attach`/`serverAlive`/clock/exec seams + `single.Ptr` singleton |
 | `keys.go` | 79 | key grammar data table: parse + object→key + typename + host split + free/busy classifier |
 | `control.go` | 144 | control-mode client: probe-gated `tmux -C attach`, hold stdin, `refresh-client -f no-output`, structural-notification → reconcile trigger, `%begin/%end/%error` skip + scan-error log, once-per-transition `server.down`, `minStableAttach` + backoff reconnect |
 | `snapshot.go` | 158 | `list-panes -a`/`list-sessions` parse → upsert; reconcile diff → new/changed `pane.updated` + `pane.closed`/`staleSince`; `tmux.snapshot` emit (only on success — owner T1); git-branch resolve; free/busy recompute |

@@ -2,22 +2,13 @@ package peer
 
 import (
 	"context"
-	"sync/atomic"
 	"time"
+
+	"github.com/drewdrewthis/supergraph/plugins/internal/single"
 )
 
-// accessor.go bridges the running plugin to the graph `peers` resolver. The plugin
-// never imports graph; graph reads this package-level accessor instead.
-//
-// Decision — a process-level `active` singleton, not core's Resolver.Events seam:
-// the `peers` query needs live PLUGIN STATE (per-peer liveness from peer_state),
-// but the only reader core hands a plugin's graph resolver is the events channel —
-// there is no "give me plugin X" handle. Rather than a core change (LOCKED), the
-// plugin publishes itself here on New and the resolver delegates through Peers().
-// A pointer swap on New keeps it test-safe: each newTestPlugin/New re-Stores, so a
-// test reads its own instance, and a nil/unstarted pointer yields no peers, never a
-// panic. Single-process assumption holds — one supergraph binary, one peer plugin.
-var active atomic.Pointer[Plugin]
+// active is the running plugin instance, published for graph/ resolvers; see plugins/internal/single.Ptr for the one-instance-per-process convention.
+var active single.Ptr[Plugin]
 
 // PeerView is one peer's liveness for the graph `peers` resolver (a black-box view,
 // so graph never imports the plugin's internal types).
@@ -34,7 +25,7 @@ type PeerView struct {
 // resolver delegates here; a nil/unstarted plugin yields no peers rather than a
 // panic.
 func Peers(ctx context.Context) ([]PeerView, error) {
-	p := active.Load()
+	p := active.Get()
 	if p == nil || p.store == nil {
 		return nil, nil
 	}

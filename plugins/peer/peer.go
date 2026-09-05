@@ -86,7 +86,7 @@ func New(cfg core.PluginConfig) (core.Plugin, error) {
 		sleep: sleepCtx,
 	}
 	p.subscribe = p.subscribeLag
-	active.Store(p)
+	active.Set(p)
 	return p, nil
 }
 

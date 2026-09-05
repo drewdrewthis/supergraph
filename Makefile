@@ -163,9 +163,11 @@ loc-tmux:
 # --- shared internal helper targets ---
 # loc-internal guards the plugins/internal/** shared-helper LOC budget: prod code
 # only (no _test.go), comments/blank lines stripped. Cap 100 = measured 89 x1.05
-# rounded up to a multiple of 10 (owner rule). Holds the extracted config-coercion
-# helpers (plugins/internal/pluginconfig) the 4 plugins now share; a single umbrella
-# budget so future plugins/internal/* helpers share one gate.
+# rounded up to a multiple of 10 (owner rule); holds at 100 after plugins/internal/single
+# (single.Ptr[T], the peer/claude/tmux singleton seam) landed, measured 89->90. Holds the
+# extracted config-coercion helpers (plugins/internal/pluginconfig) the 4 plugins now
+# share, plus single; a single umbrella budget so future plugins/internal/* helpers
+# share one gate.
 loc-internal:
 	@files=$$(find plugins/internal -name '*.go' ! -name '*_test.go' 2>/dev/null); \
 	if [ -z "$$files" ]; then count=0; else count=$$(echo "$$files" | xargs sed -E '/^[[:space:]]*\/\//d;/^[[:space:]]*$$/d' | wc -l | tr -d ' '); fi; \

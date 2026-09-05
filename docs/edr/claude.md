@@ -245,6 +245,9 @@ measure (677).
 | `redact.go` | 30 | **76** | 0 | whitelist projection: hook + transcript record → body-free foldInput/enrichment (comment softened, S4) |
 | **Total** | **690** | **710** | +33 | guard **750** = measured 710 + 5% rounded up to a multiple of 10 (owner rule); ratcheted 790→750 after the config helpers moved to `plugins/internal/pluginconfig` (−35) |
 
+`live` was moved to `plugins/internal/single.Ptr[Plugin]` (post-tier §A) — LOC-neutral, measured
+holds at **710**, cap stays 750.
+
 CLI delta (`cmd/supergraph/install.go`, counted separately like github's): **183** actual (was 150) — the
 opt-in `install` (print-block + idempotent, now **atomic** `--install-hook` merge that refuses to
 overwrite an unparseable file, M1) **and** the `claude-hook` stdin→POST forwarder (deterministic token

@@ -106,6 +106,8 @@ skipping it is defensible — the atomic.Pointer body is 3 lines each.
 - **AC-PCFG-LOC** — after the move, each `make loc-{github,claude,peer,tmux}` passes at its re-ratcheted cap, where each cap = the post-move `make loc-<p>` measurement × 1.05 **rounded up to the next multiple of 10** (owner rule; matches the existing 1350/700/790/800 caps), and never above the prior cap; and a dedicated `loc-internal` (or `loc-pluginconfig`) gate — cap by the same rule — guards the new package and is added as its own step in `.github/workflows/ci.yml` (there is no `loc-*` aggregate target; each gate is a separate CI step). Evidence: each `make loc-<p>` stdout + the new CI step.
 - **AC-SINGLE-PTR** (if the singleton PR ships) — claude/peer/tmux singletons all route through `single.Ptr[Plugin]`; `grep -n 'sync.RWMutex' plugins/tmux/tmux.go` is empty; tests still read their own instance and a nil/unstarted ptr yields no-rows not a panic. Evidence: grep + green features.
 
+**Status: shipped in PR #14 (LOC-neutral).**
+
 ---
 
 ## B. Spike measurements (no owner creds) → `docs/spike-results.md`

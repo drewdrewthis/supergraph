@@ -12,11 +12,11 @@ import (
 	"context"
 	"os/exec"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/drewdrewthis/supergraph/core"
 	"github.com/drewdrewthis/supergraph/plugins/internal/pluginconfig"
+	"github.com/drewdrewthis/supergraph/plugins/internal/single"
 )
 
 func init() { core.Register("tmux", New) }
@@ -55,15 +55,10 @@ type Plugin struct {
 	serverAlive func(context.Context) bool // liveness probe that never spawns a server (B2)
 }
 
-// active is the running instance the graph resolvers delegate to (the plugin's own
-// half of the "delegate through the registry" seam — core exposes no instance
-// accessor, and graph/ must reach the live store without a core edit). One server
-// process runs one tmux plugin, so a package singleton set in New is sufficient.
-// atomic.Pointer matches the peer plugin's `active` / claude plugin's `live`
-// convention for the lock-free read path.
-var active atomic.Pointer[Plugin]
+// active is the running plugin instance, published for graph/ resolvers; see plugins/internal/single.Ptr for the one-instance-per-process convention.
+var active single.Ptr[Plugin]
 
-func getCurrent() *Plugin { return active.Load() }
+func getCurrent() *Plugin { return active.Get() }
 
 // New builds the plugin from its resolved config and registers it as the current
 // instance for the graph resolvers.
@@ -105,7 +100,7 @@ func New(cfg core.PluginConfig) (core.Plugin, error) {
 	}
 	p.attach = p.attachOnce
 	p.serverAlive = p.probeAlive
-	active.Store(p)
+	active.Set(p)
 	return p, nil
 }
 
