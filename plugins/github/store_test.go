@@ -96,7 +96,7 @@ func TestStoreHooks(t *testing.T) {
 	if _, ok := p.store.hook(ctx, "o", "r"); ok {
 		t.Fatal("absent hook reported present")
 	}
-	_ = p.store.putHook(ctx, "o", "r", 42, "secret")
+	_ = p.store.putHook(ctx, "o", "r", 42)
 	id, ok := p.store.hook(ctx, "o", "r")
 	if !ok || id != 42 {
 		t.Errorf("hook = (%d,%v)", id, ok)

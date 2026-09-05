@@ -45,6 +45,10 @@ func (p *Plugin) forwardSupervisor(ctx context.Context) {
 		// delivery with the plugin's configured webhook secret, so handleWebhook's
 		// HMAC check accepts it (AC-GH-FORWARD); without it deliveries are signed
 		// with an empty secret and always 401.
+		// NOTE (S5): the secret is passed as an argv flag, so it is visible in the
+		// process list (`ps`/`/proc/<pid>/cmdline`) to any local user for the life
+		// of the child. Acceptable on the single-tenant, single-operator v1 box; a
+		// multi-tenant host would need to hand `gh` the secret via env/stdin instead.
 		cmd := exec.CommandContext(ctx, p.cfg.ghPath, "webhook", "forward", //nolint:gosec // operator-configured gh binary path, not attacker input
 			"--url", p.cfg.selfURL+"/plugins/github/webhook",
 			"--secret", p.cfg.webhookSecret)

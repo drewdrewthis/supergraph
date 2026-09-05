@@ -75,39 +75,56 @@ type queryResult struct {
 // handleGraphQL serves POST {op|query, variables} at /plugins/github/graphql. A
 // named op runs through the scoped executor; a raw query is proxied to GitHub.
 func (p *Plugin) handleGraphQL(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxGraphQLBody) // S2: cap before decode
 	var req struct {
 		Query     string         `json:"query"`
 		Op        string         `json:"op"`
 		Variables map[string]any `json:"variables"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		http.Error(w, "bad request", readErrStatus(err))
 		return
 	}
 	ctx := r.Context()
 	w.Header().Set("Content-Type", "application/json")
 
-	if req.Op != "" {
-		op, ok := p.ops[req.Op]
-		if !ok {
-			http.Error(w, "unknown op", http.StatusNotFound)
+	// A raw {query} bypasses declared-key scoping and stores nothing, so it is
+	// rejected — except introspection (`supergraph schema <Type>`), the one raw query
+	// that legitimately needs the upstream schema and touches no cache (P2).
+	if req.Op == "" {
+		if !strings.Contains(req.Query, "__schema") && !strings.Contains(req.Query, "__type") {
+			http.Error(w, `request must set "op": raw {query} passthrough is disabled`, http.StatusBadRequest)
 			return
 		}
-		res, err := p.runOp(ctx, op, req.Variables)
+		data, err := p.httpGraphQL(ctx, req.Query, req.Variables)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(res)
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": data})
 		return
 	}
-	data, err := p.httpGraphQL(ctx, req.Query, req.Variables)
+	op, ok := p.ops[req.Op]
+	if !ok {
+		http.Error(w, "unknown op", http.StatusNotFound)
+		return
+	}
+	// S1: reject unsafe owner/repo variables before any key/path is built.
+	if !safeName(coerce(req.Variables["owner"])) || !safeName(coerce(req.Variables["repo"])) {
+		http.Error(w, "invalid owner/repo in variables", http.StatusBadRequest)
+		return
+	}
+	res, err := p.runOp(ctx, op, req.Variables)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
-	_ = json.NewEncoder(w).Encode(map[string]any{"data": data})
+	_ = json.NewEncoder(w).Encode(res)
 }
+
+// maxGraphQLBody caps the POST /graphql body (S2): the executor only needs an op
+// name plus a few variables, so 256 KiB is generous and bounds pre-decode memory.
+const maxGraphQLBody = 256 << 10
 
 // runOp executes a named op: a list op fetches from GitHub, stores each returned
 // node under its own key, and caches the list result tagged with its covering
@@ -115,6 +132,7 @@ func (p *Plugin) handleGraphQL(w http.ResponseWriter, r *http.Request) {
 func (p *Plugin) runOp(ctx context.Context, op namedOp, vars map[string]any) (queryResult, error) {
 	if op.scope == "" {
 		var nodes []nodeResult
+		var bodies []json.RawMessage
 		for _, kt := range op.keys {
 			key := substitute(kt, vars)
 			n, err := p.resolve(ctx, key)
@@ -123,15 +141,32 @@ func (p *Plugin) runOp(ctx context.Context, op namedOp, vars map[string]any) (qu
 			}
 			if n != nil {
 				nodes = append(nodes, nodeResult{Key: n.Key, ETag: n.ETag, Typename: n.Typename, Node: n.JSON})
+				bodies = append(bodies, n.JSON)
 			}
 		}
-		return queryResult{Nodes: nodes}, nil
+		// U1: a point op returns its object(s) under data.<opName> too, so a uniform
+		// {data,nodes,scope} shape renders in the CLI instead of a blank data block.
+		data := json.RawMessage("null")
+		if len(bodies) == 1 {
+			data = bodies[0]
+		} else if len(bodies) > 1 {
+			data, _ = json.Marshal(bodies)
+		}
+		return queryResult{Data: map[string]json.RawMessage{op.name: data}, Nodes: nodes}, nil
 	}
 
 	scope := substitute(op.scope, vars)
-	data, err := p.httpGraphQL(ctx, op.query, vars)
-	if err != nil {
-		return queryResult{}, err
+	// U2: a cached list result serves the list body AND its member nodes with zero
+	// upstream calls; it is evicted only by the member-purge tag index. A miss (or a
+	// post-purge read) refetches. This makes AC-GH-CACHE-HIT hold for list ops too.
+	var data map[string]any
+	if cached, _ := p.store.get(ctx, listKey(op.name, scope)); cached != nil {
+		_ = json.Unmarshal(cached.JSON, &data)
+	} else {
+		var err error
+		if data, err = p.httpGraphQL(ctx, op.query, vars); err != nil {
+			return queryResult{}, err
+		}
 	}
 	raw, _ := json.Marshal(data)
 

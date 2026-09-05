@@ -46,7 +46,6 @@ CREATE TABLE IF NOT EXISTS github_hooks (
 	owner   TEXT,
 	repo    TEXT,
 	hook_id INTEGER,
-	secret  TEXT,
 	PRIMARY KEY (owner, repo)
 );
 CREATE TABLE IF NOT EXISTS github_deliveries (
@@ -91,17 +90,13 @@ func (s *store) get(ctx context.Context, key string) (*node, error) {
 
 // upsert writes (replacing) one node row.
 func (s *store) upsert(ctx context.Context, n *node) error {
-	pinned := 0
-	if n.Pinned {
-		pinned = 1
-	}
 	_, err := s.db().ExecContext(ctx,
 		`INSERT INTO github_nodes (key, typename, node_json, etag, pinned, fetched_at, updated_at)
 		 VALUES (?,?,?,?,?,?,?)
 		 ON CONFLICT(key) DO UPDATE SET
 		   typename=excluded.typename, node_json=excluded.node_json, etag=excluded.etag,
 		   pinned=excluded.pinned, fetched_at=excluded.fetched_at, updated_at=excluded.updated_at`,
-		n.Key, n.Typename, n.JSON, n.ETag, pinned,
+		n.Key, n.Typename, n.JSON, n.ETag, n.Pinned,
 		n.FetchedAt.Format(rfc), n.UpdatedAt.Format(rfc),
 	)
 	if err != nil {
@@ -175,6 +170,27 @@ func (s *store) purge(ctx context.Context, key string) ([]string, error) {
 	return deleted, nil
 }
 
+// nonPinnedNodes returns every cached object node (key + etag) that is neither
+// pinned nor a list result, so reconcile can revalidate each against upstream and
+// heal a dropped webhook within one interval (P1).
+func (s *store) nonPinnedNodes(ctx context.Context) ([]*node, error) {
+	rows, err := s.db().QueryContext(ctx,
+		`SELECT key, etag FROM github_nodes WHERE pinned=0 AND typename<>'_list'`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []*node
+	for rows.Next() {
+		n := &node{}
+		if err := rows.Scan(&n.Key, &n.ETag); err != nil {
+			return nil, err
+		}
+		out = append(out, n)
+	}
+	return out, rows.Err()
+}
+
 // deliverySeen reports whether this X-GitHub-Delivery id was already ingested, so a
 // redelivery replays a missed event exactly once (AC-GH-FORWARD).
 func (s *store) deliverySeen(ctx context.Context, id string) bool {
@@ -191,6 +207,15 @@ func (s *store) markDelivery(ctx context.Context, id string, at time.Time) error
 	return err
 }
 
+// pruneDeliveries drops delivery ids seen before the cutoff so the dedup table
+// cannot grow without bound; GitHub redelivers only within hours, so a 7d window is
+// ample (S3). seen_at is RFC3339Nano, which sorts lexicographically.
+func (s *store) pruneDeliveries(ctx context.Context, before time.Time) error {
+	_, err := s.db().ExecContext(ctx,
+		`DELETE FROM github_deliveries WHERE seen_at < ?`, before.Format(rfc))
+	return err
+}
+
 // hook returns the created hook id for a repo, or ok=false.
 func (s *store) hook(ctx context.Context, owner, repo string) (int64, bool) {
 	var id int64
@@ -199,11 +224,14 @@ func (s *store) hook(ctx context.Context, owner, repo string) (int64, bool) {
 	return id, err == nil
 }
 
-func (s *store) putHook(ctx context.Context, owner, repo string, id int64, secret string) error {
+// putHook records a created hook id. It does NOT persist the webhook secret: the
+// secret lives only in config, so nothing plaintext-sensitive is written to the db
+// (S4).
+func (s *store) putHook(ctx context.Context, owner, repo string, id int64) error {
 	_, err := s.db().ExecContext(ctx,
-		`INSERT INTO github_hooks (owner, repo, hook_id, secret) VALUES (?,?,?,?)
-		 ON CONFLICT(owner, repo) DO UPDATE SET hook_id=excluded.hook_id, secret=excluded.secret`,
-		owner, repo, id, secret)
+		`INSERT INTO github_hooks (owner, repo, hook_id) VALUES (?,?,?)
+		 ON CONFLICT(owner, repo) DO UPDATE SET hook_id=excluded.hook_id`,
+		owner, repo, id)
 	return err
 }
 

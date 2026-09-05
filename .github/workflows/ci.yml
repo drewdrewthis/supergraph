@@ -56,8 +56,13 @@ jobs:
       - name: go test (race)
         run: go test -race -count=1 ./...
 
-      - name: loc-github (AC-GH-LOC, plugins/github/** prod code <= 800 lines)
+      - name: loc-github (AC-GH-LOC, plugins/github/** prod code <= 1350 lines)
         run: make loc-github
+
+      - name: zerocore (AC-GH-ZEROCORE, the github plugin touches neither core/ nor server/)
+        run: |
+          git fetch origin main
+          git diff --quiet origin/main -- core/ server/
 
       - name: godog feature suite (@service excluded by default)
         run: go test ./features/ -run TestFeatures -count=1

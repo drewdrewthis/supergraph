@@ -17,10 +17,16 @@ import (
 // absent signature is 401 with no emit (AC-GH-HMAC); a good one purges the touched
 // key (evicting the node and every list result whose scope covers it) and emits one
 // github.node.purged envelope (AC-GH-PURGE-TAG).
+// maxWebhookBody caps an inbound webhook body (S2).
+const maxWebhookBody = 1 << 20
+
 func (p *Plugin) handleWebhook(w http.ResponseWriter, r *http.Request) {
+	// S2: cap the body before any read/HMAC. GitHub caps payloads at 25 MiB but we
+	// only read a handful of ids, so 1 MiB is ample and bounds pre-auth memory.
+	r.Body = http.MaxBytesReader(w, r.Body, maxWebhookBody)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		http.Error(w, "bad body", http.StatusBadRequest)
+		http.Error(w, "bad body", readErrStatus(err))
 		return
 	}
 	if !p.verifySignature(body, r.Header.Get("X-Hub-Signature-256")) {

@@ -38,7 +38,21 @@ func (p *Plugin) reconcileOnce(ctx context.Context) {
 		p.ensureHook(ctx, owner, repo)
 		p.sinceReconcile(ctx, owner, repo)
 	}
+	p.revalidate(ctx)
+	_ = p.store.pruneDeliveries(ctx, p.now().Add(-7*24*time.Hour)) // S3: bound the dedup table
 	_ = p.store.setCursor(ctx, "reconcile:cursor", p.now().Format(time.RFC3339))
+}
+
+// revalidate re-checks every cached non-pinned node against upstream via a
+// conditional GET, so staleness stays bounded by the reconcile interval for ALL
+// mutable kinds, not just open issues (P1). A 304 costs zero body quota; a 200
+// upserts the changed node and emits github.node.updated. fetch already carries the
+// If-None-Match / 304 / 200 logic, so healing is one call per node.
+func (p *Plugin) revalidate(ctx context.Context) {
+	nodes, _ := p.store.nonPinnedNodes(ctx)
+	for _, n := range nodes {
+		_, _ = p.fetch(ctx, n.Key, n)
+	}
 }
 
 // discoverRepos pages GET /user/repos?affiliation=owner (F3 zero-config discovery),
@@ -91,7 +105,7 @@ func (p *Plugin) ensureHook(ctx context.Context, owner, repo string) {
 		ID int64 `json:"id"`
 	}
 	_ = json.Unmarshal(body, &out)
-	_ = p.store.putHook(ctx, owner, repo, out.ID, p.cfg.webhookSecret)
+	_ = p.store.putHook(ctx, owner, repo, out.ID)
 }
 
 // sinceReconcile pulls a repo's open issues via the openIssues op, sending

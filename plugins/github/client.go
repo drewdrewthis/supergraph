@@ -17,7 +17,9 @@ import (
 // executor, reconcile and ingest all call these methods.
 
 // floorThresholdGQL is the GraphQL-points remaining at or below which a read pauses
-// to resetAt rather than risking a hard rate-limit failure. REST pauses only at 0.
+// to resetAt rather than risking a hard rate-limit failure. The REST path has no
+// such pause: httpGET/httpPOST only log the x-ratelimit-* headers (logRESTRate) and
+// never block, because REST calls are cheap and reconcile is the only bulk caller.
 const floorThresholdGQL = 10
 
 // httpGET issues a conditional GET against the REST base, logs the rate-limit

@@ -121,6 +121,12 @@ func (p *Plugin) evalPin(key string, body map[string]any) bool {
 				return p.now().Sub(t) > days(p.cfg.pin.mergedPRsAfterDays)
 			}
 		}
+		// A closed-unmerged PR is terminal too, so pin it past the same grace (P3).
+		if state, _ := body["state"].(string); strings.EqualFold(state, "closed") {
+			if t, ok := timeField(body, "closed_at"); ok {
+				return p.now().Sub(t) > days(p.cfg.pin.mergedPRsAfterDays)
+			}
+		}
 	case "issue":
 		if state, _ := body["state"].(string); strings.EqualFold(state, "closed") {
 			if t, ok := timeField(body, "closed_at"); ok {

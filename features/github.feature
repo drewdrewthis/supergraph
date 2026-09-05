@@ -177,11 +177,11 @@ Feature: GitHub plugin — event-invalidated caching proxy
     And the next reconcile's fetch to the fake GitHub server carries `since=` equal to T minus 60s
 
   @github @local @AC-GH-LOC
-  Scenario: Production LOC for the github plugin stays within the 800-line budget
+  Scenario: Production LOC for the github plugin stays within the 1350-line budget
     Given the github plugin source under `plugins/github`
     When `make loc-github` counts non-comment, non-blank prod lines excluding tests and `internal/fakegh`
-    Then the count is 800 or fewer
-    And evidence is captured: "plugins/github prod LOC <= 800, via make loc-github output"
+    Then the count is 1350 or fewer
+    And evidence is captured: "plugins/github prod LOC <= 1350, via make loc-github output"
 
   @github @local @AC-GH-ZEROCORE
   Scenario: The github plugin compiles in without touching core

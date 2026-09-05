@@ -1,8 +1,24 @@
 package github
 
 import (
+	"log"
+	"net/url"
+	"regexp"
 	"strings"
 )
+
+// ownerRepoRe is the GitHub owner/repo name grammar. It is the allowlist every
+// untrusted owner/repo segment (POST /graphql variables, webhook payload fields)
+// must match before it is interpolated into a REST path, so a "../../x" or "o?x=1"
+// traversal is rejected rather than escaped-and-hoped (S1).
+var ownerRepoRe = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
+
+// safeName reports whether an owner/repo segment is safe to place in a REST path:
+// allowlist-matched and free of any ".." traversal (the regexp admits "." so the
+// dot-dot check is separate). Empty is allowed for repo-less kinds (user/org).
+func safeName(s string) bool {
+	return s == "" || (ownerRepoRe.MatchString(s) && !strings.Contains(s, ".."))
+}
 
 // Cache key grammar (EDR §"Cache key = object id"):
 //
@@ -121,8 +137,16 @@ func fill(template string, parts map[string]string) string {
 	})
 }
 
-// restPath maps a canonical key to its REST GET path via the table.
-func restPath(key string) string { return fill(specByKind[kindOf(key)].rest, parseKey(key)) }
+// restPath maps a canonical key to its REST GET path via the table. Each
+// single-segment discriminator (issue/pr number, check-run id, label name, tag) is
+// url.PathEscaped so a slash or dot-dot in an untrusted value cannot break out of
+// its path segment (S1); owner/repo are validated upstream via safeName, and the
+// multi-segment {sub} tail (a git ref) is left intact by design.
+func restPath(key string) string {
+	p := parseKey(key)
+	p["disc"], p["subid"] = url.PathEscape(p["disc"]), url.PathEscape(p["subid"])
+	return fill(specByKind[kindOf(key)].rest, p)
+}
 
 // typenameFor maps a key kind to its GraphQL typename via the table.
 func typenameFor(key string) string {
@@ -166,8 +190,23 @@ func eventKey(event string, payload map[string]any) (string, bool) {
 	if !ok {
 		return "", false
 	}
+	// issue_comment fires for both issues and PRs; a "pull_request" node inside the
+	// issue object marks a PR comment, so purge the pr key, not the issue key (P4).
+	if event == "issue_comment" {
+		if iss, _ := payload["issue"].(map[string]any); iss != nil {
+			if _, isPR := iss["pull_request"]; isPR {
+				s.keyfmt = "pr:{owner}/{repo}#{disc}"
+			}
+		}
+	}
 	owner, repo := repoFullName(payload)
 	if owner == "" || repo == "" {
+		return "", false
+	}
+	if !safeName(owner) || !safeName(repo) {
+		// %q escapes control chars (incl. newlines), so logging these already-rejected
+		// values cannot inject log lines — the gosec taint pass cannot see that.
+		log.Printf("github: webhook %s skipped: unsafe owner/repo %q/%q", event, owner, repo) //nolint:gosec // G706: %q escapes control chars; values already rejected
 		return "", false
 	}
 	disc, ok := discField(payload, s.obj, s.field)

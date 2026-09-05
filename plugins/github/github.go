@@ -7,6 +7,7 @@ package github
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"os"
 	"sync"
@@ -14,6 +15,16 @@ import (
 
 	"github.com/drewdrewthis/supergraph/core"
 )
+
+// readErrStatus maps a body read/decode error to 413 when a MaxBytesReader cap
+// tripped (S2), else 400 for an ordinary malformed body.
+func readErrStatus(err error) int {
+	var mbe *http.MaxBytesError
+	if errors.As(err, &mbe) {
+		return http.StatusRequestEntityTooLarge
+	}
+	return http.StatusBadRequest
+}
 
 func init() { core.Register("github", New) }
 
@@ -73,15 +84,16 @@ func New(cfg core.PluginConfig) (core.Plugin, error) {
 			mergedPRsAfterDays: 7, closedIssuesAfterDays: 30,
 		},
 	}
-	c.token = os.Getenv("GITHUB_TOKEN")
 	raw := cfg.Raw
-	c.token = strOr(raw, "token", c.token)
+	c.token = strOr(raw, "token", os.Getenv("GITHUB_TOKEN"))
 	c.baseURL = strOr(raw, "baseURL", c.baseURL)
 	c.graphqlURL = strOr(raw, "graphqlURL", c.graphqlURL)
 	c.ingress = strOr(raw, "ingress", c.ingress)
 	c.webhookSecret = strOr(raw, "webhookSecret", c.webhookSecret)
 	c.ghPath = strOr(raw, "ghPath", c.ghPath)
-	c.selfURL = strOr(raw, "selfURL", c.selfURL)
+	// EDR names this key tunnelURL (the box's externally reachable base under
+	// ingress=tunnel); selfURL stays accepted as an alias.
+	c.selfURL = strOr(raw, "tunnelURL", strOr(raw, "selfURL", c.selfURL))
 	c.notifications = boolOr(raw, "notifications", c.notifications)
 	if n := intOr(raw, "reconcileIntervalSeconds", 0); n > 0 {
 		c.reconcileInterval = time.Duration(n) * time.Second
