@@ -116,12 +116,12 @@ func subscribeCmd() *cobra.Command {
 func runSubscribe(ctx context.Context, opts subscribeOptions, stdout, stderr io.Writer) (exitCode int) {
 	vars, err := parseVars(opts.VarArgs)
 	if err != nil {
-		fmt.Fprintln(stderr, "error:", err)
+		_, _ = fmt.Fprintln(stderr, "error:", err)
 		return 1
 	}
 	query, variables, err := buildSubscription(opts.Field, vars)
 	if err != nil {
-		fmt.Fprintln(stderr, "error:", err)
+		_, _ = fmt.Fprintln(stderr, "error:", err)
 		return 1
 	}
 
@@ -148,7 +148,7 @@ func runSubscribe(ctx context.Context, opts subscribeOptions, stdout, stderr io.
 			}
 			select {
 			case <-ctx.Done():
-				fmt.Fprintln(stderr, "error:", ctx.Err())
+				_, _ = fmt.Fprintln(stderr, "error:", ctx.Err())
 				return 2
 			case <-time.After(backoff):
 			}
@@ -156,7 +156,7 @@ func runSubscribe(ctx context.Context, opts subscribeOptions, stdout, stderr io.
 		}
 		return 0
 	}
-	fmt.Fprintf(stderr, "error: subscribe %q: exhausted %d retries: %v\n", opts.Field, maxRetries, lastErr)
+	_, _ = fmt.Fprintf(stderr, "error: subscribe %q: exhausted %d retries: %v\n", opts.Field, maxRetries, lastErr)
 	return 2
 }
 
@@ -284,7 +284,7 @@ func subscribeOnce(ctx context.Context, wsURL, authHeader, field, query string, 
 	// the server's read loop will register the bus subscription before any event a
 	// caller now triggers over a fresh HTTP round-trip can be published.
 	if readyNotify {
-		fmt.Fprintln(stderr, "subscribed")
+		_, _ = fmt.Fprintln(stderr, "subscribed")
 	}
 
 	for {
