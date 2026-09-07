@@ -100,6 +100,21 @@ func registerClaudeSteps(sc *godog.ScenarioContext, w *world) {
 	sc.Step(lit("it reports 0 core files changed"), w.assertNoCoreDiff)
 	sc.Step(lit("20 synthetic \x60PreToolUse\x60 hook payloads for distinct sessions are POSTed to \x60/plugins/claude/hook\x60"), w.f1Post20)
 	sc.Step(lit("each session is queryable and the p95 of POST-to-queryable over the 20 samples is under 1s"), w.f1AssertP95)
+
+	// ---------- @live @pending (AC-CLAUDE-PANE) ----------
+	// Honest @pending, matching the github/peer live convention: strict mode
+	// requires every step TEXT to resolve even though the scenario is excluded from
+	// the default run. Driving a real Claude Code tool-call inside a managed tmux
+	// pane end-to-end (hook install + pane->pid->session + TmuxPane join) needs a
+	// live-session harness that is not built; see README > Live scenarios.
+	for _, s := range []string{
+		"the claude plugin is running with its hook installed on a box running tmux",
+		"a real Claude Code session runs a tool call inside a tmux pane",
+		"a `ClaudeInstance` appears with that session's real `pane` and live `pid`",
+		"it joins to the tmux plugin's `TmuxPane` row for the same pane",
+	} {
+		sc.Step(lit(s), pendingStep)
+	}
 }
 
 // ---- HTTP + GraphQL helpers ----

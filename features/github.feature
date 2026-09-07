@@ -21,6 +21,13 @@ Feature: GitHub plugin — event-invalidated caching proxy
     Then the p95 of receipt-to-subscription-push over the 20 samples is under 1s
     And evidence is captured: "p95 webhook-receipt to subscription-push < 1s over 20 samples, via paired journald lines"
 
+  @github @local @AC-GH-ISSUE-SUB
+  Scenario: An issues webhook pushes on the issueUpdated subscription within the S3 bound
+    Given a supergraph server started with the github plugin and data dir <tmp>
+    And a websocket subscription to `issueUpdated` on `127.0.0.1:7788/graphql`
+    When a correctly-signed `issues` `labeled` webhook for `o/r#5` is received
+    Then an `issueUpdated` push for `issue:o/r#5` is received within 1s of the webhook receipt
+
   @github @local @F1
   Scenario: F1 — github event ingest-to-queryable p95 under 1 second over 20 samples
     Given a supergraph server started with the github plugin and data dir <tmp>
@@ -225,7 +232,7 @@ Feature: GitHub plugin — event-invalidated caching proxy
     When there are no changes since the stored `If-Modified-Since`
     Then GitHub returns 304 at the advertised `X-Poll-Interval` and no quota is spent
 
-  @github @live @pending @AC-GH-RATELOG
+  @github @live @AC-GH-RATELOG
   Scenario: Live rate-limit fields are logged
     Given the github plugin running against live GitHub
     When it makes a live GraphQL request

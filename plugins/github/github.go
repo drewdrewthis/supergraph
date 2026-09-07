@@ -40,8 +40,12 @@ type config struct {
 	graphqlURL        string // GraphQL endpoint; test-only override points at fakegh
 	ingress           string // "forward" (default) | "tunnel"
 	webhookSecret     string
-	ghPath            string // gh binary; tests point at the stub
-	selfURL           string // this box's own base URL, for hook creation
+	ghPath            string   // gh binary; tests point at the stub
+	selfURL           string   // this box's own base URL, for hook creation
+	forwardRepo       string   // `gh webhook forward --repo owner/repo` target
+	forwardOrg        string   // `gh webhook forward --org name` target (used if forwardRepo unset)
+	forwardEvents     []string // event names passed to `gh webhook forward --events`
+	hookRepos         []string // owner/repo allowlist for hook creation; empty ⇒ create none
 	reconcileInterval time.Duration
 	notifications     bool
 	pin               pinConfig
@@ -65,6 +69,8 @@ type Plugin struct {
 
 	now   func() time.Time
 	sleep func(context.Context, time.Duration)
+
+	hookSkipOnce sync.Once // gates the one-time "hookRepos empty" reconcile log
 }
 
 // New builds the plugin from its resolved config (EDR §"Config keys").
@@ -76,6 +82,7 @@ func New(cfg core.PluginConfig) (core.Plugin, error) {
 		ghPath:            "gh",
 		reconcileInterval: time.Hour,
 		selfURL:           "http://127.0.0.1:7788",
+		forwardEvents:     defaultForwardEvents,
 		ttl:               map[string]time.Duration{},
 		pin: pinConfig{
 			commits: true, releases: true,
@@ -92,6 +99,12 @@ func New(cfg core.PluginConfig) (core.Plugin, error) {
 	// EDR names this key tunnelURL (the box's externally reachable base under
 	// ingress=tunnel); selfURL stays accepted as an alias.
 	c.selfURL = pluginconfig.Str(raw, "tunnelURL", pluginconfig.Str(raw, "selfURL", c.selfURL))
+	c.forwardRepo = pluginconfig.Str(raw, "forwardRepo", c.forwardRepo)
+	c.forwardOrg = pluginconfig.Str(raw, "forwardOrg", c.forwardOrg)
+	if ev := pluginconfig.Strs(raw, "forwardEvents"); len(ev) > 0 {
+		c.forwardEvents = ev
+	}
+	c.hookRepos = pluginconfig.Strs(raw, "hookRepos")
 	c.notifications = pluginconfig.Bool(raw, "notifications", c.notifications)
 	if n := pluginconfig.Int(raw, "reconcileIntervalSeconds", 0); n > 0 {
 		c.reconcileInterval = time.Duration(n) * time.Second

@@ -39,7 +39,7 @@ func main() {
 			target = next(args, &i)
 		case "-S", "--secret":
 			secret = next(args, &i)
-		case "-R", "--repo", "-E", "--events", "-H", "--host":
+		case "-R", "--repo", "-O", "--org", "-E", "--events", "-H", "--host":
 			_ = next(args, &i) // accepted, unused
 		}
 	}

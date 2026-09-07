@@ -39,6 +39,16 @@ Feature: GitHub typed Query + the PRD first cross-plugin join
     When `issuesForRepo` is queried for owner "o" repo "never-warmed"
     Then an empty list is returned
 
+  @github @local @AC-GHQ-ASSIGNEES
+  Scenario: issuesForRepo exposes state and assignees from cache for the dispatcher filter
+    Given a supergraph server started with the github plugin and data dir <tmp>
+    And issue `issue:o/r#5` is in the store assigned to "alice" in state "open"
+    When `issuesForRepo` is queried for owner "o" repo "r"
+    Then issue #5 has state "open" and assignee "alice"
+    And the fake GitHub server records zero requests during the query
+    # The dispatcher's "open, unassigned, no grinding label" filter is one cached
+    # query: state + assignees (empty = unassigned) + labels all served from cache.
+
   @github @local @AC-GHQ-HEADREF
   Scenario: A pull request exposes its head branch name
     Given a supergraph server started with the github plugin and data dir <tmp>
@@ -172,7 +182,7 @@ Feature: GitHub typed Query + the PRD first cross-plugin join
 
   # ---------- Live parity ----------
 
-  @github @live @pending @AC-GHQ-LIVE-WARM
+  @github @live @AC-GHQ-LIVE-WARM
   Scenario: Against real GitHub, issuesForRepo matches the REST listing after a warm
     Given a supergraph server with a real GITHUB_TOKEN and a repo under GITHUB_ORG
     And the `openIssues` op is warmed through `/plugins/github/graphql` for that repo

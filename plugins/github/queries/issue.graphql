@@ -5,6 +5,7 @@ query issue($owner: String!, $repo: String!, $number: Int!) {
     issue(number: $number) {
       number title state id url updatedAt
       labels(first: 20) { nodes { name } }
+      assignees(first: 20) { nodes { login } }
     }
   }
   rateLimit { remaining resetAt cost }

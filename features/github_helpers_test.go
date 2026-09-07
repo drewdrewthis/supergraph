@@ -35,6 +35,8 @@ type ghWorld struct {
 	webhookSecret string
 	ingress       string
 	ghPath        string
+	forwardRepo   string
+	hookRepos     []string
 	notifications bool
 	reconcileSecs int
 
@@ -86,6 +88,10 @@ func (g *ghWorld) init() error {
 	g.ingress = "tunnel" // avoids spawning the real `gh` binary; AC-GH-FORWARD overrides
 	g.ghPath = ""
 	g.notifications = false
+	// Default hook allowlist covers every owner/repo the harness registers via
+	// AddRepo; scenarios that assert hook creation (F3, forward redelivery) need
+	// their repo listed, and production defaults to empty (no hooks).
+	g.hookRepos = []string{"o/r", "o/newrepo"}
 	g.reconcileSecs = 3600 // long by default; "reconcile runs once" steps shorten + restart
 	return nil
 }
@@ -124,6 +130,19 @@ func (g *ghWorld) writeConfig() error {
 		fmt.Fprintf(&b, "ghPath = %q\n", g.ghPath)
 	}
 	fmt.Fprintf(&b, "selfURL = %q\n", "http://"+g.sw.listen)
+	if g.forwardRepo != "" {
+		fmt.Fprintf(&b, "forwardRepo = %q\n", g.forwardRepo)
+	}
+	if len(g.hookRepos) > 0 {
+		b.WriteString("hookRepos = [")
+		for i, r := range g.hookRepos {
+			if i > 0 {
+				b.WriteString(", ")
+			}
+			fmt.Fprintf(&b, "%q", r)
+		}
+		b.WriteString("]\n")
+	}
 	fmt.Fprintf(&b, "reconcileIntervalSeconds = %d\n", g.reconcileSecs)
 	fmt.Fprintf(&b, "notifications = %t\n", g.notifications)
 	b.WriteString("[plugins.github.pin]\n")
@@ -369,4 +388,126 @@ func p95(durs []time.Duration) time.Duration {
 		idx = len(sorted) - 1
 	}
 	return sorted[idx]
+}
+
+// ===================== @live helpers (real GitHub) =====================
+//
+// The @live github scenarios drive the SAME serve subprocess machinery as the
+// @local ones, but point the plugin at api.github.com instead of the fakegh
+// server. The PAT is passed to the child via the inherited GITHUB_TOKEN env (the
+// plugin's New() falls back to os.Getenv("GITHUB_TOKEN") when the config omits a
+// token key), so the credential is NEVER written to config.toml or any repo file.
+// Reconcile is pinned to 3600s and never fires inside a scenario window, so a live
+// run creates no webhooks and mutates nothing on the account (read-through only).
+
+// liveRepo returns the owner/repo the live scenarios target, from LIVE_REPO
+// (owner/repo). GITHUB_ORG + LIVE_REPO=repo (bare) is also accepted.
+func liveRepo() (owner, repo string, err error) {
+	v := strings.TrimSpace(os.Getenv("LIVE_REPO"))
+	if v == "" {
+		return "", "", fmt.Errorf("LIVE_REPO not set (want owner/repo)")
+	}
+	if o, r, ok := strings.Cut(v, "/"); ok {
+		return o, r, nil
+	}
+	org := strings.TrimSpace(os.Getenv("GITHUB_ORG"))
+	if org == "" {
+		return "", "", fmt.Errorf("LIVE_REPO=%q has no owner and GITHUB_ORG is unset", v)
+	}
+	return org, v, nil
+}
+
+// writeLiveConfig renders a config.toml that targets real GitHub. No token key is
+// written; the child inherits GITHUB_TOKEN. ingress=tunnel avoids spawning a gh
+// child; the long reconcile interval keeps the run read-only.
+func (g *ghWorld) writeLiveConfig() error {
+	var b strings.Builder
+	fmt.Fprintf(&b, "hostId = %q\n", "live")
+	fmt.Fprintf(&b, "listen = %q\n", g.sw.listen)
+	fmt.Fprintf(&b, "dataDir = %q\n", g.sw.dataDir)
+	b.WriteString("lagThresholdSeconds = 30.000000\n")
+	b.WriteString("[plugins.github]\n")
+	b.WriteString("ingress = \"tunnel\"\n")
+	b.WriteString("reconcileIntervalSeconds = 3600\n")
+	fmt.Fprintf(&b, "notifications = %t\n", g.notifications)
+	b.WriteString("[plugins.claude]\n")
+	fmt.Fprintf(&b, "projectsDir = %q\n", g.sw.claudeProjectsDir)
+	fmt.Fprintf(&b, "settingsPath = %q\n", g.sw.claudeSettingsPath)
+	b.WriteString("scanIntervalSeconds = 3600\nretentionDays = 3650\n")
+	return os.WriteFile(g.sw.cfgPath, []byte(b.String()), 0o644)
+}
+
+// startLive boots the serve subprocess against real GitHub, failing fast with an
+// operator-facing error if the PAT is absent.
+func (g *ghWorld) startLive() error {
+	if os.Getenv("GITHUB_TOKEN") == "" {
+		return fmt.Errorf("GITHUB_TOKEN not set: the @live github scenarios need a real PAT (see README > Live scenarios)")
+	}
+	if _, _, err := liveRepo(); err != nil {
+		return err
+	}
+	if err := g.writeLiveConfig(); err != nil {
+		return err
+	}
+	return g.sw.startServe()
+}
+
+// warmOp POSTs a named op to the running plugin's /plugins/github/graphql, which
+// fetches from live GitHub and caches the returned nodes. It returns the executor
+// status so a caller can assert the warm actually reached upstream.
+func (g *ghWorld) warmOp(op, owner, repo string) (int, error) {
+	_, status, err := g.postOp(op, map[string]any{"owner": owner, "repo": repo})
+	return status, err
+}
+
+// restOpenIssueNumbers lists a repo's open issues via the REST API (the same
+// authority the scenario compares against), dropping pull requests (which the
+// issues endpoint interleaves and which carry a "pull_request" member).
+func restOpenIssueNumbers(owner, repo string) ([]int, error) {
+	var nums []int
+	for page := 1; ; page++ {
+		url := fmt.Sprintf("https://api.github.com/repos/%s/%s/issues?state=open&per_page=100&page=%d", owner, repo, page)
+		req, _ := http.NewRequest(http.MethodGet, url, nil)
+		req.Header.Set("Authorization", "token "+os.Getenv("GITHUB_TOKEN"))
+		req.Header.Set("Accept", "application/vnd.github+json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		body, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("REST issues status %d: %s", resp.StatusCode, body)
+		}
+		var page1 []struct {
+			Number      int             `json:"number"`
+			PullRequest json.RawMessage `json:"pull_request"`
+		}
+		if err := json.Unmarshal(body, &page1); err != nil {
+			return nil, err
+		}
+		for _, it := range page1 {
+			if len(it.PullRequest) == 0 {
+				nums = append(nums, it.Number)
+			}
+		}
+		if len(page1) < 100 {
+			break
+		}
+	}
+	sort.Ints(nums)
+	return nums, nil
+}
+
+// waitLogLine polls the serve subprocess stdout until it contains substr or the
+// deadline passes, returning whether it was seen.
+func (g *ghWorld) waitLogLine(substr string, d time.Duration) bool {
+	deadline := time.Now().Add(d)
+	for time.Now().Before(deadline) {
+		if g.sw.serve != nil && strings.Contains(g.sw.serve.stdout.String(), substr) {
+			return true
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	return g.sw.serve != nil && strings.Contains(g.sw.serve.stdout.String(), substr)
 }

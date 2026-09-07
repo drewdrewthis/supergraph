@@ -4,6 +4,12 @@
 # same Bus every plugin already emits onto — no edit under core/.
 extend type Subscription {
   checkRunUpdated: GithubEvent!
+  # issueUpdated fans out the plugin's issue envelopes (every `issues` webhook
+  # action purges the touched issue key and emits one github.node.purged) so the
+  # dispatcher subscribes instead of polling. Same shape/mechanics as
+  # checkRunUpdated; the optional owner/repo filters select by the envelope key's
+  # `issue:{owner}/{repo}#` prefix (like claudeSessionUpdated's hostId suffix).
+  issueUpdated(owner: String, repo: String): GithubEvent!
 }
 
 # GithubEvent mirrors core.Envelope (Payload flattened to a string), matching the
@@ -38,8 +44,17 @@ type Issue {
   url: String!
   updatedAt: Time
   labels: [String!]!
+  # assignees carries each assigned login so the dispatcher's "open, unassigned"
+  # filter is one cached query (empty = unassigned). Warmed by the openIssues op.
+  assignees: [Assignee!]!
   tmuxPanes: [TmuxPane!]!
   claudeSessions: [ClaudeSession!]!
+}
+
+# Assignee is one GitHub login assigned to an issue (bound to github.Assignee so
+# gqlgen emits no resolver — the login lives on the cached node, D4).
+type Assignee {
+  login: String!
 }
 
 type PullRequest {

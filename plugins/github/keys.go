@@ -59,6 +59,10 @@ var kindSpecs = []kindSpec{
 var (
 	specByKind  = map[string]kindSpec{}
 	specByEvent = map[string]kindSpec{}
+	// defaultForwardEvents is exactly the webhook event names eventKey maps
+	// (specByEvent), in kindSpecs declaration order — the default --events set for
+	// `gh webhook forward`, so it subscribes to precisely what the plugin ingests.
+	defaultForwardEvents []string
 )
 
 func init() {
@@ -66,6 +70,7 @@ func init() {
 		specByKind[s.kind] = s
 		for _, e := range s.events {
 			specByEvent[e] = s
+			defaultForwardEvents = append(defaultForwardEvents, e)
 		}
 	}
 }

@@ -41,6 +41,10 @@ type DirectiveRoot struct {
 }
 
 type ComplexityRoot struct {
+	Assignee struct {
+		Login func(childComplexity int) int
+	}
+
 	ClaudeEvent struct {
 		Key     func(childComplexity int) int
 		Payload func(childComplexity int) int
@@ -91,6 +95,7 @@ type ComplexityRoot struct {
 	}
 
 	Issue struct {
+		Assignees      func(childComplexity int) int
 		ClaudeSessions func(childComplexity int) int
 		Labels         func(childComplexity int) int
 		Number         func(childComplexity int) int
@@ -152,6 +157,7 @@ type ComplexityRoot struct {
 	Subscription struct {
 		CheckRunUpdated      func(childComplexity int) int
 		ClaudeSessionUpdated func(childComplexity int, hostID *string) int
+		IssueUpdated         func(childComplexity int, owner *string, repo *string) int
 		PluginLag            func(childComplexity int, thresholdSeconds float64) int
 		TemplateEvents       func(childComplexity int) int
 		TmuxEvents           func(childComplexity int) int
@@ -230,6 +236,7 @@ type SubscriptionResolver interface {
 	PluginLag(ctx context.Context, thresholdSeconds float64) (<-chan core.HealthStatus, error)
 	ClaudeSessionUpdated(ctx context.Context, hostID *string) (<-chan model.ClaudeEvent, error)
 	CheckRunUpdated(ctx context.Context) (<-chan model.GithubEvent, error)
+	IssueUpdated(ctx context.Context, owner *string, repo *string) (<-chan model.GithubEvent, error)
 	TemplateEvents(ctx context.Context) (<-chan model.TemplateEvent, error)
 	TmuxEvents(ctx context.Context) (<-chan model.TmuxEvent, error)
 }
@@ -251,6 +258,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 	ec := newExecutionContext(nil, e, nil)
 	_ = ec
 	switch typeName + "." + field {
+
+	case "Assignee.login":
+		if e.ComplexityRoot.Assignee.Login == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Assignee.Login(childComplexity), true
 
 	case "ClaudeEvent.key":
 		if e.ComplexityRoot.ClaudeEvent.Key == nil {
@@ -461,6 +475,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Health.State(childComplexity), true
 
+	case "Issue.assignees":
+		if e.ComplexityRoot.Issue.Assignees == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Issue.Assignees(childComplexity), true
 	case "Issue.claudeSessions":
 		if e.ComplexityRoot.Issue.ClaudeSessions == nil {
 			break
@@ -803,6 +823,17 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Subscription.ClaudeSessionUpdated(childComplexity, args["hostId"].(*string)), true
+	case "Subscription.issueUpdated":
+		if e.ComplexityRoot.Subscription.IssueUpdated == nil {
+			break
+		}
+
+		args, err := ec.field_Subscription_issueUpdated_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Subscription.IssueUpdated(childComplexity, args["owner"].(*string), args["repo"].(*string)), true
 	case "Subscription.pluginLag":
 		if e.ComplexityRoot.Subscription.PluginLag == nil {
 			break
@@ -1171,6 +1202,12 @@ type ClaudeEvent {
 # same Bus every plugin already emits onto — no edit under core/.
 extend type Subscription {
   checkRunUpdated: GithubEvent!
+  # issueUpdated fans out the plugin's issue envelopes (every ` + "`" + `issues` + "`" + ` webhook
+  # action purges the touched issue key and emits one github.node.purged) so the
+  # dispatcher subscribes instead of polling. Same shape/mechanics as
+  # checkRunUpdated; the optional owner/repo filters select by the envelope key's
+  # ` + "`" + `issue:{owner}/{repo}#` + "`" + ` prefix (like claudeSessionUpdated's hostId suffix).
+  issueUpdated(owner: String, repo: String): GithubEvent!
 }
 
 # GithubEvent mirrors core.Envelope (Payload flattened to a string), matching the
@@ -1205,8 +1242,17 @@ type Issue {
   url: String!
   updatedAt: Time
   labels: [String!]!
+  # assignees carries each assigned login so the dispatcher's "open, unassigned"
+  # filter is one cached query (empty = unassigned). Warmed by the openIssues op.
+  assignees: [Assignee!]!
   tmuxPanes: [TmuxPane!]!
   claudeSessions: [ClaudeSession!]!
+}
+
+# Assignee is one GitHub login assigned to an issue (bound to github.Assignee so
+# gqlgen emits no resolver — the login lives on the cached node, D4).
+type Assignee {
+  login: String!
 }
 
 type PullRequest {
@@ -1328,6 +1374,14 @@ var parsedSchema = gqlparser.MustLoadSchema(sources...)
 // Each function is generated once per unique object type, deduplicating the
 // switch statements that were previously inlined in every fieldContext_* function.
 
+func (ec *executionContext) childFields_Assignee(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "login":
+		return ec.fieldContext_Assignee_login(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type Assignee", field.Name)
+}
+
 func (ec *executionContext) childFields_ClaudeEvent(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "ts":
@@ -1440,6 +1494,8 @@ func (ec *executionContext) childFields_Issue(ctx context.Context, field graphql
 		return ec.fieldContext_Issue_updatedAt(ctx, field)
 	case "labels":
 		return ec.fieldContext_Issue_labels(ctx, field)
+	case "assignees":
+		return ec.fieldContext_Issue_assignees(ctx, field)
 	case "tmuxPanes":
 		return ec.fieldContext_Issue_tmuxPanes(ctx, field)
 	case "claudeSessions":
@@ -1900,6 +1956,28 @@ func (ec *executionContext) field_Subscription_claudeSessionUpdated_args(ctx con
 	return args, nil
 }
 
+func (ec *executionContext) field_Subscription_issueUpdated_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "owner",
+		func(ctx context.Context, v any) (*string, error) {
+			return ec.unmarshalOString2ᚖstring(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["owner"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "repo",
+		func(ctx context.Context, v any) (*string, error) {
+			return ec.unmarshalOString2ᚖstring(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["repo"] = arg1
+	return args, nil
+}
+
 func (ec *executionContext) field_Subscription_pluginLag_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
@@ -1973,6 +2051,29 @@ func (ec *executionContext) field___Type_fields_args(ctx context.Context, rawArg
 // endregion ***************************** args.gotpl *****************************
 
 // region    **************************** field.gotpl *****************************
+
+func (ec *executionContext) _Assignee_login(ctx context.Context, field graphql.CollectedField, obj *github.Assignee) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Assignee_login(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Login, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Assignee_login(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("Assignee", field, false, false, errors.New("field of type String does not have child fields"))
+}
 
 func (ec *executionContext) _ClaudeEvent_ts(ctx context.Context, field graphql.CollectedField, obj *model.ClaudeEvent) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
@@ -2901,6 +3002,38 @@ func (ec *executionContext) _Issue_labels(ctx context.Context, field graphql.Col
 }
 func (ec *executionContext) fieldContext_Issue_labels(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("Issue", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _Issue_assignees(ctx context.Context, field graphql.CollectedField, obj *github.IssueNode) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Issue_assignees(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Assignees, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []github.Assignee) graphql.Marshaler {
+			return ec.marshalNAssignee2ᚕgithubᚗcomᚋdrewdrewthisᚋsupergraphᚋpluginsᚋgithubᚐAssigneeᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Issue_assignees(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Issue",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_Assignee(ctx, field)
+		},
+	}
+	return fc, nil
 }
 
 func (ec *executionContext) _Issue_tmuxPanes(ctx context.Context, field graphql.CollectedField, obj *github.IssueNode) (ret graphql.Marshaler) {
@@ -4254,6 +4387,50 @@ func (ec *executionContext) fieldContext_Subscription_checkRunUpdated(_ context.
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return ec.childFields_GithubEvent(ctx, field)
 		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Subscription_issueUpdated(ctx context.Context, field graphql.CollectedField) (ret func(ctx context.Context) graphql.Marshaler) {
+	return graphql.ResolveFieldStream(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Subscription_issueUpdated(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Subscription().IssueUpdated(ctx, fc.Args["owner"].(*string), fc.Args["repo"].(*string))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v model.GithubEvent) graphql.Marshaler {
+			return ec.marshalNGithubEvent2githubᚗcomᚋdrewdrewthisᚋsupergraphᚋgraphᚋmodelᚐGithubEvent(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Subscription_issueUpdated(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Subscription",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_GithubEvent(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Subscription_issueUpdated_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
 	}
 	return fc, nil
 }
@@ -6010,6 +6187,44 @@ func (ec *executionContext) fieldContext___Type_isOneOf(_ context.Context, field
 
 // region    **************************** object.gotpl ****************************
 
+var assigneeImplementors = []string{"Assignee"}
+
+func (ec *executionContext) _Assignee(ctx context.Context, sel ast.SelectionSet, obj *github.Assignee) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, assigneeImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("Assignee")
+		case "login":
+			out.Values[i] = ec._Assignee_login(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
 var claudeEventImplementors = []string{"ClaudeEvent"}
 
 func (ec *executionContext) _ClaudeEvent(ctx context.Context, sel ast.SelectionSet, obj *model.ClaudeEvent) graphql.Marshaler {
@@ -6384,6 +6599,11 @@ func (ec *executionContext) _Issue(ctx context.Context, sel ast.SelectionSet, ob
 			}
 		case "labels":
 			out.Values[i] = ec._Issue_labels(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "assignees":
+			out.Values[i] = ec._Issue_assignees(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				atomic.AddUint32(&out.Invalids, 1)
 			}
@@ -7158,6 +7378,8 @@ func (ec *executionContext) _Subscription(ctx context.Context, sel ast.Selection
 		return ec._Subscription_claudeSessionUpdated(ctx, fields[0])
 	case "checkRunUpdated":
 		return ec._Subscription_checkRunUpdated(ctx, fields[0])
+	case "issueUpdated":
+		return ec._Subscription_issueUpdated(ctx, fields[0])
 	case "templateEvents":
 		return ec._Subscription_templateEvents(ctx, fields[0])
 	case "tmuxEvents":
@@ -7825,6 +8047,26 @@ func (ec *executionContext) ___Type(ctx context.Context, sel ast.SelectionSet, o
 // endregion **************************** object.gotpl ****************************
 
 // region    ***************************** type.gotpl *****************************
+
+func (ec *executionContext) marshalNAssignee2githubᚗcomᚋdrewdrewthisᚋsupergraphᚋpluginsᚋgithubᚐAssignee(ctx context.Context, sel ast.SelectionSet, v github.Assignee) graphql.Marshaler {
+	return ec._Assignee(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNAssignee2ᚕgithubᚗcomᚋdrewdrewthisᚋsupergraphᚋpluginsᚋgithubᚐAssigneeᚄ(ctx context.Context, sel ast.SelectionSet, v []github.Assignee) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNAssignee2githubᚗcomᚋdrewdrewthisᚋsupergraphᚋpluginsᚋgithubᚐAssignee(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
 
 func (ec *executionContext) unmarshalNBoolean2bool(ctx context.Context, v any) (bool, error) {
 	res, err := graphql.UnmarshalBoolean(v)

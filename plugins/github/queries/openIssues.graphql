@@ -7,6 +7,7 @@ query openIssues($owner: String!, $repo: String!) {
       nodes {
         number title state id url updatedAt
         labels(first: 20) { nodes { name } }
+        assignees(first: 20) { nodes { login } }
       }
     }
   }

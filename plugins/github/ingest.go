@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os/exec"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -49,9 +50,15 @@ func (p *Plugin) forwardSupervisor(ctx context.Context) {
 		// process list (`ps`/`/proc/<pid>/cmdline`) to any local user for the life
 		// of the child. Acceptable on the single-tenant, single-operator v1 box; a
 		// multi-tenant host would need to hand `gh` the secret via env/stdin instead.
-		cmd := exec.CommandContext(ctx, p.cfg.ghPath, "webhook", "forward", //nolint:gosec // operator-configured gh binary path, not attacker input
-			"--url", p.cfg.selfURL+"/plugins/github/webhook",
-			"--secret", p.cfg.webhookSecret)
+		args, ok := p.forwardArgs()
+		if !ok {
+			// Real `gh webhook forward` requires --repo or --org (and --events); with
+			// neither configured we cannot start it, so log once and stop the
+			// supervisor. Reconcile + since-cursor still heal every gap.
+			log.Printf("github: forward ingress needs [plugins.github] forwardRepo or forwardOrg; not starting `gh webhook forward`")
+			return
+		}
+		cmd := exec.CommandContext(ctx, p.cfg.ghPath, args...) //nolint:gosec // operator-configured gh binary path, not attacker input
 		if err := cmd.Run(); err != nil {
 			log.Printf("github: gh webhook forward exited: %v", err)
 		}
@@ -63,6 +70,26 @@ func (p *Plugin) forwardSupervisor(ctx context.Context) {
 			backoff = backoffMax
 		}
 	}
+}
+
+// forwardArgs builds the argv for `gh webhook forward`. It always passes --url,
+// --secret and --events (real gh rejects a missing --events with `required flag(s)
+// "events" not set`), and exactly one of --repo/--org. It returns ok=false when
+// neither forwardRepo nor forwardOrg is configured, since gh requires one.
+func (p *Plugin) forwardArgs() ([]string, bool) {
+	args := []string{"webhook", "forward",
+		"--url", p.cfg.selfURL + "/plugins/github/webhook",
+		"--secret", p.cfg.webhookSecret,
+		"--events", strings.Join(p.cfg.forwardEvents, ",")}
+	switch {
+	case p.cfg.forwardRepo != "":
+		args = append(args, "--repo", p.cfg.forwardRepo)
+	case p.cfg.forwardOrg != "":
+		args = append(args, "--org", p.cfg.forwardOrg)
+	default:
+		return nil, false
+	}
+	return args, true
 }
 
 // redeliver replays undelivered deliveries for every created hook via

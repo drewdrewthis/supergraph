@@ -55,7 +55,12 @@ func tagExpr() string {
 	}
 	// features/steps_github_test.go now wires the github scenarios (EDR two-wave
 	// plan wave 2), so @github @local runs by default; @pending (@live) stays out.
-	expr := "~@unmet && ~@service && ~@pending"
+	// @live scenarios are excluded unconditionally: they need real credentials and
+	// external services (a PAT, gh-webhook, a real Claude/tmux, a second mesh box)
+	// and are opt-in via FEATURES_TAGS='@live'. A passing live scenario drops its
+	// @pending tag but keeps @live, so ~@live (not ~@pending alone) is what keeps
+	// the default `go test ./features/` run hermetic.
+	expr := "~@unmet && ~@service && ~@pending && ~@live"
 	if runtime.GOOS != "linux" {
 		expr += " && ~@linux"
 	}
