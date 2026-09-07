@@ -179,8 +179,14 @@ func (p *Plugin) Routes() map[string]http.Handler {
 }
 
 // Cursor surfaces the reconcile since-cursor in the health snapshot (optional
-// core.CursorReporter). It is an in-memory-cheap read of the persisted cursor.
+// core.CursorReporter). It is an in-memory-cheap read of the persisted cursor. With
+// no [plugins.github] token, Start returns immediately without ever ingesting, so
+// the cursor would otherwise stay "" and /health would show a starting state with
+// no explanation — surface why instead.
 func (p *Plugin) Cursor(ctx context.Context) string {
+	if p.cfg.token == "" {
+		return "dormant: no [plugins.github] config"
+	}
 	if p.store == nil {
 		return ""
 	}

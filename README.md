@@ -3,6 +3,19 @@
 One binary per box. It aggregates each data source (a plugin) into a single
 GraphQL + health endpoint on `127.0.0.1:7788`.
 
+## Install
+
+```
+curl -fsSL https://raw.githubusercontent.com/drewdrewthis/supergraph/main/scripts/install-remote.sh | sh
+```
+
+Downloads the latest release binary for your OS/arch, verifies its checksum, and
+installs it to `$HOME/.local/bin` (override with `SUPERGRAPH_INSTALL_DIR`; pin a
+version with `SUPERGRAPH_VERSION`). No sudo.
+
+To build from source instead, see [Install Go](#install-go) and [Build](#build)
+below.
+
 ## Install Go
 
 Install Go 1.26 or newer from https://go.dev/dl/. Confirm:
@@ -81,6 +94,35 @@ Prove the runner fails red on an unmet scenario:
 ```
 make features-red
 ```
+
+## Config
+
+Each plugin reads its own `[plugins.<name>]` section of `config.toml`; a plugin with
+no section stays dormant. For example, the tmux plugin (a read model of the local
+tmux server):
+
+```toml
+[plugins.tmux]
+socket = "default"      # tmux -L socket name; empty = tmux's default socket
+eventSource = "control"  # "control" (control-mode client) | "poll"
+slotKind = "worker"      # Slot.kind stamped on tracked panes
+```
+
+Omitting `[plugins.tmux]` entirely leaves the plugin dormant — it registers but
+never runs. See the `[plugins.github]` ingest config below for another example.
+
+### Querying a cached issue
+
+The `issue(key: String!): Issue` field (github plugin, cache-only — no upstream
+hop on a hit) takes a key of the form `issue:<owner>/<repo>#<number>` (the same
+`issue:` prefix used throughout the cache-key grammar; see `docs/edr/github.md`).
+Example:
+
+```
+supergraph query '{ issue(key: "issue:drewdrewthis/supergraph#1") { title state } }'
+```
+
+A miss returns `null` rather than fetching from GitHub.
 
 ## Live scenarios
 

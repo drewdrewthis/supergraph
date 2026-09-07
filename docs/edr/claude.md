@@ -149,11 +149,11 @@ Because the **tail is the correctness floor**, the hook is a latency/pane/​inp
 correctness dependency — a box that never installs the hook still gets every session via the tail
 (minus live-`input` state and `pane`). So hook install is **opt-in, default off**:
 
-- **Bare `supergraph install` never writes a settings file.** It **PRINTS the exact hook JSON block**
+- **Bare `supergraph install-claude-hook` never writes a settings file.** It **PRINTS the exact hook JSON block**
   (the 7 lifecycle events, each wiring a `supergraph claude-hook` command) to stdout for the user to
   paste into their own `~/.claude/settings.json`. This is the safe default: we do not touch a user's
   settings unless asked.
-- **`supergraph install --install-hook --settings <path>`** opts in to writing: it merges the block
+- **`supergraph install-claude-hook --install-hook --settings <path>`** opts in to writing: it merges the block
   into the `--settings <path>` file (default `~/.claude/settings.json`; tests pass a temp path so the
   real one is never touched). The merge is **additive + idempotent**: it appends one `command` entry
   (`supergraph claude-hook`, a thin stdin→POST forwarder) per event array, **deduped by command
@@ -224,7 +224,7 @@ true), `scanIntervalSeconds` (tail poll cadence, default 5), `retentionDays` (pr
 last event is older than this on each tail tick, default 30; 0 disables), `settingsPath` (default
 `~/.claude/settings.json`, test override), `projectsDir` override drives `@local` tests. Stale-lag is
 core's global `lagThresholdSeconds` (the plugin does not duplicate it); the plugin's own liveness signal
-is the pid-liveness sweep. Hook install is a `supergraph install --install-hook` CLI flag (owner
+is the pid-liveness sweep. Hook install is a `supergraph install-claude-hook --install-hook` CLI flag (owner
 decision C1, default off), **not** a plugin config key — the plugin never writes settings itself.
 
 ## LOC budget (prod, guard **750**; tests excluded)

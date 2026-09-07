@@ -49,3 +49,14 @@ func TestStartDormantWhenNoToken(t *testing.T) {
 		t.Fatal("dormant Start spawned the forward child (fake exec recorded an invocation)")
 	}
 }
+
+func TestCursorDormantWhenNoToken(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "")
+	p := newPlugin(t, map[string]any{})
+	if p.cfg.token != "" {
+		t.Fatal("plugin resolved a token with none configured")
+	}
+	if got := p.Cursor(context.Background()); got != "dormant: no [plugins.github] config" {
+		t.Fatalf("Cursor = %q, want dormant marker", got)
+	}
+}

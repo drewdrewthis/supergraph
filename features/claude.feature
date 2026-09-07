@@ -171,7 +171,7 @@ Feature: Claude plugin — session state from lifecycle hooks + transcript tail
 
   # ---------- Install + contract ----------
 
-  # Owner decision C1: hook install is OPT-IN. Bare `supergraph install` never writes a
+  # Owner decision C1: hook install is OPT-IN. Bare `supergraph install-claude-hook` never writes a
   # settings file — it PRINTS the exact hook JSON block for the user to paste. Only
   # `--install-hook` writes, and only into the `--settings <path>` given (never the real
   # ~/.claude/settings.json), so this @local scenario merges into a temp file. The merge is
@@ -181,13 +181,13 @@ Feature: Claude plugin — session state from lifecycle hooks + transcript tail
   @claude @local @AC-CLAUDE-INSTALL-IDEMPOTENT
   Scenario: Bare install prints the hook block; --install-hook merges idempotently into a temp settings file
     Given a temp settings file at <settingsPath> already containing an unrelated `PreToolUse` hook
-    When `supergraph install` runs with no `--install-hook` flag
+    When `supergraph install-claude-hook` runs with no `--install-hook` flag
     Then it prints a hook JSON block naming a `supergraph claude-hook` command for each of the 7 lifecycle events
     And the temp settings file at <settingsPath> is left unchanged
-    When `supergraph install --install-hook --settings <settingsPath>` merges the claude hook block
+    When `supergraph install-claude-hook --install-hook --settings <settingsPath>` merges the claude hook block
     Then each of the 7 lifecycle events in <settingsPath> wires a `supergraph claude-hook` command
     And the pre-existing unrelated `PreToolUse` hook is still present
-    When `supergraph install --install-hook --settings <settingsPath>` runs a second time
+    When `supergraph install-claude-hook --install-hook --settings <settingsPath>` runs a second time
     Then no duplicate `supergraph claude-hook` entry is added to any event array
 
   @claude @local @AC-CLAUDE-LOC

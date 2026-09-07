@@ -29,6 +29,11 @@ type GithubEvent {
 # exported accessor (D2), joined by branch through the shared issuekey convention
 # PLUS the cached PR body/title closing-keyword links.
 extend type Query {
+  """
+  Cache-only read of one issue by key (no upstream hop; a miss returns null).
+  key uses the issue: cache-key prefix: "issue:<owner>/<repo>#<number>", e.g.
+  "issue:drewdrewthis/supergraph#1".
+  """
   issue(key: String!): Issue
   pullRequest(key: String!): PullRequest
   # issuesForRepo returns the cached open issues warmed by the openIssues op; a cold

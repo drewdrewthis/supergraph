@@ -57,6 +57,14 @@ func TestDormantStartReturnsOnCancel(t *testing.T) {
 	}
 }
 
+func TestCursorDormantWhenUnconfigured(t *testing.T) {
+	p, _ := New(core.PluginConfig{HostID: "h"}) // no Raw -> dormant
+	tp := p.(*Plugin)
+	if got := tp.Cursor(context.Background()); got != "dormant: no [plugins.tmux] config" {
+		t.Fatalf("Cursor = %q, want dormant marker", got)
+	}
+}
+
 func TestTmuxArgsSocketSelector(t *testing.T) {
 	name := &Plugin{cfg: config{socket: "sg-test"}}
 	if got := name.tmuxArgs("list-panes"); got[0] != "-L" || got[1] != "sg-test" {

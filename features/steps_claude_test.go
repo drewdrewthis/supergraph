@@ -84,13 +84,13 @@ func registerClaudeSteps(sc *godog.ScenarioContext, w *world) {
 	sc.Step(lit("every envelope pushed to the subscription contains none of \"SECRET-PROMPT-STRING\", \"SECRET-CMD-STRING\", or \"SECRET-RESPONSE-STRING\""), w.assertSubNoSecrets)
 	sc.Step(lit("the \x60claudeSession(sessionId: \"S10\")\x60 GraphQL result contains none of \"SECRET-PROMPT-STRING\", \"SECRET-CMD-STRING\", or \"SECRET-RESPONSE-STRING\""), w.assertGQLNoSecrets)
 	sc.Step(lit("a temp settings file at <settingsPath> already containing an unrelated \x60PreToolUse\x60 hook"), w.settingsWithUnrelated)
-	sc.Step(lit("\x60supergraph install\x60 runs with no \x60--install-hook\x60 flag"), w.installPrint)
+	sc.Step(lit("\x60supergraph install-claude-hook\x60 runs with no \x60--install-hook\x60 flag"), w.installPrint)
 	sc.Step(lit("it prints a hook JSON block naming a \x60supergraph claude-hook\x60 command for each of the 7 lifecycle events"), w.assertPrintedBlock)
 	sc.Step(lit("the temp settings file at <settingsPath> is left unchanged"), w.assertSettingsUnchanged)
-	sc.Step(lit("\x60supergraph install --install-hook --settings <settingsPath>\x60 merges the claude hook block"), w.installMerge)
+	sc.Step(lit("\x60supergraph install-claude-hook --install-hook --settings <settingsPath>\x60 merges the claude hook block"), w.installMerge)
 	sc.Step(lit("each of the 7 lifecycle events in <settingsPath> wires a \x60supergraph claude-hook\x60 command"), w.assertAllEventsWired)
 	sc.Step(lit("the pre-existing unrelated \x60PreToolUse\x60 hook is still present"), w.assertUnrelatedPresent)
-	sc.Step(lit("\x60supergraph install --install-hook --settings <settingsPath>\x60 runs a second time"), w.installMerge)
+	sc.Step(lit("\x60supergraph install-claude-hook --install-hook --settings <settingsPath>\x60 runs a second time"), w.installMerge)
 	sc.Step(lit("no duplicate \x60supergraph claude-hook\x60 entry is added to any event array"), w.assertNoDuplicate)
 	sc.Step(lit("the claude plugin source under \x60plugins/claude\x60"), noop)
 	sc.Step(lit("\x60make loc-claude\x60 counts non-comment, non-blank prod lines excluding tests"), w.runLocClaude)
@@ -848,7 +848,7 @@ func (w *world) settingsWithUnrelated() error {
 }
 
 func (w *world) installPrint() error {
-	w.runCLI("install")
+	w.runCLI("install-claude-hook")
 	return nil
 }
 
@@ -876,7 +876,7 @@ func (w *world) assertSettingsUnchanged() error {
 }
 
 func (w *world) installMerge() error {
-	w.runCLI("install", "--install-hook", "--settings", w.claudeSettingsPath)
+	w.runCLI("install-claude-hook", "--install-hook", "--settings", w.claudeSettingsPath)
 	if w.lastExit != 0 {
 		return fmt.Errorf("install --install-hook exit=%d stderr=%s", w.lastExit, w.lastStderr)
 	}
