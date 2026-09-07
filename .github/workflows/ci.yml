@@ -3,17 +3,29 @@ name: ci
 on:
   push:
     branches: [main]
+    paths-ignore: ['**.md', 'docs/**']
   pull_request:
+    paths-ignore: ['**.md', 'docs/**']
+  workflow_dispatch:
 
 permissions:
   contents: read
+
+# One in-flight run per ref: a new push to a PR branch cancels the superseded
+# run instead of letting a full (macOS-billed) matrix finish for a stale head.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
     strategy:
       fail-fast: false
+      # macOS minutes bill at 10x. The macos-latest leg runs only on pushes to
+      # main and on manual dispatch; every PR update runs ubuntu-latest alone.
+      # (Job-level `if` cannot see `matrix`, so the OS list itself is gated.)
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: ${{ (github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch') && fromJSON('["ubuntu-latest", "macos-latest"]') || fromJSON('["ubuntu-latest"]') }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
