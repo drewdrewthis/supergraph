@@ -375,6 +375,30 @@ func (g *ghWorld) claudeDB() (*sql.DB, error) {
 	return sql.Open("sqlite", "file:"+filepath.Join(g.sw.dataDir, "claude.db")+"?_pragma=busy_timeout%285000%29")
 }
 
+// waitTable blocks until the named table exists in db, closing the seed-before-migrate
+// race: startServe's /health gate (readyPlugins) only awaits template+fakeok, so the
+// tmux/claude plugins' Migrate can still be in flight when a seed runs — losing that
+// race yields "no such table" on the slower ubuntu runner (green on faster macs). The
+// dormant tmux plugin never emits lastEventAt, so it cannot join readyPlugins; polling
+// sqlite_master for its own table is the black-box wait that fits this per-seed path.
+func waitTable(db *sql.DB, table string) error {
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var name string
+		err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&name)
+		if err == nil {
+			return nil
+		}
+		if err != sql.ErrNoRows {
+			return err
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("table %q not migrated within 5s (plugin Migrate never ran)", table)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
 // ghqSeedPane seeds a tmux session (carrying the branch) plus a pane joined to it
 // by session name (panesForBranch joins pane.session = session.name).
 func (g *ghWorld) ghqSeedPane(paneKey, branch string) error {
@@ -383,6 +407,9 @@ func (g *ghWorld) ghqSeedPane(paneKey, branch string) error {
 		return err
 	}
 	defer func() { _ = db.Close() }()
+	if err := waitTable(db, "tmux_sessions"); err != nil {
+		return err
+	}
 	name := sessionNameFromPaneKey(paneKey)
 	host := hostFromKey(paneKey)
 	now := time.Now().UTC().Format(time.RFC3339Nano)
@@ -409,6 +436,9 @@ func (g *ghWorld) ghqSeedClaude(sid, branch string) error {
 		return err
 	}
 	defer func() { _ = db.Close() }()
+	if err := waitTable(db, "claude_sessions"); err != nil {
+		return err
+	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	_, err = db.Exec(`INSERT INTO claude_sessions
 		(sid, host_id, cwd, git_branch, issue_number, model, state, last_tool, tool_calls, pane, pid, pr_number, pr_url, started_at, last_event_at, stale_since)

@@ -156,6 +156,9 @@ func InitializeScenario(sc *godog.ScenarioContext) {
 
 	// --- tmux plugin @local scenarios (real tmux on a private -L socket) ---
 	registerTmuxSteps(sc)
+
+	// --- spike-measure harness (@local checks + @slow full run) ---
+	registerSpikeSteps(sc)
 }
 
 // ---------- shared ----------

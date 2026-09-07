@@ -208,3 +208,21 @@ loc-issuekey:
 # scenarios; @live keeps them out of the hermetic `make features` run.
 features-live:
 	FEATURES_TAGS='@live && ~@pending' go test ./features/ -run TestFeatures -count=1 -v
+
+# --- spike measurements (no owner creds; docs/plans/post-tier.md §B) ---
+.PHONY: spike-measure spike-measure-publish
+
+# spike-measure runs the no-creds spike battery: the AC-GHQ-P95 cross-plugin query
+# p95/p99 over both the HTTP and CLI paths (part a) and the two-box peer stale-marking +
+# recovery timing (part c). It builds a throwaway binary, drives a real `tmux -L
+# sgmeasure` socket + two loopback `supergraph serve` peers, and prints a machine-
+# readable SUMMARY. It writes the results doc to a throwaway temp dir (no repo churn);
+# use spike-measure-publish to overwrite the committed docs/spike-results.md. See
+# docs/edr/spike-measure.md.
+spike-measure:
+	@scripts/spike-measure.sh
+
+# spike-measure-publish runs the same battery but points OUT at the committed results
+# doc so it is regenerated in place. This is the only target that writes into the repo.
+spike-measure-publish:
+	@OUT=docs/spike-results.md scripts/spike-measure.sh
