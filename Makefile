@@ -1,7 +1,7 @@
 # supergraph dev harness. `make dev` is the one-command bring-up (AC-CORE-15):
 # it builds, points every plugin db at a throwaway .dev/data dir (never the real
 # ~/.local/share), and runs the server in the foreground with the template plugin.
-.PHONY: build build-harness generate test features features-red features-pending features-github loc-github features-peer loc-peer dev dev-check
+.PHONY: build build-harness generate test features features-red features-pending features-github loc-github features-peer loc-peer dev dev-check release-build
 include mk/version.mk
 
 BIN := bin/supergraph
@@ -17,6 +17,13 @@ build:
 # never sets the tag, so fakeok never ships.
 build-harness:
 	go build -tags harness -ldflags "$(LDFLAGS)" -o $(BIN) ./cmd/supergraph
+
+# release-build cross-compiles cmd/supergraph for every release target (linux/amd64,
+# linux/arm64, darwin/arm64) and packages each as a tarball + dist/SHA256SUMS. Used
+# by .github/workflows/release.yml on a `v*` tag push; VERSION defaults to the
+# git-describe stamp from mk/version.mk.
+release-build:
+	scripts/release-build.sh "$(VERSION)"
 
 generate:
 	go run github.com/99designs/gqlgen generate
