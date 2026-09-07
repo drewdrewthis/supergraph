@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -27,6 +28,10 @@ const (
 	defaultSubscribeMaxRetries = 3
 	defaultSubscribeBackoff    = 500 * time.Millisecond
 )
+
+// errServerCompleted marks a graphql-transport-ws `complete` message as a
+// retryable drop rather than success — see subscribeOnce's `complete` case.
+var errServerCompleted = errors.New("subscription completed by server before an event was delivered")
 
 // subscriptionFields is the allowlist of plugin subscription fields `subscribe`
 // may dial, each mapped to its permitted String argument names. Rejecting
@@ -247,10 +252,13 @@ func subscribeAuthHeader(wsURL, cfgPath string) string {
 // subscribeOnce dials one graphql-transport-ws connection, runs the
 // connection_init/subscribe handshake (AC-SUB-7), and prints each pushed
 // event's data.<field> object as one compact JSON line to stdout. With once
-// set it returns nil as soon as the first event prints; otherwise it keeps
-// printing until the server sends complete or the connection errors. Any
-// dial, handshake, or read failure is returned so the caller's retry loop can
-// reconnect.
+// set it returns nil as soon as the first event prints; without once it never
+// returns nil on its own — a `complete` message, a clean websocket close, and
+// an EOF are all treated as a drop (errServerCompleted or the read error) so
+// the caller's retry loop in runSubscribe reconnects rather than silently
+// exiting 0 having printed nothing (or, without --once, having stopped
+// early). Any dial, handshake, or read failure is likewise returned so the
+// retry loop can reconnect.
 func subscribeOnce(ctx context.Context, wsURL, authHeader, field, query string, variables map[string]any, once, readyNotify bool, stdout, stderr io.Writer) error {
 	dialOpts := &coderws.DialOptions{Subprotocols: []string{"graphql-transport-ws"}}
 	if authHeader != "" {
@@ -303,7 +311,14 @@ func subscribeOnce(ctx context.Context, wsURL, authHeader, field, query string, 
 		case "error":
 			return fmt.Errorf("subscription error: %v", m["payload"])
 		case "complete":
-			return nil
+			// A `complete` message (and likewise a clean websocket close/EOF, which
+			// wsSubRead already surfaces as a non-nil err above) is the server
+			// ending the stream on its own. That is never a caller-requested stop:
+			// --once only stops via the `next` case above once it has something to
+			// show, and without --once there is no such thing as "done" short of
+			// ctx cancellation. So any `complete` here is always a drop for the
+			// retry loop in runSubscribe to reconnect on, never a nil (success) return.
+			return errServerCompleted
 		}
 	}
 }
