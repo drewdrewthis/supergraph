@@ -11,15 +11,16 @@ exactly the entries that touch the changed object (tag purge = keyed delete)**. 
 `brunoborges/ghx` was read in full (see [History](#history)); it is **not vendored** — we borrow only
 its singleflight pattern (~40 LOC, `ghx src/internal/daemon/handler.go:203`).
 
-**Hard constraints (owner):** ≤ **1570 LOC prod** (raised 800→1300→1350→1540→1570, Option A) for `plugins/github/**` excluding tests and
+**Hard constraints (owner):** ≤ **1650 LOC prod** (raised 800→1300→1350→1540→1570→1650, Option A) for `plugins/github/**` excluding tests and
 `internal/fakegh` (per-package budget below); zero core diff; PAT-only; HMAC per hook; per-repo hook
 creation from `/user/repos` (F3); point-budget floor pause + rate-limit logging; CLI `--op/--var` +
 `schema <Type>` in `cmd/` only; fakegh httptest server + fake `gh` stub for `@local`.
 
 ---
 
-## LOC budget (prod, cap **1570** total; tests + `internal/fakegh` excluded)
-Cap raised 800→1300→1350→1540→**1570** by owner (Option A, 2026-09-05). The
+## LOC budget (prod, cap **1650** total; tests + `internal/fakegh` excluded)
+Cap raised 800→1300→1350→1540→1570→**1650** by owner (Option A, 2026-09-05;
+1570→1650 on 2026-09-07, canonical GraphQL refetch + hash-gated events). The
 1350→1540 ratchet paid for the typed cache-only reads + the PRD cross-plugin join
 ([github-query EDR](./github-query.md)): `query.go` (typed `IssueNode`/`PRNode` +
 `mapIssue`/`mapPR` + exported `Issue`/`PullRequest`/`IssuesForRepo`/`CachedPRs`

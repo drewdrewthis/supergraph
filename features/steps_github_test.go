@@ -19,7 +19,7 @@ import (
 // fake GitHub httptest server (plugins/github/fakegh), and direct reads of the
 // plugin's own github.db SQLite file (the same pattern steps_test.go already uses
 // for template.db) — never an import of the plugins/github package itself, so
-// these steps survive an internal refactor of the plugin (budget 1570).
+// these steps survive an internal refactor of the plugin (budget 1650).
 //
 // @live @pending scenarios: every step in them returns godog.ErrPending directly,
 // per the brief. Godog stops executing a scenario's steps at the first pending
@@ -171,10 +171,17 @@ func registerGithubSteps(sc *godog.ScenarioContext) {
 	sc.Step(lit("the `since` cursor for that repo is still T after the restart"), g.cursorAssertPersisted)
 	sc.Step(lit("the next reconcile's fetch to the fake GitHub server carries `since=` equal to T minus 60s"), g.cursorAssertOverlap)
 
+	// ---------- AC-GH-RECONCILE-SHAPE / AC-GH-RECONCILE-NOEVENT ----------
+	// "the since-cursor reconcile runs once" is already registered (F2) as g.reconcileRunsOnce.
+	sc.Step(lit("the fake GitHub server has a rich issue `o/r#5` with labels, an assignee, and updatedAt"), g.reconcileSeedRichIssue)
+	sc.Step(lit("the `openIssues` op has been warmed once for `o/r`"), g.reconcileWarmOpenIssues)
+	sc.Step(lit("a query for issue `o/r#5` still shows its labels, assignee, and updatedAt"), g.reconcileAssertShapeIntact)
+	sc.Step(lit("no `github.node.updated` event was emitted for `issue:o/r#5`"), g.reconcileAssertNoUpdateEvent)
+
 	// ---------- AC-GH-LOC ----------
 	sc.Step(lit("the github plugin source under `plugins/github`"), noop)
 	sc.Step(lit("`make loc-github` counts non-comment, non-blank prod lines excluding tests and `internal/fakegh`"), g.locRun)
-	sc.Step(lit("the count is 1570 or fewer"), g.locAssert)
+	sc.Step(lit("the count is 1650 or fewer"), g.locAssert)
 
 	// ---------- AC-GH-ZEROCORE ----------
 	sc.Step(lit("the github plugin package and its blank import in graph/plugins_import.go"), noop)
@@ -1249,7 +1256,7 @@ func (g *ghWorld) locRun() error {
 }
 
 func (g *ghWorld) locAssert() error {
-	budget := 1570
+	budget := 1650
 	if v := os.Getenv("LOC_BUDGET"); v != "" {
 		var n int
 		if _, err := fmt.Sscanf(v, "%d", &n); err == nil {
@@ -1279,6 +1286,67 @@ func (g *ghWorld) zerocoreRun() error {
 	g.sw.lastStdout = string(out)
 	if err != nil {
 		return err
+	}
+	return nil
+}
+
+// ===================== AC-GH-RECONCILE-SHAPE / AC-GH-RECONCILE-NOEVENT =====================
+
+// reconcileSeedRichIssue registers o/r and seeds a fully-shaped GraphQL issue
+// (labels/assignee/updatedAt) upstream; the REST endpoint for the same key serves
+// the flat REST shape (fakegh restView), so a reconcile that re-stored the REST body
+// would visibly drop these fields.
+func (g *ghWorld) reconcileSeedRichIssue() error {
+	g.fake.AddRepo("o", "r")
+	g.fake.AddRichIssue("o", "r", 5, "Five", "OPEN", "2026-09-01T00:00:00Z", []string{"bug", "p1"}, []string{"alice"})
+	return nil
+}
+
+// reconcileWarmOpenIssues warms the openIssues list path so issue:o/r#5 is cached in
+// the canonical GraphQL shape before reconcile revalidates it.
+func (g *ghWorld) reconcileWarmOpenIssues() error {
+	_, status, err := g.postOp("openIssues", map[string]any{"owner": "o", "repo": "r"})
+	if err != nil {
+		return err
+	}
+	if status != 200 {
+		return fmt.Errorf("warm openIssues status %d", status)
+	}
+	return nil
+}
+
+// reconcileAssertShapeIntact reads issue:o/r#5 through the cache-only core resolver
+// and requires labels, assignee, and updatedAt to survive the reconcile pass.
+func (g *ghWorld) reconcileAssertShapeIntact() error {
+	_, data, err := g.sw.gql(`{ issue(key: "issue:o/r#5") { number updatedAt labels assignees { login } } }`)
+	if err != nil {
+		return err
+	}
+	iss, ok := data["issue"].(map[string]any)
+	if !ok || iss == nil {
+		return fmt.Errorf("issue query returned null: %v", data)
+	}
+	if labels, _ := iss["labels"].([]any); len(labels) == 0 {
+		return fmt.Errorf("labels dropped by reconcile: %v", iss)
+	}
+	if assignees, _ := iss["assignees"].([]any); len(assignees) == 0 {
+		return fmt.Errorf("assignees dropped by reconcile: %v", iss)
+	}
+	if iss["updatedAt"] == nil {
+		return fmt.Errorf("updatedAt dropped by reconcile: %v", iss)
+	}
+	return nil
+}
+
+// reconcileAssertNoUpdateEvent requires the unchanged revalidation to have emitted
+// no github.node.updated for the issue.
+func (g *ghWorld) reconcileAssertNoUpdateEvent() error {
+	n, err := g.countEvents("github.node.updated", "issue:o/r#5")
+	if err != nil {
+		return err
+	}
+	if n != 0 {
+		return fmt.Errorf("reconcile emitted %d github.node.updated for issue:o/r#5 on an unchanged node, want 0", n)
 	}
 	return nil
 }

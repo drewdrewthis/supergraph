@@ -100,6 +100,27 @@ func TestFetch200EmitsUpdate(t *testing.T) {
 	}
 }
 
+// TestPointFetchPinsMergedPR: a PR merged before the grace window, fetched via the
+// point path, lands the canonical GraphQL body (mergedAt camelCase) and is pinned —
+// the regression guard for evalPin reading the GraphQL shape, not just REST keys.
+func TestPointFetchPinsMergedPR(t *testing.T) {
+	srv := fakegh.New()
+	defer srv.Close()
+	p := newReconcilePlugin(t, srv)
+	ctx := context.Background()
+	srv.AddRepo("o", "r")
+	mergedAt := p.now().Add(-8 * 24 * time.Hour).Format(time.RFC3339)
+	srv.AddRichPR("o", "r", 9, "Nine", "MERGED", "2026-09-02T00:00:00Z", "feature/x", "main", "closes #1", []string{"bug"}, mergedAt, mergedAt)
+
+	n, err := p.resolve(ctx, "pr:o/r#9")
+	if err != nil || n == nil {
+		t.Fatalf("resolve: %v %v", n, err)
+	}
+	if !n.Pinned {
+		t.Errorf("merged PR past grace not pinned via point path: %s", n.JSON)
+	}
+}
+
 // TestSingleflight: concurrent misses on one key coalesce into a single fetch.
 func TestSingleflight(t *testing.T) {
 	p := newPlugin(t, nil)
@@ -155,6 +176,11 @@ func TestEvalPin(t *testing.T) {
 		{"open pr", "pr:o/r#1", map[string]any{"merged": false}, false},
 		{"closed issue past grace", "issue:o/r#1", map[string]any{"state": "closed", "closed_at": now.Add(-40 * 24 * time.Hour).Format(time.RFC3339)}, true},
 		{"open issue", "issue:o/r#1", map[string]any{"state": "open"}, false},
+		// GraphQL shape: camelCase timestamps + uppercase state (the canonical body
+		// the point/revalidate paths now land).
+		{"merged pr past grace graphql", "pr:o/r#1", map[string]any{"merged": true, "mergedAt": now.Add(-8 * 24 * time.Hour).Format(time.RFC3339)}, true},
+		{"closed pr past grace graphql", "pr:o/r#1", map[string]any{"state": "CLOSED", "closedAt": now.Add(-8 * 24 * time.Hour).Format(time.RFC3339)}, true},
+		{"closed issue past grace graphql", "issue:o/r#1", map[string]any{"state": "CLOSED", "closedAt": now.Add(-40 * 24 * time.Hour).Format(time.RFC3339)}, true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

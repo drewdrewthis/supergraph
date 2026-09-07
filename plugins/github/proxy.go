@@ -2,8 +2,11 @@ package github
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -64,37 +67,126 @@ func (p *Plugin) singleflight(key string, fn func() (*node, error)) (*node, erro
 	return f.n, f.err
 }
 
+// fetchOutcome names what a conditional fetch did, so reconcile can tally the pass
+// (checked/notModified/fetched/changed) without re-deriving it from the node.
+type fetchOutcome int
+
+const (
+	outcomeOther       fetchOutcome = iota // network error, 404, or served-stale
+	outcomeNotModified                     // 304: body unchanged, freshness bumped
+	outcomeUnchanged                       // 200 but the canonical body was identical
+	outcomeChanged                         // 200 with a changed canonical body; emitted
+)
+
 // fetch performs one conditional REST fetch for key, sending If-None-Match when a
-// stored etag exists. 304 serves the stored node (zero body quota); 200 stores and
-// emits github.node.updated; any error or 404 serves whatever was stored.
+// stored etag exists. 304 serves the stored node (zero body quota); 200 stores the
+// canonical body and emits github.node.updated only when it changed; any error or
+// 404 serves whatever was stored.
 func (p *Plugin) fetch(ctx context.Context, key string, stored *node) (*node, error) {
+	n, _, err := p.fetchNode(ctx, key, stored)
+	return n, err
+}
+
+// fetchNode is fetch's core, additionally reporting the outcome for reconcile's
+// per-pass counters. The REST conditional GET stays the cheap change detector
+// (If-None-Match / 304), but on a 200 the body that LANDS for an Issue or
+// PullRequest is re-read through its GraphQL point op so the store always holds the
+// one canonical (GraphQL) shape the cache-only resolvers read — never the flat REST
+// body, whose snake_case labels/assignees the resolvers cannot see. Kinds with no
+// point op keep the REST body unchanged.
+func (p *Plugin) fetchNode(ctx context.Context, key string, stored *node) (*node, fetchOutcome, error) {
 	etag := ""
 	if stored != nil {
 		etag = stored.ETag
 	}
 	status, body, respETag, err := p.httpGET(ctx, restPath(key), etag)
 	if err != nil {
-		return stored, nil // network error: serve stale rather than fail the read
+		return stored, outcomeOther, nil // network error: serve stale rather than fail the read
 	}
 	now := p.now()
 	if status == http.StatusNotModified && stored != nil {
 		_ = p.store.bumpFetched(ctx, key, now)
-		return stored, nil
+		return stored, outcomeNotModified, nil
 	}
 	if status != http.StatusOK {
-		return stored, nil
+		return stored, outcomeOther, nil
+	}
+	canonical := body
+	if cb, ok := p.canonicalBody(ctx, key); ok {
+		canonical = cb
 	}
 	var bodyMap map[string]any
-	_ = json.Unmarshal(body, &bodyMap)
+	_ = json.Unmarshal(canonical, &bodyMap)
+	hash := contentHash(canonical)
 	n := &node{
-		Key: key, Typename: typenameFor(key), JSON: body, ETag: respETag,
+		Key: key, Typename: typenameFor(key), JSON: canonical, ETag: respETag, ContentHash: hash,
 		Pinned: p.evalPin(key, bodyMap), FetchedAt: now, UpdatedAt: now,
 	}
 	if err := p.store.upsert(ctx, n); err != nil {
-		return nil, err
+		return nil, outcomeOther, err
 	}
-	p.emitUpdated(ctx, n)
-	return n, nil
+	// Emit only on a real content change: a fresh miss (no prior node) or a
+	// differing hash. An etag change with an identical body — or the first
+	// conditional GET of an etag-less row, which always 200s — stays silent.
+	if stored == nil || stored.ContentHash != hash {
+		p.emitUpdated(ctx, n)
+		return n, outcomeChanged, nil
+	}
+	return n, outcomeUnchanged, nil
+}
+
+// graphqlPointOps maps a node kind to its GraphQL point-op name and the repository
+// sub-field that carries the node, for the two kinds whose canonical shape is the
+// GraphQL shape. Kinds absent here have no point op and keep their REST body.
+var graphqlPointOps = map[string]struct{ op, field string }{
+	"issue": {"issue", "issue"},
+	"pr":    {"pr", "pullRequest"},
+}
+
+// canonicalBody re-reads key's body through its GraphQL point op and returns the
+// marshaled node object, so a landed Issue/PullRequest body is stored in the same
+// shape the openIssues list path stores. It returns ok=false for a kind with no
+// point op, an unparseable key, or an empty upstream result, leaving the REST body
+// in place.
+func (p *Plugin) canonicalBody(ctx context.Context, key string) ([]byte, bool) {
+	spec, ok := graphqlPointOps[kindOf(key)]
+	if !ok {
+		return nil, false
+	}
+	op, ok := p.ops[spec.op]
+	if !ok {
+		return nil, false
+	}
+	parts := parseKey(key)
+	number, err := strconv.Atoi(parts["disc"])
+	if err != nil {
+		return nil, false
+	}
+	vars := map[string]any{"owner": parts["owner"], "repo": parts["repo"], "number": number}
+	data, err := p.graphqlAt(ctx, p.cfg.graphqlURL, op.query, vars)
+	if err != nil {
+		return nil, false
+	}
+	repo, _ := data["repository"].(map[string]any)
+	if repo == nil {
+		return nil, false
+	}
+	obj, _ := repo[spec.field].(map[string]any)
+	if obj == nil {
+		return nil, false
+	}
+	b, err := json.Marshal(obj)
+	if err != nil {
+		return nil, false
+	}
+	return b, true
+}
+
+// contentHash is the sha256 over a node's canonical JSON, driving no-change
+// suppression in fetchNode.
+func contentHash(b []byte) string {
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
 }
 
 // emitUpdated emits github.node.updated for an upserted node.
@@ -108,7 +200,11 @@ func (p *Plugin) emitUpdated(ctx context.Context, n *node) {
 
 // evalPin classifies a node as immutable per the pin policy (EDR §"Immutable pin
 // list"): commits and releases by kind, and closed/merged issues/PRs past their
-// grace window.
+// grace window. It reads BOTH the canonical GraphQL shape now landed by the
+// point/revalidate paths (mergedAt/closedAt camelCase, state MERGED/CLOSED) and the
+// flat REST shape (merged_at/closed_at snake_case, state lowercase) that webhook
+// ingest can still carry, so a merged/closed node pins regardless of which fetch
+// path stored it.
 func (p *Plugin) evalPin(key string, body map[string]any) bool {
 	switch kindOf(key) {
 	case "commit":
@@ -116,20 +212,18 @@ func (p *Plugin) evalPin(key string, body map[string]any) bool {
 	case "release":
 		return p.cfg.pin.releases
 	case "pr":
-		if merged, _ := body["merged"].(bool); merged {
-			if t, ok := timeField(body, "merged_at"); ok {
-				return p.now().Sub(t) > days(p.cfg.pin.mergedPRsAfterDays)
-			}
+		if t, ok := firstTime(body, "mergedAt", "merged_at"); ok {
+			return p.now().Sub(t) > days(p.cfg.pin.mergedPRsAfterDays)
 		}
 		// A closed-unmerged PR is terminal too, so pin it past the same grace (P3).
-		if state, _ := body["state"].(string); strings.EqualFold(state, "closed") {
-			if t, ok := timeField(body, "closed_at"); ok {
+		if s, _ := body["state"].(string); strings.EqualFold(s, "closed") {
+			if t, ok := firstTime(body, "closedAt", "closed_at"); ok {
 				return p.now().Sub(t) > days(p.cfg.pin.mergedPRsAfterDays)
 			}
 		}
 	case "issue":
-		if state, _ := body["state"].(string); strings.EqualFold(state, "closed") {
-			if t, ok := timeField(body, "closed_at"); ok {
+		if s, _ := body["state"].(string); strings.EqualFold(s, "closed") {
+			if t, ok := firstTime(body, "closedAt", "closed_at"); ok {
 				return p.now().Sub(t) > days(p.cfg.pin.closedIssuesAfterDays)
 			}
 		}
@@ -138,6 +232,17 @@ func (p *Plugin) evalPin(key string, body map[string]any) bool {
 }
 
 func days(n int) time.Duration { return time.Duration(n) * 24 * time.Hour }
+
+// firstTime returns the first of fields present as an RFC3339 time, letting a caller
+// read the same instant under its GraphQL (camelCase) or REST (snake_case) name.
+func firstTime(body map[string]any, fields ...string) (time.Time, bool) {
+	for _, f := range fields {
+		if t, ok := timeField(body, f); ok {
+			return t, true
+		}
+	}
+	return time.Time{}, false
+}
 
 func timeField(body map[string]any, field string) (time.Time, bool) {
 	s, ok := body[field].(string)

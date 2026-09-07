@@ -17,26 +17,32 @@ import (
 type store struct{ core *core.Store }
 
 // node is one cached object (or list result). JSON is the raw parsed body; ETag +
-// FetchedAt drive conditional refetch; Pinned exempts immutable nodes.
+// FetchedAt drive conditional refetch; Pinned exempts immutable nodes. ContentHash
+// is a sha256 over the canonical JSON, so a refetch emits github.node.updated only
+// when the body actually changed — an etag change with an identical body stays
+// silent (an etag-less row's first conditional GET always 200s, which would
+// otherwise fire a spurious update every reconcile).
 type node struct {
-	Key       string
-	Typename  string
-	JSON      []byte
-	ETag      string
-	Pinned    bool
-	FetchedAt time.Time
-	UpdatedAt time.Time
+	Key         string
+	Typename    string
+	JSON        []byte
+	ETag        string
+	ContentHash string
+	Pinned      bool
+	FetchedAt   time.Time
+	UpdatedAt   time.Time
 }
 
 const nodeSchema = `
 CREATE TABLE IF NOT EXISTS github_nodes (
-	key        TEXT PRIMARY KEY,
-	typename   TEXT,
-	node_json  BLOB,
-	etag       TEXT,
-	pinned     INTEGER NOT NULL DEFAULT 0,
-	fetched_at TEXT,
-	updated_at TEXT
+	key          TEXT PRIMARY KEY,
+	typename     TEXT,
+	node_json    BLOB,
+	etag         TEXT,
+	content_hash TEXT,
+	pinned       INTEGER NOT NULL DEFAULT 0,
+	fetched_at   TEXT,
+	updated_at   TEXT
 );
 CREATE TABLE IF NOT EXISTS github_tags (
 	tag TEXT,
@@ -54,11 +60,15 @@ CREATE TABLE IF NOT EXISTS github_deliveries (
 	seen_at     TEXT
 );`
 
-// migrate creates the four state tables, add-only and idempotent.
+// migrate creates the four state tables, add-only and idempotent. The
+// content_hash column is added out-of-band via ALTER for stores created before it
+// existed (CREATE TABLE IF NOT EXISTS never alters an existing table); a duplicate
+// on a fresh store errors harmlessly and is ignored, keeping the path idempotent.
 func (s *store) migrate(ctx context.Context) error {
 	if _, err := s.core.DB().ExecContext(ctx, nodeSchema); err != nil {
 		return fmt.Errorf("github: migrate: %w", err)
 	}
+	_, _ = s.core.DB().ExecContext(ctx, `ALTER TABLE github_nodes ADD COLUMN content_hash TEXT`)
 	return nil
 }
 
@@ -72,17 +82,19 @@ func (s *store) get(ctx context.Context, key string) (*node, error) {
 		n            node
 		fetched, upd string
 		pinned       int
+		hash         sql.NullString
 	)
 	err := s.db().QueryRowContext(ctx,
-		`SELECT key, typename, node_json, etag, pinned, fetched_at, updated_at
+		`SELECT key, typename, node_json, etag, content_hash, pinned, fetched_at, updated_at
 		 FROM github_nodes WHERE key = ?`, key,
-	).Scan(&n.Key, &n.Typename, &n.JSON, &n.ETag, &pinned, &fetched, &upd)
+	).Scan(&n.Key, &n.Typename, &n.JSON, &n.ETag, &hash, &pinned, &fetched, &upd)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("github: get %q: %w", key, err)
 	}
+	n.ContentHash = hash.String
 	n.Pinned = pinned != 0
 	n.FetchedAt, _ = time.Parse(rfc, fetched)
 	n.UpdatedAt, _ = time.Parse(rfc, upd)
@@ -92,12 +104,13 @@ func (s *store) get(ctx context.Context, key string) (*node, error) {
 // upsert writes (replacing) one node row.
 func (s *store) upsert(ctx context.Context, n *node) error {
 	_, err := s.db().ExecContext(ctx,
-		`INSERT INTO github_nodes (key, typename, node_json, etag, pinned, fetched_at, updated_at)
-		 VALUES (?,?,?,?,?,?,?)
+		`INSERT INTO github_nodes (key, typename, node_json, etag, content_hash, pinned, fetched_at, updated_at)
+		 VALUES (?,?,?,?,?,?,?,?)
 		 ON CONFLICT(key) DO UPDATE SET
 		   typename=excluded.typename, node_json=excluded.node_json, etag=excluded.etag,
-		   pinned=excluded.pinned, fetched_at=excluded.fetched_at, updated_at=excluded.updated_at`,
-		n.Key, n.Typename, n.JSON, n.ETag, n.Pinned,
+		   content_hash=excluded.content_hash, pinned=excluded.pinned,
+		   fetched_at=excluded.fetched_at, updated_at=excluded.updated_at`,
+		n.Key, n.Typename, n.JSON, n.ETag, n.ContentHash, n.Pinned,
 		n.FetchedAt.Format(rfc), n.UpdatedAt.Format(rfc),
 	)
 	if err != nil {
@@ -171,12 +184,13 @@ func (s *store) purge(ctx context.Context, key string) ([]string, error) {
 	return deleted, nil
 }
 
-// nonPinnedNodes returns every cached object node (key + etag) that is neither
-// pinned nor a list result, so reconcile can revalidate each against upstream and
-// heal a dropped webhook within one interval (P1).
+// nonPinnedNodes returns every cached object node (key + etag + content_hash) that
+// is neither pinned nor a list result, so reconcile can revalidate each against
+// upstream, heal a dropped webhook within one interval (P1), and suppress a
+// no-change update by comparing the stored content_hash.
 func (s *store) nonPinnedNodes(ctx context.Context) ([]*node, error) {
 	rows, err := s.db().QueryContext(ctx,
-		`SELECT key, etag FROM github_nodes WHERE pinned=0 AND typename<>'_list'`)
+		`SELECT key, etag, content_hash FROM github_nodes WHERE pinned=0 AND typename<>'_list'`)
 	if err != nil {
 		return nil, err
 	}
@@ -184,9 +198,11 @@ func (s *store) nonPinnedNodes(ctx context.Context) ([]*node, error) {
 	var out []*node
 	for rows.Next() {
 		n := &node{}
-		if err := rows.Scan(&n.Key, &n.ETag); err != nil {
+		var hash sql.NullString
+		if err := rows.Scan(&n.Key, &n.ETag, &hash); err != nil {
 			return nil, err
 		}
+		n.ContentHash = hash.String
 		out = append(out, n)
 	}
 	return out, rows.Err()

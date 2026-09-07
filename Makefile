@@ -55,20 +55,21 @@ features-github:
 
 # loc-github guards the plugins/github/** LOC budget (docs/edr/github.md): prod
 # code only (no _test.go, no internal/fakegh), comments/blank lines stripped,
-# fails when the total exceeds 1570 (AC-GH-LOC / AC-GHQ-LOC; cap raised
-# 800→1300→1350→1540→1570 by owner — the 1350→1540 ratchet paid for the typed
+# fails when the total exceeds 1650 (AC-GH-LOC / AC-GHQ-LOC; cap raised
+# 800→1300→1350→1540→1570→1650 by owner — the 1350→1540 ratchet paid for the typed
 # Query.issue/pullRequest/issuesForRepo reads + the cross-plugin join accessors
 # (measured 1466); the 1540→1570 ratchet paid for the security-review fixes
 # (nodesByKind LIKE-escaping, owner/repo validation, the per-request join memo, and
-# the single.Ptr alignment), landing at measured 1486; 1486 x1.05 rounded up to 10 =
-# 1570). Uses POSIX [[:space:]] (not \s,
+# the single.Ptr alignment), landing at measured 1486; the 1570→1650 ratchet paid
+# for the canonical GraphQL refetch + hash-gated events (2026-09-07). Uses POSIX
+# [[:space:]] (not \s,
 # which BSD/macOS sed does not honor, silently under-stripping indented comments).
 loc-github:
 	@files=$$(find plugins/github -name '*.go' ! -name '*_test.go' -not -path '*/fakegh/*' 2>/dev/null); \
 	if [ -z "$$files" ]; then count=0; else count=$$(echo "$$files" | xargs sed -E '/^[[:space:]]*\/\//d;/^[[:space:]]*$$/d' | wc -l | tr -d ' '); fi; \
 	echo "plugins/github prod LOC: $$count"; \
-	if [ "$$count" -gt 1570 ]; then \
-		echo "loc-github: $$count LOC exceeds the 1570 budget" >&2; \
+	if [ "$$count" -gt 1650 ]; then \
+		echo "loc-github: $$count LOC exceeds the 1650 budget" >&2; \
 		exit 1; \
 	fi
 

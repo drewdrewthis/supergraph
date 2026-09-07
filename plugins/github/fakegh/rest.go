@@ -34,7 +34,47 @@ func (s *Server) serveNode(w http.ResponseWriter, r *http.Request, key string) {
 	s.setRESTHeaders(w)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(n.Body)
+	_ = json.NewEncoder(w).Encode(restView(key, n.Body))
+}
+
+// restView projects a stored (GraphQL-shaped) issue/pull body into the flat REST
+// JSON real GitHub serves: labels/assignees become flat arrays and updatedAt/url
+// become updated_at/html_url. This deliberate divergence from the GraphQL shape is
+// what lets a test prove the reconcile revalidate re-reads the canonical GraphQL
+// body rather than clobbering the store with this REST body. Non-issue/pr keys and
+// bodies without the GraphQL connection fields pass through unchanged.
+func restView(key string, body map[string]any) map[string]any {
+	if !strings.HasPrefix(key, "issue:") && !strings.HasPrefix(key, "pr:") {
+		return body
+	}
+	out := make(map[string]any, len(body))
+	for k, v := range body {
+		switch k {
+		case "labels", "assignees":
+			out[k] = flattenNodes(v)
+		case "updatedAt":
+			out["updated_at"] = v
+		case "url":
+			out["html_url"] = v
+		default:
+			out[k] = v
+		}
+	}
+	return out
+}
+
+// flattenNodes turns a GraphQL connection {nodes:[...]} into the flat array REST
+// returns; a value that is not a connection passes through unchanged.
+func flattenNodes(v any) any {
+	conn, ok := v.(map[string]any)
+	if !ok {
+		return v
+	}
+	nodes, ok := conn["nodes"].([]any)
+	if !ok {
+		return v
+	}
+	return nodes
 }
 
 func (s *Server) handleRepo(w http.ResponseWriter, r *http.Request) {

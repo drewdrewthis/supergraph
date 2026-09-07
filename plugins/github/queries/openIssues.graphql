@@ -5,7 +5,7 @@ query openIssues($owner: String!, $repo: String!) {
   repository(owner: $owner, name: $repo) {
     issues(first: 100, states: OPEN) {
       nodes {
-        number title state id url updatedAt
+        number title state id url updatedAt closedAt
         labels(first: 20) { nodes { name } }
         assignees(first: 20) { nodes { login } }
       }

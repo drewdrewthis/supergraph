@@ -5,7 +5,7 @@ query openPRs($owner: String!, $repo: String!) {
   repository(owner: $owner, name: $repo) {
     pullRequests(first: 100, states: OPEN) {
       nodes {
-        number title state id url updatedAt headRefName baseRefName body
+        number title state id merged mergedAt closedAt url updatedAt headRefName baseRefName body
         labels(first: 20) { nodes { name } }
       }
     }
