@@ -60,7 +60,9 @@ func tagExpr() string {
 	// and are opt-in via FEATURES_TAGS='@live'. A passing live scenario drops its
 	// @pending tag but keeps @live, so ~@live (not ~@pending alone) is what keeps
 	// the default `go test ./features/` run hermetic.
-	expr := "~@unmet && ~@service && ~@pending && ~@live"
+	// ~@slow excludes the spike-measure full run (build + real tmux + two serves);
+	// FEATURES_TAGS=@slow opts in. Appended per docs/edr/spike-measure.md D6.
+	expr := "~@unmet && ~@service && ~@pending && ~@slow && ~@live"
 	if runtime.GOOS != "linux" {
 		expr += " && ~@linux"
 	}
