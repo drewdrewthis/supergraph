@@ -136,6 +136,14 @@ loc-claude:
 		exit 1; \
 	fi
 
+# --- subscribe CLI targets ---
+.PHONY: features-subscribe
+
+# features-subscribe runs only the subscribe CLI's @local scenarios (AC-SUB-*),
+# excluding both @pending and @live (opt-in via make features-live).
+features-subscribe:
+	FEATURES_TAGS="@subscribe && ~@pending && ~@live" go test ./features/ -run TestFeatures -v
+
 # --- tmux plugin targets (appended; see docs/edr/tmux.md) ---
 .PHONY: features-tmux loc-tmux loc-internal
 

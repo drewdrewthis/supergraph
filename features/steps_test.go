@@ -159,6 +159,9 @@ func InitializeScenario(sc *godog.ScenarioContext) {
 
 	// --- spike-measure harness (@local checks + @slow full run) ---
 	registerSpikeSteps(sc)
+
+	// --- subscribe CLI (@subscribe) ---
+	registerSubscribeSteps(sc, w)
 }
 
 // ---------- shared ----------
