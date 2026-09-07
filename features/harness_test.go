@@ -154,6 +154,15 @@ type world struct {
 	lastSessions       []map[string]any
 	settingsOrig       []byte
 	p95Store           time.Duration
+
+	// subscribe CLI scenarios (features/subscribe.feature): a `supergraph
+	// subscribe` subprocess started in the background so a triggering event can
+	// be posted while it blocks waiting on the websocket push.
+	subCmd     *exec.Cmd
+	subStdout  *safeBuf
+	subStderr  *safeBuf
+	subDone    chan struct{}
+	subWaitErr error
 }
 
 func (w *world) init() error {
@@ -174,6 +183,7 @@ func (w *world) init() error {
 }
 
 func (w *world) cleanup() {
+	w.stopSubscribeBG()
 	w.stopServe()
 	if w.ring != nil {
 		_ = w.ring.Close()
