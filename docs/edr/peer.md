@@ -159,7 +159,9 @@ mirror is source-agnostic, keyed by the origin's grammar.
   `CursorReporter` returning `peers=<n> stale=<m>`.
 
 ## Config keys `[plugins.peer]`
-`[[plugins.peer.peers]]` × N: `hostId`, `url` (mesh, e.g. `http://10.0.3.222:7788`), `token`.
+`[[plugins.peer.peers]]` × N: `hostId`, `url` (mesh, e.g. `http://192.0.2.20:7788`), `token`.
+HTTP is for LAN/test use only; production peers must be reached over TLS (e.g. behind a reverse proxy),
+because the bearer token travels in the request.
 Plugin-level: `staleThresholdSeconds` (30, F8 — passed **only** as the remote `pluginLag(thresholdSeconds:)`
 argument, see D7), `backoffMaxSeconds` (60), `mirrorTTLSeconds` (0 = serve until a refresh; > 0 purges a
 host's rows not refreshed within the TTL on each proxy call for that host, S2). `remotePlugin`

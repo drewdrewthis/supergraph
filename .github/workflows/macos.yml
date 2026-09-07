@@ -1,69 +1,18 @@
-name: ci
+name: macos
 
 on:
-  push:
-    branches: [main]
-    paths-ignore: ['**.md', 'docs/**']
-  pull_request:
-    paths-ignore: ['**.md', 'docs/**']
-  # Manual trigger runs the full suite (test + cross-build) on any ref.
   workflow_dispatch:
 
 permissions:
   contents: read
 
-# One in-flight run per workflow+ref: a new push to a PR branch cancels the
-# superseded run. Scoped by workflow name so ci.yml and macos.yml don't share
-# a cancellation group.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  pr-check:
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          fetch-depth: 0 # version.mk runs `git describe --tags`
-          persist-credentials: false
-
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
-        with:
-          go-version-file: go.mod
-          check-latest: true
-          cache: true
-
-      - name: gofmt
-        run: |
-          out=$(gofmt -l .)
-          if [ -n "$out" ]; then
-            echo "gofmt needs to run on:"; echo "$out"; exit 1
-          fi
-
-      - name: go build
-        run: go build ./...
-
-      # fakeok (the panic-isolation sibling plugin, AC-CORE-4) lives behind the
-      # harness build tag, so it needs its own vet pass to be checked at all.
-      - name: go vet (harness tag)
-        run: go vet -tags harness ./...
-
-      # golangci-lint v2 built with the module's own Go toolchain: the released
-      # v1 binary cannot parse a go1.26 module, so we install v2 by version.
-      - name: golangci-lint
-        run: |
-          go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2
-          "$(go env GOPATH)/bin/golangci-lint" run --build-tags harness ./...
-
-      - name: go test
-        run: go test -count=1 -tags harness $(go list -tags harness ./... | grep -v /features)
-
   test:
-    # Full suite on push to main, or a manual dispatch (any ref). macOS moved to macos.yml (workflow_dispatch-only).
-    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -81,7 +30,7 @@ jobs:
       # 3.6a — the plugin version-gates it) is visible in the job log.
       - name: Install tmux
         run: |
-          sudo apt-get update && sudo apt-get install -y tmux
+          brew list tmux >/dev/null 2>&1 || brew install tmux
           tmux -V
 
       - name: gofmt
@@ -170,24 +119,3 @@ jobs:
       # --- github-query shared-derivation gate (appended; docs/edr/github-query.md) ---
       - name: loc-issuekey (AC-GHQ, internal/issuekey prod code <= 30 lines)
         run: make loc-issuekey
-
-  cross-build:
-    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
-        with:
-          go-version-file: go.mod
-          check-latest: true
-
-      - name: cross-compile cmd/supergraph
-        run: |
-          VERSION=$(git describe --tags --always --dirty)
-          LDFLAGS="-X main.version=$VERSION"
-          GOOS=linux  GOARCH=amd64 go build -ldflags "$LDFLAGS" -o dist/supergraph-linux-amd64  ./cmd/supergraph
-          GOOS=darwin GOARCH=arm64 go build -ldflags "$LDFLAGS" -o dist/supergraph-darwin-arm64 ./cmd/supergraph
