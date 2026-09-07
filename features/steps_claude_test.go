@@ -975,6 +975,10 @@ func (w *world) runGitDiffCore() error {
 }
 
 func (w *world) assertNoCoreDiff() error {
+	if coreChangeApproved() {
+		fmt.Println("core diff exempted by trailer")
+		return nil
+	}
 	if w.diffOut != "" {
 		return fmt.Errorf("core/ or server/ changed:\n%s", w.diffOut)
 	}

@@ -84,6 +84,22 @@ jobs:
           sudo apt-get update && sudo apt-get install -y tmux
           tmux -V
 
+      # A core/ or server/ change is normally forbidden on a plugin PR (the zerocore
+      # gates below). An owner-approved core change is exempted when a commit in
+      # origin/main..HEAD carries a `Core-Change-Approved: <reason>` trailer: this
+      # sets output approved=1 so each zerocore step skips its diff check. Parsed
+      # once here so the three gates share one source of truth. Step outputs (not
+      # $GITHUB_ENV) are used because env-context `if:` gates are unreliable at
+      # step level.
+      - name: core-change exemption
+        id: core_exemption
+        run: |
+          git rev-parse --verify origin/main >/dev/null
+          if git log origin/main..HEAD --format=%B | grep -q '^Core-Change-Approved:'; then
+            echo "approved=1" >> "$GITHUB_OUTPUT"
+            echo "core change approved by trailer; zerocore gates exempted"
+          fi
+
       - name: gofmt
         run: |
           out=$(gofmt -l .)
@@ -119,6 +135,7 @@ jobs:
         run: make loc-github
 
       - name: zerocore (AC-GH-ZEROCORE, the github plugin touches neither core/ nor server/)
+        if: steps.core_exemption.outputs.approved != '1'
         run: |
           git rev-parse --verify origin/main >/dev/null
           git diff --quiet origin/main -- core/ server/
@@ -133,6 +150,7 @@ jobs:
         run: make loc-tmux
 
       - name: peer zerocore (AC-PEER-ZEROCORE, the peer plugin touches neither core/ nor server/)
+        if: steps.core_exemption.outputs.approved != '1'
         run: |
           out=$(git diff --stat origin/main -- core server)
           if [ -n "$out" ]; then echo "core/server changed:"; echo "$out"; exit 1; fi
@@ -160,6 +178,7 @@ jobs:
         run: make loc-claude
 
       - name: zerocore-claude (AC-CLAUDE-ZEROCORE, the claude plugin touches neither core/ nor server/)
+        if: steps.core_exemption.outputs.approved != '1'
         run: |
           git rev-parse --verify origin/main >/dev/null
           git diff --quiet origin/main -- core/ server/

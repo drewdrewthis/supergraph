@@ -50,6 +50,21 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
 	defer stop()
 
+	// Parent-death watchdog: if the serve process that spawned us is SIGKILLed
+	// (the harness's timeout fallback), we are reparented (getppid changes) and
+	// would otherwise leak as an orphan holding the forward port. Exit as soon as
+	// that happens so no SIGKILLed parent can orphan us.
+	origPPID := os.Getppid()
+	go func() {
+		t := time.NewTicker(200 * time.Millisecond)
+		defer t.Stop()
+		for range t.C {
+			if os.Getppid() != origPPID {
+				os.Exit(0)
+			}
+		}
+	}()
+
 	ticker := time.NewTicker(30 * time.Millisecond)
 	defer ticker.Stop()
 

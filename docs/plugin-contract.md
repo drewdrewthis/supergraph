@@ -167,6 +167,12 @@ Core emits **no** synthetic heartbeat. Every `HealthStatus` field derives only f
 
 An **unconfigured** plugin (no config section, or missing required credentials) must go dormant instead: log once and return from `Start` without spawning any supervisor/poll loop, so it never emits — a plugin with nothing to say should say nothing, not retry-and-log-fail forever (see `plugins/github`'s no-token case).
 
+### Shutdown
+
+`cmd/supergraph serve` joins the Supervisor's `Run(ctx)` goroutine before the process exits — it does not return the instant `srv.Shutdown` completes. This matters because a plugin's `Start` is the only place it can reap its own children (e.g. `plugins/github`'s `gh webhook forward` child, killed via `exec.CommandContext` when `ctx` is cancelled): if the process exits before that kill lands, the child is orphaned instead of terminated.
+
+Consequence for plugin authors: **`Start` must return promptly once `ctx` is cancelled**, after reaping any subprocess/goroutine it spawned. Do not block shutdown on unrelated work (a long poll, an un-cancellable network call) — the supervisor's join has a bounded deadline (the same deadline as HTTP shutdown); a plugin that blocks past it logs a warning but does not stop the process from exiting anyway, at which point its still-running children are orphaned exactly as before.
+
 ## Tests
 
 Every plugin ships `plugins/<name>/<name>.feature` with BDD scenarios. Each scenario defines a complete e2e flow and maps one-to-one with a step in the test harness. Run all scenarios with `go test ./features/...` (godog).

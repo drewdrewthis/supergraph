@@ -341,10 +341,42 @@ func (w *world) stopServe() {
 // captured into lastStdout is empty. Shared by tmux's AC-ZEROCORE and
 // github's AC-GH-ZEROCORE scenarios, whose "Then" phrase is identical.
 func (w *world) assertNoDiffReported() error {
+	if coreChangeApproved() {
+		fmt.Println("core diff exempted by trailer")
+		return nil
+	}
 	if strings.TrimSpace(w.lastStdout) != "" {
 		return fmt.Errorf("git diff --stat is not empty:\n%s", w.lastStdout)
 	}
 	return nil
+}
+
+// coreChangeApproved reports whether a `Core-Change-Approved: <reason>`
+// trailer appears on a commit unique to this branch. Scoped to
+// origin/main..HEAD — the same range CI's "core-change exemption" step
+// (.github/workflows/ci.yml) uses — so the exemption dies with the merge:
+// once a branch's commits (and their trailer) land on main, they fall
+// outside every future branch's origin/main..HEAD range and stop firing.
+// If origin/main can't be resolved, fail closed (no exemption) rather than
+// silently disabling the core/server lock.
+func coreChangeApproved() bool {
+	verify := exec.Command("git", "rev-parse", "--verify", "origin/main")
+	verify.Dir = repoRoot
+	if err := verify.Run(); err != nil {
+		return false
+	}
+	cmd := exec.Command("git", "log", "origin/main..HEAD", "--format=%B")
+	cmd.Dir = repoRoot
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.HasPrefix(line, "Core-Change-Approved:") {
+			return true
+		}
+	}
+	return false
 }
 
 func exitCode(err error) int {

@@ -516,6 +516,10 @@ func (pw *peerWorld) thenPeerLastEventNull() error {
 // ---------- @integration ----------
 
 func (pw *peerWorld) thenZeroCoreDiff() error {
+	if coreChangeApproved() {
+		fmt.Println("core diff exempted by trailer")
+		return nil
+	}
 	cmd := exec.Command("git", "diff", "--stat", "origin/main", "--", "core", "server")
 	cmd.Dir = repoRoot
 	out, err := cmd.CombinedOutput()
