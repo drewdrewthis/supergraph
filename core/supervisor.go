@@ -25,6 +25,13 @@ type Supervisor struct {
 	mu      sync.Mutex
 	stores  map[string]*Store
 	plugins map[string]Plugin
+
+	// wg tracks every live runPlugin goroutine so Run can join their Start calls
+	// on shutdown: a plugin's Start reaps its own children (subprocesses, temp
+	// state) on ctx cancel, and the process must not exit before that returns
+	// (docs/plugin-contract.md). Bounded by the caller (serve.go's 5s deadline),
+	// never a second timer here.
+	wg sync.WaitGroup
 }
 
 // NewSupervisor wires a supervisor over an explicit factory map (production passes
@@ -119,7 +126,11 @@ func (sv *Supervisor) startAll(ctx context.Context) {
 		sv.mu.Unlock()
 
 		emit := sv.emitFor(name, store)
-		go sv.runPlugin(ctx, plugin, emit)
+		sv.wg.Add(1)
+		go func() {
+			defer sv.wg.Done()
+			sv.runPlugin(ctx, plugin, emit)
+		}()
 	}
 }
 
@@ -146,11 +157,16 @@ func (sv *Supervisor) stopDead(name string) {
 	sv.health.MarkStale(name)
 }
 
-// Run starts every plugin, blocks until ctx is cancelled, then closes all stores.
+// Run starts every plugin, blocks until ctx is cancelled, then closes all stores
+// and joins every plugin's Start goroutine before returning: a plugin reaps its
+// children as its Start unwinds on ctx cancel, so the process must not exit until
+// those returns land. The join is unbounded here by design — serve.go bounds the
+// whole shutdown with its own deadline.
 func (sv *Supervisor) Run(ctx context.Context) {
 	sv.startAll(ctx)
 	<-ctx.Done()
 	sv.Stop()
+	sv.wg.Wait()
 }
 
 // Stop closes every open Store. Safe to call once after Run's context is done.

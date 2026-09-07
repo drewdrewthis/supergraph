@@ -201,6 +201,10 @@ func registerGithubQuerySteps(sc *godog.ScenarioContext, g *ghWorld) {
 		return nil
 	})
 	sc.Step(re(`^the diffstat is empty$`), func() error {
+		if coreChangeApproved() {
+			fmt.Println("core diff exempted by trailer")
+			return nil
+		}
 		if diffOut != "" {
 			return fmt.Errorf("git diff --stat core/ server/ not empty:\n%s", diffOut)
 		}

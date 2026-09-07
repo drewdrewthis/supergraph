@@ -51,7 +51,11 @@ func runServe() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	go sv.Run(ctx)
+	svDone := make(chan struct{})
+	go func() {
+		defer close(svDone)
+		sv.Run(ctx)
+	}()
 
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.ListenAndServe() }()
@@ -59,6 +63,8 @@ func runServe() error {
 
 	select {
 	case err := <-errCh:
+		stop()
+		waitSupervisor(logger, svDone, 5*time.Second)
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			if errors.Is(err, syscall.EADDRINUSE) {
 				return fmt.Errorf("address %s already in use", cfg.Listen)
@@ -70,6 +76,20 @@ func runServe() error {
 		logger.Info("shutting down")
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		return srv.Shutdown(shutdownCtx)
+		shutdownErr := srv.Shutdown(shutdownCtx)
+
+		waitSupervisor(logger, svDone, 5*time.Second)
+		return shutdownErr
+	}
+}
+
+// waitSupervisor blocks until the supervisor goroutine (signaled by the
+// closed done channel) exits or deadline elapses, logging on timeout so the
+// caller can still return promptly rather than hang forever.
+func waitSupervisor(logger *slog.Logger, done <-chan struct{}, deadline time.Duration) {
+	select {
+	case <-done:
+	case <-time.After(deadline):
+		logger.Warn("supervisor did not exit before shutdown deadline")
 	}
 }
