@@ -79,3 +79,20 @@ func TestClaudeSessionUpdatedHostFilter(t *testing.T) {
 		t.Fatalf("filtered keys = %v, want %v (boxB dropped)", keys, want)
 	}
 }
+
+// TestIssueUpdatedRepoRequiresOwner proves repo can't be silently ignored: passing
+// repo without owner is a GraphQL error, not a keyless/unfiltered subscription.
+func TestIssueUpdatedRepoRequiresOwner(t *testing.T) {
+	res := &Resolver{Events: func(_ context.Context, _ string) <-chan core.Envelope {
+		t.Fatal("Events should not be called when arg validation fails")
+		return nil
+	}}
+	repo := "supergraph"
+	out, err := (&subscriptionResolver{res}).IssueUpdated(context.Background(), nil, &repo)
+	if err == nil {
+		t.Fatal("want error for repo without owner, got nil")
+	}
+	if out != nil {
+		t.Fatalf("want nil channel on error, got %v", out)
+	}
+}

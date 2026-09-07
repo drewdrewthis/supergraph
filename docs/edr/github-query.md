@@ -84,7 +84,10 @@ Today `queries/{issue,pr,openIssues,openPRs}.graphql` select only `number title 
 `url updatedAt labels(first:20){nodes{name}}` (+ `headRefName baseRefName body` for PR — `body`
 is **required** so the closing-keyword scan in D3 has data; `title` is already selected). The node
 JSON stored by the executor then carries them; `IssueNode`/`PRNode` map from that octokit JSON.
-No key-extraction change (`hasAll` still keys on `{number}`).
+No key-extraction change (`hasAll` still keys on `{number}`). **Dispatcher follow-up
+(2026-09-07):** `openIssues`/`issue` additionally select `assignees(first:20){nodes{login}}` and
+`Issue` gains `assignees: [Assignee!]!` (bound to `github.Assignee`, D4 autobind) so the
+orchardist's "open, unassigned" filter reads from cache — see [github EDR](./github.md) §"Dispatcher additions".
 - **Note (raw-proxy surface).** `body` now lands in the cached PR blob, so the raw
   `/plugins/github/graphql` proxy route returns the PR body **verbatim** to any caller
   that selects it — a surface that did not carry `body` before. This is not a new exposure

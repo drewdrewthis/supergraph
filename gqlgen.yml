@@ -45,3 +45,5 @@ models:
     model: github.com/drewdrewthis/supergraph/plugins/github.IssueNode
   PullRequest:
     model: github.com/drewdrewthis/supergraph/plugins/github.PRNode
+  Assignee:
+    model: github.com/drewdrewthis/supergraph/plugins/github.Assignee

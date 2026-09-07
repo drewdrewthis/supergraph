@@ -7,6 +7,8 @@ package graph
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
 	"github.com/drewdrewthis/supergraph/graph/model"
 	"github.com/drewdrewthis/supergraph/plugins/github"
@@ -72,6 +74,45 @@ func (r *subscriptionResolver) CheckRunUpdated(ctx context.Context) (<-chan mode
 				Key:     e.Key,
 				Payload: string(e.Payload),
 			}:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return out, nil
+}
+
+// IssueUpdated is the resolver for the issueUpdated field. Same mechanics as
+// CheckRunUpdated (S5 seam, no per-plugin logic in graph/): it relays github
+// envelopes from the injected Events hook, keeping only issue-kind keys
+// (`issue:{owner}/{repo}#N`, so a check_run or purge of another kind never fires an
+// issueUpdated push). The optional owner/repo args narrow the relay by the key's
+// `issue:owner/repo#` prefix, mirroring claudeSessionUpdated's hostId suffix filter.
+func (r *subscriptionResolver) IssueUpdated(ctx context.Context, owner *string, repo *string) (<-chan model.GithubEvent, error) {
+	if repo != nil && owner == nil {
+		return nil, fmt.Errorf("issueUpdated: repo requires owner")
+	}
+	out := make(chan model.GithubEvent)
+	if r.Resolver.Events == nil {
+		close(out)
+		return out, nil
+	}
+	prefix := "issue:"
+	if owner != nil {
+		prefix += *owner + "/"
+		if repo != nil {
+			prefix += *repo + "#"
+		}
+	}
+	in := r.Resolver.Events(ctx, "github")
+	go func() {
+		defer close(out)
+		for e := range in {
+			if !strings.HasPrefix(e.Key, prefix) {
+				continue
+			}
+			select {
+			case out <- model.GithubEvent{Ts: e.TS, Type: e.Type, V: e.V, Key: e.Key, Payload: string(e.Payload)}:
 			case <-ctx.Done():
 				return
 			}

@@ -3,6 +3,7 @@ package github
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -30,6 +31,11 @@ func (p *Plugin) runReconcile(ctx context.Context) {
 // reconcileOnce discovers repos, ensures their hooks, and pulls each repo's open
 // issues since its cursor (F2/F3). It advances the health cursor at the end.
 func (p *Plugin) reconcileOnce(ctx context.Context) {
+	if len(p.cfg.hookRepos) == 0 {
+		p.hookSkipOnce.Do(func() {
+			log.Printf("github: [plugins.github] hookRepos empty — creating no webhooks; set it to an owner/repo allowlist to opt in")
+		})
+	}
 	for _, full := range p.discoverRepos(ctx) {
 		owner, repo, ok := strings.Cut(full, "/")
 		if !ok {
@@ -88,6 +94,9 @@ func (p *Plugin) ensureHook(ctx context.Context, owner, repo string) {
 	if _, ok := p.store.hook(ctx, owner, repo); ok {
 		return
 	}
+	if !p.hookAllowed(owner, repo) {
+		return
+	}
 	req := map[string]any{
 		"name":   "web",
 		"events": []string{"*"},
@@ -106,6 +115,21 @@ func (p *Plugin) ensureHook(ctx context.Context, owner, repo string) {
 	}
 	_ = json.Unmarshal(body, &out)
 	_ = p.store.putHook(ctx, owner, repo, out.ID)
+	// Identifiable marker for hooks we create (deletion on shutdown is not required;
+	// this log line + the config.url path make ours findable on the repo).
+	log.Printf("github: created \"web\" webhook id=%d on %s/%s → %s/plugins/github/webhook", out.ID, owner, repo, p.cfg.selfURL)
+}
+
+// hookAllowed reports whether owner/repo is in the hookRepos allowlist. An empty
+// allowlist matches nothing, so no hooks are created (owner default).
+func (p *Plugin) hookAllowed(owner, repo string) bool {
+	full := owner + "/" + repo
+	for _, r := range p.cfg.hookRepos {
+		if r == full {
+			return true
+		}
+	}
+	return false
 }
 
 // sinceReconcile pulls a repo's open issues via the openIssues op, sending

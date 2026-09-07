@@ -39,6 +39,8 @@ func registerGithubQuerySteps(sc *godog.ScenarioContext, g *ghWorld) {
 	sc.Step(re(`^issue \x60issue:o/r#(\d+)\x60 is in the store$`),
 		func(n string) error { return g.ghqSeedIssue(atoiMust(n), "issue "+n) })
 	sc.Step(re(`^no node for key \x60issue:o/r#(\d+)\x60 is in the store$`), noop1)
+	sc.Step(re(`^issue \x60issue:o/r#(\d+)\x60 is in the store assigned to "([^"]*)" in state "([^"]*)"$`),
+		func(n, login, state string) error { return g.ghqSeedIssueAssigned(atoiMust(n), login, state) })
 	sc.Step(re(`^the \x60openIssues\x60 op has been warmed for \x60o/r\x60 with issues #5, #6, #7$`),
 		func() error { return g.ghqWarmIssues(5, 6, 7) })
 	sc.Step(re(`^pull request \x60pr:o/r#(\d+)\x60 is already in the store with headRefName "([^"]*)"$`),
@@ -101,6 +103,24 @@ func registerGithubQuerySteps(sc *godog.ScenarioContext, g *ghWorld) {
 	})
 	sc.Step(re(`^exactly issues #5, #6, #7 are returned$`), func() error {
 		return assertIssueNumbers(st.issues, 5, 6, 7)
+	})
+	sc.Step(re(`^issue #(\d+) has state "([^"]*)" and assignee "([^"]*)"$`), func(n, state, login string) error {
+		var row map[string]any
+		for _, r := range st.issues {
+			if f, ok := r["number"].(float64); ok && int(f) == atoiMust(n) {
+				row = r
+			}
+		}
+		if row == nil {
+			return fmt.Errorf("issue #%s not in issuesForRepo result %v", n, st.issues)
+		}
+		if got, _ := row["state"].(string); got != state {
+			return fmt.Errorf("issue #%s state = %q, want %q", n, got, state)
+		}
+		if !listHasField(row, "assignees", "login", login) {
+			return fmt.Errorf("issue #%s assignees %v missing login %q", n, jsonField(row, "assignees"), login)
+		}
+		return nil
 	})
 	sc.Step(re(`^an empty list is returned$`), func() error {
 		if len(st.issues) != 0 {
@@ -187,19 +207,59 @@ func registerGithubQuerySteps(sc *godog.ScenarioContext, g *ghWorld) {
 		return nil
 	})
 
-	// ---------- @live @pending (AC-GHQ-LIVE-WARM) ----------
-	// Registered but pending, matching the github.feature live convention: strict
-	// mode requires every step TEXT to resolve to a definition even in a @pending
-	// scenario that never runs by default. The evidence line is the generic step.
-	for _, s := range []string{
-		"a supergraph server with a real GITHUB_TOKEN and a repo under GITHUB_ORG",
-		"the `openIssues` op is warmed through `/plugins/github/graphql` for that repo",
-		"`issuesForRepo` is queried for that repo",
-		"the returned issue numbers equal the open issues the GitHub REST API lists",
-	} {
-		sc.Step(lit(s), pendingStep)
-	}
+	// ---------- @live (AC-GHQ-LIVE-WARM) — real GitHub ----------
+	// Opt-in via FEATURES_TAGS='@live' with GITHUB_TOKEN + LIVE_REPO set; excluded
+	// from the default hermetic run by the ~@live default tag expression.
+	var liveOwner, liveRepo string
+	sc.Step(lit("a supergraph server with a real GITHUB_TOKEN and a repo under GITHUB_ORG"),
+		func() error {
+			o, r, err := liveRepoName()
+			if err != nil {
+				return err
+			}
+			liveOwner, liveRepo = o, r
+			return g.startLive()
+		})
+	sc.Step(lit("the `openIssues` op is warmed through `/plugins/github/graphql` for that repo"),
+		func() error {
+			status, err := g.warmOp("openIssues", liveOwner, liveRepo)
+			if err != nil {
+				return err
+			}
+			if status != 200 {
+				return fmt.Errorf("warm openIssues status %d, want 200", status)
+			}
+			return nil
+		})
+	sc.Step(lit("`issuesForRepo` is queried for that repo"),
+		func() error { return g.ghqQueryIssuesForRepo(st, liveOwner, liveRepo) })
+	sc.Step(lit("the returned issue numbers equal the open issues the GitHub REST API lists"),
+		func() error {
+			want, err := restOpenIssueNumbers(liveOwner, liveRepo)
+			if err != nil {
+				return err
+			}
+			got := map[int]bool{}
+			for _, r := range st.issues {
+				if f, ok := r["number"].(float64); ok {
+					got[int(f)] = true
+				}
+			}
+			if len(got) != len(want) {
+				return fmt.Errorf("issuesForRepo returned %d numbers, REST lists %d (%v vs %v)", len(got), len(want), got, want)
+			}
+			for _, w := range want {
+				if !got[w] {
+					return fmt.Errorf("issuesForRepo missing #%d that REST lists (%v)", w, want)
+				}
+			}
+			return nil
+		})
 }
+
+// liveRepoName is the github-query package alias for liveRepo (defined in
+// github_helpers_test.go) so this file reads clearly at its one call site.
+func liveRepoName() (string, string, error) { return liveRepo() }
 
 func noop1(_ string) error { return nil }
 
@@ -235,7 +295,7 @@ func (g *ghWorld) ghqQueryPR(st *ghqState, n int) error {
 
 func (g *ghWorld) ghqQueryIssuesForRepo(st *ghqState, owner, repo string) error {
 	g.fake.ResetLog()
-	q := fmt.Sprintf(`{ issuesForRepo(owner: %q, repo: %q) { number } }`, owner, repo)
+	q := fmt.Sprintf(`{ issuesForRepo(owner: %q, repo: %q) { number state assignees { login } } }`, owner, repo)
 	_, data, err := g.sw.gql(q)
 	if err != nil {
 		return err
@@ -268,6 +328,20 @@ func (g *ghWorld) ghqRun20(st *ghqState, query string) error {
 func (g *ghWorld) ghqSeedIssue(n int, title string) error {
 	key := fmt.Sprintf("issue:o/r#%d", n)
 	body := map[string]any{"number": n, "title": title, "state": "open", "id": key, "url": "https://x/" + key}
+	now := time.Now()
+	return g.seedNode(key, "Issue", body, `W/"q"`, false, now, now)
+}
+
+// ghqSeedIssueAssigned seeds an issue carrying a state and one assignee login, in
+// the GraphQL node shape the openIssues op caches (assignees{nodes{login}}), so the
+// dispatcher's state/assignees fields resolve from cache with zero upstream calls.
+func (g *ghWorld) ghqSeedIssueAssigned(n int, login, state string) error {
+	key := fmt.Sprintf("issue:o/r#%d", n)
+	body := map[string]any{
+		"number": n, "title": fmt.Sprintf("issue %d", n), "state": state,
+		"id": key, "url": "https://x/" + key,
+		"assignees": map[string]any{"nodes": []any{map[string]any{"login": login}}},
+	}
 	now := time.Now()
 	return g.seedNode(key, "Issue", body, `W/"q"`, false, now, now)
 }

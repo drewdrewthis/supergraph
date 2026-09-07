@@ -41,9 +41,10 @@ features-pending:
 	FEATURES_TAGS=@pending go test ./features/ -run TestFeatures
 
 # features-github runs only the github plugin's @local scenarios (AC-GH-*),
-# excluding @pending (@live) ones.
+# excluding both @pending and @live (a passing live scenario drops @pending but
+# keeps @live, so ~@pending alone would run it without creds; ~@live keeps it out).
 features-github:
-	FEATURES_TAGS="@github && ~@pending" go test ./features/ -run TestFeatures -v
+	FEATURES_TAGS="@github && ~@pending && ~@live" go test ./features/ -run TestFeatures -v
 
 # loc-github guards the plugins/github/** LOC budget (docs/edr/github.md): prod
 # code only (no _test.go, no internal/fakegh), comments/blank lines stripped,
@@ -64,11 +65,12 @@ loc-github:
 		exit 1; \
 	fi
 
-# features-peer runs only the peer plugin's @local scenarios (AC-PEER-*),
-# excluding @pending (@live) ones. The binary is built with -tags harness so the
-# harness-only fakeremote source executor is compiled into the second process.
+# features-peer runs only the peer plugin's @local scenarios (AC-PEER-*), excluding
+# both @pending and @live (opt-in via make features-live). The binary is built with
+# -tags harness so the harness-only fakeremote source executor is compiled into the
+# second process.
 features-peer:
-	FEATURES_TAGS="@peer && ~@pending" go test ./features/ -run TestFeatures -v
+	FEATURES_TAGS="@peer && ~@pending && ~@live" go test ./features/ -run TestFeatures -v
 
 # loc-peer guards the plugins/peer/** prod LOC budget (docs/edr/peer.md): prod code
 # only (no _test.go), comments/blank lines stripped, fails when the total exceeds
@@ -116,9 +118,9 @@ dev-check: build-harness $(DEV_CONFIG)
 .PHONY: features-claude loc-claude
 
 # features-claude runs only the claude plugin's @local scenarios (AC-CLAUDE-*, F1/F5/S4
-# claude halves), excluding the @pending @live one.
+# claude halves), excluding both @pending and @live (opt-in via make features-live).
 features-claude:
-	FEATURES_TAGS="@claude && ~@pending" go test ./features/ -run TestFeatures -v
+	FEATURES_TAGS="@claude && ~@pending && ~@live" go test ./features/ -run TestFeatures -v
 
 # loc-claude guards the plugins/claude/** LOC budget (docs/edr/claude.md): prod code
 # only (no _test.go), comments/blank lines stripped, fails when the total exceeds 750
@@ -195,3 +197,14 @@ loc-issuekey:
 		echo "loc-issuekey: $$count LOC exceeds the 30 budget" >&2; \
 		exit 1; \
 	fi
+
+# --- live scenarios (appended; README > Live scenarios) ---
+.PHONY: features-live
+
+# features-live runs the @live scenarios that are actually implemented (not the
+# honest-@pending ones still blocked on infrastructure). It needs GITHUB_TOKEN +
+# LIVE_REPO in the environment (see README). FEATURES_TAGS overrides the default
+# tag expression, so ~@pending must be spelled out here to skip the blocked live
+# scenarios; @live keeps them out of the hermetic `make features` run.
+features-live:
+	FEATURES_TAGS='@live && ~@pending' go test ./features/ -run TestFeatures -count=1 -v

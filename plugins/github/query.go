@@ -21,7 +21,14 @@ type IssueNode struct {
 	URL         string
 	UpdatedAt   *time.Time
 	Labels      []string
+	Assignees   []Assignee
 	memo        *issueMemo
+}
+
+// Assignee is one login assigned to an issue (GraphQL type Assignee binds onto it,
+// so its scalar login field needs no resolver). Empty slice = unassigned.
+type Assignee struct {
+	Login string
 }
 
 // issueMemo caches this issue's cross-plugin branch set so the two sibling field
@@ -72,6 +79,11 @@ type nodeJSON struct {
 			Name string `json:"name"`
 		} `json:"nodes"`
 	} `json:"labels"`
+	Assignees struct {
+		Nodes []struct {
+			Login string `json:"login"`
+		} `json:"nodes"`
+	} `json:"assignees"`
 }
 
 // keyParts pulls owner/repo/number off a cache key (the key is authoritative for
@@ -86,6 +98,14 @@ func labelsOf(j nodeJSON) []string {
 	out := make([]string, 0, len(j.Labels.Nodes))
 	for _, l := range j.Labels.Nodes {
 		out = append(out, l.Name)
+	}
+	return out
+}
+
+func assigneesOf(j nodeJSON) []Assignee {
+	out := make([]Assignee, 0, len(j.Assignees.Nodes))
+	for _, a := range j.Assignees.Nodes {
+		out = append(out, Assignee{Login: a.Login})
 	}
 	return out
 }
@@ -106,7 +126,8 @@ func mapIssue(key string, raw []byte) *IssueNode {
 		Owner: owner, Repo: repo, Number: number,
 		Title: j.Title, State: j.State, URL: j.URL,
 		UpdatedAt: parseUpdated(j.UpdatedAt), Labels: labelsOf(j),
-		memo: &issueMemo{},
+		Assignees: assigneesOf(j),
+		memo:      &issueMemo{},
 	}
 }
 

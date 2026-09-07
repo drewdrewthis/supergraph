@@ -82,6 +82,83 @@ Prove the runner fails red on an unmet scenario:
 make features-red
 ```
 
+## Live scenarios
+
+The `@live` scenarios exercise the plugins against **real** external services and
+are excluded from the default `make features` run (hermetic). Run the implemented
+ones with:
+
+```
+make features-live
+```
+
+which is `FEATURES_TAGS='@live && ~@pending' go test ./features/ -run TestFeatures -v`.
+`FEATURES_TAGS='@live'` (without `~@pending`) additionally runs the live scenarios
+that are still honest `@pending` (blocked on infrastructure — see below); those
+report pending, not pass.
+
+**Environment variables**
+
+| Var | Meaning |
+| --- | --- |
+| `GITHUB_TOKEN` | A GitHub PAT. Passed to the serve subprocess via the inherited env only — **never** written to `config.toml` or any repo file. `export GITHUB_TOKEN="$(gh auth token)"`. |
+| `LIVE_REPO` | `owner/repo` the github live scenarios target (e.g. `drewdrewthis/supergraph`). A bare `repo` is also accepted when `GITHUB_ORG` is set. |
+| `GITHUB_ORG` | Optional owner used when `LIVE_REPO` is a bare repo name. |
+
+**`[plugins.github]` ingest config** (config.toml, not env): `forwardRepo` (`owner/repo`) or
+`forwardOrg` (name) sets the `gh webhook forward` target — one is **required** on `forward` ingress
+(neither ⇒ the forward child does not start; reconcile still heals). `forwardEvents` overrides the
+default `--events` list (the exact events the plugin ingests). `hookRepos` is the `owner/repo`
+allowlist for webhook creation — **default empty ⇒ the plugin creates no hooks**; list a repo to opt
+it in. Hooks the plugin creates are logged with their `owner/repo`, id, and callback URL so they are
+identifiable; **the plugin does not delete them on shutdown** — remove them manually (below).
+
+```
+export GITHUB_TOKEN="$(gh auth token)"
+export LIVE_REPO="drewdrewthis/supergraph"
+make features-live
+```
+
+**Prerequisites**
+
+- `gh` logged in with a token carrying at least the `repo` scope (`gh auth status`).
+- The `cli/gh-webhook` extension (`gh extension install cli/gh-webhook`) for the
+  webhook-forward ingress path.
+- A real Claude Code install and `tmux` for the `@claude` live pane-mapping proof.
+- A second real mesh box for the `@peer` cross-box proofs.
+
+**What runs green today** (`make features-live`)
+
+- `@AC-GHQ-LIVE-WARM` — `issuesForRepo` matches the live REST open-issue listing
+  after a warm.
+- `@AC-GH-RATELOG` — a live GraphQL request logs `rateLimit{remaining,resetAt}`.
+- `@AC-GH-NOTIFY-304` — the `notifications` poll conditionally GETs `/notifications`
+  and an unchanged poll returns 304 for zero quota (waits across two ~60s polls).
+
+**Teardown / verification**
+
+The green scenarios are **read-only**: the plugin runs with a 3600s reconcile
+interval that never fires inside a scenario window, so **no webhooks are created**
+and nothing is mutated on the account. `hookRepos` also defaults to empty, so even a
+reconcile that fired would create no hooks. Any webhook the plugin creates is a `web`
+hook identifiable by its callback URL path (`…/plugins/github/webhook`) and a
+`created "web" webhook …` log line; verify and clean up with:
+
+```
+gh api repos/$LIVE_REPO/hooks            # list; expect none from a features-live run
+```
+
+Every serve subprocess and `gh webhook forward` child is terminated at scenario
+teardown; confirm none leaked:
+
+```
+pgrep -fl 'supergraph serve|gh webhook'  # expect empty after a run
+```
+
+**Tokens must never appear in logs.** The PAT is passed only through the process
+environment. Do not `echo`/`set -x`/log it, and redact any captured output
+(`sed -E 's/gh[po]_[A-Za-z0-9]+/REDACTED/g'`) before sharing.
+
 ## Install as a service
 
 ```

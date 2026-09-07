@@ -42,6 +42,7 @@ func TestReconcileOnce(t *testing.T) {
 	srv := fakegh.New()
 	defer srv.Close()
 	p := newReconcilePlugin(t, srv)
+	p.cfg.hookRepos = []string{"o/r"}
 	srv.AddRepo("o", "r")
 	srv.AddIssue("o", "r", 5, "Five", "open")
 	ctx := context.Background()
@@ -123,5 +124,48 @@ func TestFloorPause(t *testing.T) {
 				t.Errorf("slept %v, want %v", slept, c.wantSleep)
 			}
 		})
+	}
+}
+
+// TestEnsureHookAllowlistEmpty: with an empty hookRepos allowlist (the owner
+// default) reconcile creates no webhooks — zero POST /hooks (finding B).
+func TestEnsureHookAllowlistEmpty(t *testing.T) {
+	srv := fakegh.New()
+	defer srv.Close()
+	p := newReconcilePlugin(t, srv) // no hookRepos set ⇒ empty
+	srv.AddRepo("o", "r")
+	ctx := context.Background()
+
+	p.reconcileOnce(ctx)
+
+	if c := srv.CountPath("POST", "/hooks"); c != 0 {
+		t.Errorf("empty allowlist created %d hooks, want 0", c)
+	}
+	if _, ok := p.store.hook(ctx, "o", "r"); ok {
+		t.Error("hook recorded despite empty allowlist")
+	}
+}
+
+// TestEnsureHookAllowlistScoped: only repos in hookRepos get a hook; others are
+// skipped even when discovered (finding B).
+func TestEnsureHookAllowlistScoped(t *testing.T) {
+	srv := fakegh.New()
+	defer srv.Close()
+	p := newReconcilePlugin(t, srv)
+	p.cfg.hookRepos = []string{"o/a"}
+	srv.AddRepo("o", "a")
+	srv.AddRepo("o", "b")
+	ctx := context.Background()
+
+	p.reconcileOnce(ctx)
+
+	if _, ok := p.store.hook(ctx, "o", "a"); !ok {
+		t.Error("allowlisted repo o/a got no hook")
+	}
+	if _, ok := p.store.hook(ctx, "o", "b"); ok {
+		t.Error("non-allowlisted repo o/b got a hook")
+	}
+	if c := srv.CountPath("POST", "/repos/o/b/hooks"); c != 0 {
+		t.Errorf("non-allowlisted repo o/b: %d hook POSTs, want 0", c)
 	}
 }

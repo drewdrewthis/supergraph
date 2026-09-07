@@ -36,15 +36,18 @@ strip formula), not aspirational budgets.
 | `keys.go` | 185 | key grammar as a **data table** (`kindSpecs`): parse + object→key + event→key + REST path + typename + `safeName` (S1) |
 | `client.go` | 106 | shared GitHub HTTP + rate-limit layer: REST/GraphQL calls, auth, ratelog, floor-pause |
 | `store.go` | 236 | SQLite `github_nodes`+`github_tags`+`github_hooks`+`github_deliveries`: upsert, get, purge, tag index, hooks, deliveries prune, non-pinned scan, pin, `nodesByKind` + `escapeLike` LIKE-escaping (github-query, S1) |
-| `query.go` | 146 | typed cache-only reads (github-query D4/D5): `IssueNode`/`PRNode` (+ per-request join `issueMemo`) + `mapIssue`/`mapPR` + `safeKey` (S1) + exported `Issue`/`PullRequest`/`IssuesForRepo`/`CachedPRs` |
+| `query.go` | 163 | typed cache-only reads (github-query D4/D5): `IssueNode`/`PRNode` (+ per-request join `issueMemo`) + `mapIssue`/`mapPR` + `safeKey` (S1) + exported `Issue`/`PullRequest`/`IssuesForRepo`/`CachedPRs` + `Assignee` + `assigneesOf` (dispatcher) |
 | `proxy.go` | 118 | read-through resolve: miss→fetch→store→serve; ETag/304; **singleflight (borrowed ~40)**; pin eval |
 | `webhook.go` | 63 | HMAC verify (1 MiB body cap, S2); event→key; purge; emit envelopes; delivery dedup |
 | `executor.go` | 255 | JSON-backed GraphQL executor + named-op loader + declared-key scoping (point/list) + list read path (U2) + body cap (S2) + parsed introspection allowlist (raw-query guard hardening) |
 | `ingest.go` | 116 | `gh webhook forward` supervisor (backoff) + redelivery + `/notifications` poll (flag) |
 | `reconcile.go` | 110 | discovery `/user/repos` + hook creation + since-cursor + revalidation (P1) + deliveries prune (S3) |
-| **Total** | **1486** | cap **1570**; CLI delta in `cmd/supergraph/` (~70) is counted separately, not in this budget |
+| **Total** | **1555** | cap **1570** (headroom 15); CLI delta in `cmd/supergraph/` (~70) is counted separately, not in this budget |
 - **AC-GH-LOC / AC-GHQ-LOC** guard it: a CI step (`make loc-github`) runs `find plugins/github -name '*.go' ! -name '*_test.go' -not -path '*/fakegh/*' | xargs sed -E '/^[[:space:]]*\/\//d;/^[[:space:]]*$/d' | wc -l` and fails > 1570 (POSIX `[[:space:]]`, portable across GNU/BSD sed). The shared `internal/issuekey` package (28 LOC) has its own **`make loc-issuekey`** gate (cap 30), outside this budget.
-- The `strOr`/`boolOr`/`intOr`/`toInt`/`readErrStatus` config helpers moved to `plugins/internal/pluginconfig` (−39 from the pre-migration 1350 baseline); the typed `Query.issue`/`pullRequest`/`issuesForRepo` reads plus the cross-plugin join accessors (`query.go`, `nodesByKind`, `current`) added the github-query surface (**1466 measured**, cap 1540); the security-review fixes (LIKE-escaping, owner/repo validation, join memo, `single.Ptr`) then landed at **1486 measured**; cap = 1486 × 1.05 rounded up to 10 = **1570** (owner rule).
+- The `strOr`/`boolOr`/`intOr`/`toInt`/`readErrStatus` config helpers moved to `plugins/internal/pluginconfig` (−39 from the pre-migration 1350 baseline); the typed `Query.issue`/`pullRequest`/`issuesForRepo` reads plus the cross-plugin join accessors (`query.go`, `nodesByKind`, `current`) added the github-query surface (**1466 measured**, cap 1540); the security-review fixes (LIKE-escaping, owner/repo validation, join memo, `single.Ptr`) then landed at **1486 measured**; cap = 1486 × 1.05 rounded up to 10 = **1570** (owner rule). The dispatcher additions
+(2026-09-07 — `Issue.assignees` mapping + `issueUpdated` subscription) landed at **1555 measured**;
+**cap unchanged at 1570** (headroom 15, no ratchet). Subscription/resolver code lives in `graph/`,
+outside the budget.
 
 ## Cache key = object id (full grammar)
 Every cached node and every purge target is one canonical key. `@<hostId>` suffix is **optional**,
@@ -140,6 +143,22 @@ These are what `/health` `lastEventAt` derives from and what tmux/claude join on
 Cross-plugin joins key on `github.node.updated.Key` (e.g. `issue:o/r#5`). There is deliberately **no**
 `github.webhook.received` envelope — an accepted webhook emits only the purge (AC-GH-HMAC: "exactly one github event is emitted").
 
+## Dispatcher additions (2026-09-07) — subscribe, don't poll; filter from one cached read
+The orchardist dispatcher needs "open, unassigned, no `grinding` label" from **one** supergraph read
+(zero `gh` calls) and wants to **subscribe** to new work rather than poll:
+- **`Issue.assignees: [Assignee!]!`** (+ `type Assignee { login }`) exposes each assigned login so
+  "unassigned" = empty list. Served from cache alongside `state` + `labels`, so the whole filter is
+  one `issuesForRepo(owner,repo){ number state assignees{login} labels }` read. `openIssues.graphql`
+  (and `issue.graphql`) now select `assignees(first:20){nodes{login}}` so reconcile/warm cache it;
+  `IssueNode.Assignees` binds via `gqlgen.yml` autobind (D4, no resolver). AC-GHQ-ASSIGNEES.
+- **`extend type Subscription { issueUpdated(owner,repo): GithubEvent! }`** — same S5 seam and
+  mechanics as `checkRunUpdated` (envelope relay through `graph/`, no per-plugin logic): it relays
+  the `github`-source envelopes, keeping only `issue:`-kind keys, and the optional `owner`/`repo`
+  args narrow by the key's `issue:owner/repo#` prefix (mirrors `claudeSessionUpdated`'s hostId
+  suffix). Fed by the existing `issues` webhook actions (opened/edited/assigned/unassigned/labeled/
+  unlabeled/closed/reopened) → `github.node.purged` envelope. `defaultForwardEvents` already includes
+  `issues`. AC-GH-ISSUE-SUB measures webhook-receipt→push within the S3 1s bound (envelope-ts).
+
 ## Auth — PAT only
 Env `GITHUB_TOKEN` or `[plugins.github].token` (scope `repo`; 5000 REST/h, 5000 GraphQL points/h). No
 App, no JWT. PAT never persisted; passed to fetches in-process.
@@ -149,7 +168,10 @@ App, no JWT. PAT never persisted; passed to fetches in-process.
   **exponential backoff restart**. It streams deliveries over an outbound websocket, POSTing each to
   `http://127.0.0.1:7788/plugins/github/webhook` — no inbound ingress. On start/restart it runs
   **redelivery from the last-seen delivery id** (`GET /repos/{o}/{r}/hooks/{id}/deliveries` →
-  `POST .../deliveries/{id}/attempts`), deduped by `X-GitHub-Delivery`.
+  `POST .../deliveries/{id}/attempts`), deduped by `X-GitHub-Delivery`. The child is spawned as
+  `gh webhook forward --url … --secret … --events <list> --repo <forwardRepo>` (or `--org
+  <forwardOrg>`); real `gh` requires `--events` **and** one of `--repo`/`--org`, so with neither
+  configured the supervisor logs once and does not start (reconcile still heals every gap).
 - **`tunnel`:** operator points a Funnel URL at the same handler; plugin creates one repo hook per
   discovered repo (`POST /repos/{o}/{r}/hooks`), each with its own HMAC secret.
 Handler verifies `X-Hub-Signature-256` (`sha256=`+hex HMAC-SHA256) with **`hmac.Equal`**; bad/absent →
@@ -175,7 +197,8 @@ and **populates exactly that op's declared keys** — nothing more (AC-GH-COLDST
 
 ## Discovery (F3)
 `GET /user/repos?affiliation=owner&per_page=100` (paginated). A repo appearing after boot is picked up
-next reconcile with **zero config** and gets a hook created (forward/tunnel).
+next reconcile with **zero config**. A hook is created **only if the repo is in the `hookRepos`
+allowlist** (default empty ⇒ none; see decision below).
 
 ## Rate-limit discipline (F7)
 Every response's REST `x-ratelimit-*` and GraphQL `rateLimit{remaining,resetAt}` are **logged**. Near
@@ -196,9 +219,13 @@ core/` = 0 (github serves via the **`HTTPRoutes`** seam, not the gqlgen glob).
 
 ## Config keys `[plugins.github]`
 `token` (or env), `ingress` (`forward`|`tunnel`), `tunnelURL`, `webhookSecret`, `owner`,
-`reconcileIntervalSeconds` (3600 — also the worst-case staleness window), `notifications` (bool,
-default false), `[plugins.github.pin]` (above), `[plugins.github.ttl]` (per-kind seconds, default off),
-`baseURL` (test-only → fakegh).
+`forwardRepo` (`owner/repo`) / `forwardOrg` (name) — the `gh webhook forward` target (one required on
+`forward` ingress; neither ⇒ forward does not start), `forwardEvents` (event-name list; default = the
+exact events the plugin ingests: `issues, issue_comment, pull_request, pull_request_review,
+pull_request_review_comment, check_run, label, release`), `hookRepos` (`owner/repo` allowlist for hook
+creation; **default empty ⇒ no hooks created**), `reconcileIntervalSeconds` (3600 — also the worst-case
+staleness window), `notifications` (bool, default false), `[plugins.github.pin]` (above),
+`[plugins.github.ttl]` (per-kind seconds, default off), `baseURL` (test-only → fakegh).
 
 **Single `webhookSecret` (approved deviation, 2026-09-05):** one secret verifies *all*
 hooks and *all* redelivered events, rather than a per-hook secret. This assumes every
@@ -212,6 +239,19 @@ secret keyed by repo, or cross-owner events will fail HMAC verification.
 (`ps`, `/proc/<pid>/cmdline`) to any local user while the child runs. Accepted for the
 single-operator v1 box; a multi-tenant host would pass the secret via env or stdin instead.
 
+**`hookRepos` allowlist gates hook creation (owner decision, 2026-09-07):** the live run found
+`ensureHook` creating a `web` hook on **every** repo from `/user/repos?affiliation=owner`, pointing at
+`selfURL` and unidentifiable. Fix: `hookRepos` is an `owner/repo` allowlist; **default empty means no
+hooks are created** (one log line per process). Hooks we do create carry an identifiable marker — the
+`config.url` path (`…/plugins/github/webhook`) plus a `created "web" webhook id=… on owner/repo` log
+line — so an operator can find and remove them. **Deletion on shutdown is NOT performed** (owner):
+operators remove hooks manually (`gh api repos/<o>/<r>/hooks`).
+
+**`forward` needs an explicit `--repo`/`--org` + `--events` (fix, 2026-09-07):** the live run found the
+supervisor spawning `gh webhook forward` with only `--url`/`--secret`; real `gh` fails with `required
+flag(s) "events" not set`. Fix: pass `--events` (default = the exact ingested event set) and one of
+`--repo <forwardRepo>` / `--org <forwardOrg>`; neither configured ⇒ log once, do not start.
+
 **Single `github.node.purged` per accepted webhook (approved deviation):** an accepted
 webhook emits exactly one envelope (the purge), not a separate `github.webhook.received`
 — the feature contract (AC-GH-HMAC: "exactly one github event is emitted") governs.
@@ -223,7 +263,7 @@ webhook emits exactly one envelope (the purge), not a separate `github.webhook.r
 - `gh webhook forward` exits → backoff restart + redelivery.
 - `/notifications` 304 spam → honor `X-Poll-Interval`, zero quota (only when enabled).
 - `since` clock skew → 60 s overlap.
-- Repos we cannot hook → `/notifications` path only (if enabled) + reconcile.
+- Repos not in `hookRepos` (or we cannot hook) → no hook; healed by `/notifications` (if enabled) + reconcile.
 
 ---
 

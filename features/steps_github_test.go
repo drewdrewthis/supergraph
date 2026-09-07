@@ -53,6 +53,11 @@ func registerGithubSteps(sc *godog.ScenarioContext) {
 	sc.Step(lit("20 correctly-signed check_run webhooks are POSTed to `/plugins/github/webhook`"), g.s3Emit20)
 	sc.Step(lit("the p95 of receipt-to-subscription-push over the 20 samples is under 1s"), g.s3AssertP95)
 
+	// ---------- AC-GH-ISSUE-SUB ----------
+	sc.Step(lit("a websocket subscription to `issueUpdated` on `127.0.0.1:7788/graphql`"), g.issueSubOpen)
+	sc.Step(lit("a correctly-signed `issues` `labeled` webhook for `o/r#5` is received"), g.issueSubWebhookLabeled)
+	sc.Step(lit("an `issueUpdated` push for `issue:o/r#5` is received within 1s of the webhook receipt"), g.issueSubAssertPush)
+
 	// ---------- F1 ----------
 	sc.Step(lit("20 correctly-signed issues \"opened\" webhooks are POSTed to `/plugins/github/webhook`"), g.f1Emit20)
 	sc.Step(lit("each issue is queryable and the p95 of emit-to-queryable over the 20 samples is under 1s"), g.f1AssertP95)
@@ -182,7 +187,7 @@ func registerGithubSteps(sc *godog.ScenarioContext) {
 	registerGithubQuerySteps(sc, g)
 
 	// ---------- @live @pending ----------
-	registerGithubLiveSteps(sc)
+	registerGithubLiveSteps(sc, g)
 }
 
 func noop() error { return nil }
@@ -238,6 +243,59 @@ func (g *ghWorld) s3AssertP95() error {
 	}
 	if p95(g.samples) >= time.Second {
 		return fmt.Errorf("p95 = %s, want < 1s", p95(g.samples))
+	}
+	return nil
+}
+
+// ===================== AC-GH-ISSUE-SUB =====================
+
+func (g *ghWorld) issueSubOpen() error { return g.sw.openSubscription("issueUpdated") }
+
+// issueSubWebhookLabeled delivers a signed issues.labeled webhook for o/r#5; the
+// handler purges issue:o/r#5 and emits one github.node.purged envelope the
+// issueUpdated subscription relays (the dispatcher's subscribe-not-poll path).
+func (g *ghWorld) issueSubWebhookLabeled() error {
+	status, err := g.postWebhook(g.webhookSecret, "issues", "labeled",
+		map[string]any{
+			"issue":      map[string]any{"number": 5},
+			"label":      map[string]any{"name": "bug"},
+			"repository": map[string]any{"full_name": "o/r"},
+		})
+	if err != nil {
+		return err
+	}
+	if status != 200 {
+		return fmt.Errorf("issues labeled webhook status %d", status)
+	}
+	return nil
+}
+
+// issueSubAssertPush asserts the push lands within the S3 1s bound, measured on the
+// envelope's own emit-stamped ts (like wsPushedWithin1s), with the expected key.
+func (g *ghWorld) issueSubAssertPush() error {
+	if g.sw.ws == nil {
+		return fmt.Errorf("no subscription connection")
+	}
+	p, err := g.sw.ws.nextPush(3 * time.Second)
+	if err != nil {
+		return fmt.Errorf("AC-GH-ISSUE-SUB: no issueUpdated push within 3s: %w", err)
+	}
+	received := time.Now()
+	data, _ := p["data"].(map[string]any)
+	evt, ok := data["issueUpdated"].(map[string]any)
+	if !ok {
+		return fmt.Errorf("push data missing issueUpdated: %v", p)
+	}
+	if pl, _ := evt["payload"].(string); !strings.Contains(pl, "issue:o/r#5") {
+		return fmt.Errorf("issueUpdated push not for issue:o/r#5: payload=%q", pl)
+	}
+	tsStr, _ := evt["ts"].(string)
+	emittedAt, err := time.Parse(time.RFC3339Nano, tsStr)
+	if err != nil {
+		return fmt.Errorf("parse event ts %q: %w", tsStr, err)
+	}
+	if elapsed := received.Sub(emittedAt); elapsed >= time.Second {
+		return fmt.Errorf("issueUpdated push arrived %s after emit (>= 1s bound)", elapsed)
 	}
 	return nil
 }
@@ -791,6 +849,8 @@ func (g *ghWorld) forwardGiven() error {
 	g.deliveriesDir = dir
 	g.ghPath = stub
 	g.ingress = "forward"
+	// forward now requires a --repo target; o/r is the repo this scenario hooks.
+	g.forwardRepo = "o/r"
 	// A short reconcile interval lets the plugin discover o/r and create+store its
 	// hook early, so the post-crash restart's redelivery pass has a hook to replay
 	// the missed delivery from.
@@ -1227,7 +1287,7 @@ func (g *ghWorld) zerocoreRun() error {
 
 func pendingStep() error { return godog.ErrPending }
 
-func registerGithubLiveSteps(sc *godog.ScenarioContext) {
+func registerGithubLiveSteps(sc *godog.ScenarioContext, g *ghWorld) {
 	live := []string{
 		"the github plugin is running against the live account",
 		"a real webhook delivery is dropped",
@@ -1243,14 +1303,51 @@ func registerGithubLiveSteps(sc *godog.ScenarioContext) {
 		"the github plugin in `forward` ingress against live GitHub",
 		"a real event fires on a watched repo",
 		"`gh webhook forward` streams it over the outbound websocket to the handler and it is ingested",
-		"the github plugin polling live `/notifications` with `notifications = true`",
-		"there are no changes since the stored `If-Modified-Since`",
-		"GitHub returns 304 at the advertised `X-Poll-Interval` and no quota is spent",
-		"the github plugin running against live GitHub",
-		"it makes a live GraphQL request",
-		"the log records the live `rateLimit{remaining,resetAt}`",
 	}
 	for _, s := range live {
 		sc.Step(lit(s), pendingStep)
 	}
+	registerGithubRateLogSteps(sc, g)
+	registerGithubNotify304Steps(sc, g)
+}
+
+// registerGithubRateLogSteps wires AC-GH-RATELOG against real GitHub: one live
+// GraphQL request must log the upstream rateLimit{remaining,resetAt}.
+func registerGithubRateLogSteps(sc *godog.ScenarioContext, g *ghWorld) {
+	sc.Step(lit("the github plugin running against live GitHub"), func() error { return g.startLive() })
+	sc.Step(lit("it makes a live GraphQL request"), func() error {
+		o, r, err := liveRepo()
+		if err != nil {
+			return err
+		}
+		_, err = g.warmOp("openIssues", o, r)
+		return err
+	})
+	sc.Step(lit("the log records the live `rateLimit{remaining,resetAt}`"), func() error {
+		if !g.waitLogLine("github: rate graphql remaining=", 15*time.Second) {
+			return fmt.Errorf("no `github: rate graphql remaining=` line in serve log:\n%s", g.sw.serve.stdout.String())
+		}
+		if !strings.Contains(g.sw.serve.stdout.String(), "resetAt=") {
+			return fmt.Errorf("rate graphql line lacks resetAt=:\n%s", g.sw.serve.stdout.String())
+		}
+		return nil
+	})
+}
+
+// registerGithubNotify304Steps wires AC-GH-NOTIFY-304 against real GitHub: the
+// notifications poll conditionally GETs /notifications and a subsequent unchanged
+// poll returns 304 for zero quota. The plugin polls at the server-advertised
+// X-Poll-Interval (~60s), so the assertion waits across two polls.
+func registerGithubNotify304Steps(sc *godog.ScenarioContext, g *ghWorld) {
+	sc.Step(lit("the github plugin polling live `/notifications` with `notifications = true`"), func() error {
+		g.notifications = true
+		return g.startLive()
+	})
+	sc.Step(lit("there are no changes since the stored `If-Modified-Since`"), func() error { return nil })
+	sc.Step(lit("GitHub returns 304 at the advertised `X-Poll-Interval` and no quota is spent"), func() error {
+		if !g.waitLogLine("github: notifications 304", 160*time.Second) {
+			return fmt.Errorf("no `github: notifications 304` line within 160s (account activity may have kept every poll at 200):\n%s", g.sw.serve.stdout.String())
+		}
+		return nil
+	})
 }

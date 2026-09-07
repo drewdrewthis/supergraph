@@ -9,3 +9,6 @@
 # make dev / dev-check throwaway data dir
 .dev/
 bin/
+
+# local build artifacts
+/ghstub
