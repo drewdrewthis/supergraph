@@ -150,8 +150,14 @@ func (p *Plugin) Start(ctx context.Context, emit core.Emit) error {
 }
 
 // Cursor surfaces the reconcile high-water mark in the health snapshot (optional
-// core.CursorReporter). It is a cheap single-row read of the persisted cursor.
+// core.CursorReporter). It is a cheap single-row read of the persisted cursor. With
+// no [plugins.tmux] config, Start blocks forever without ever reconciling, so the
+// cursor would otherwise stay "" and /health would show a starting state with no
+// explanation — surface why instead.
 func (p *Plugin) Cursor(ctx context.Context) string {
+	if !p.cfg.configured {
+		return "dormant: no [plugins.tmux] config"
+	}
 	if p.store == nil {
 		return ""
 	}

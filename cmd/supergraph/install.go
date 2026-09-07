@@ -30,13 +30,13 @@ var claudeHookEvents = []string{
 const claudeHookCommand = "supergraph claude-hook"
 
 // installCmd is opt-in hook registration (owner decision C1). Bare `supergraph
-// install` PRINTS the paste-ready hook block and touches nothing; `--install-hook`
+// install-claude-hook` PRINTS the paste-ready hook block and touches nothing; `--install-hook`
 // merges it idempotently into `--settings <path>`.
 func installCmd() *cobra.Command {
 	var doInstall bool
 	var settingsPath string
 	cmd := &cobra.Command{
-		Use:   "install",
+		Use:   "install-claude-hook",
 		Short: "Print (or, with --install-hook, merge) the Claude Code hook block",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if !doInstall {
@@ -71,7 +71,7 @@ func hookEntry() map[string]any {
 func printHookBlock(w io.Writer) error {
 	b, _ := json.MarshalIndent(hookBlock(), "", "  ")
 	out := "# Paste this into your ~/.claude/settings.json (hook install is opt-in).\n" +
-		"# Or run: supergraph install --install-hook --settings ~/.claude/settings.json\n" +
+		"# Or run: supergraph install-claude-hook --install-hook --settings ~/.claude/settings.json\n" +
 		string(b) + "\n"
 	_, err := io.WriteString(w, out)
 	return err
@@ -87,7 +87,7 @@ func mergeHookBlock(hintW io.Writer, settingsPath string) error {
 	if data, err := os.ReadFile(settingsPath); err == nil { //nolint:gosec // G304: settingsPath is an explicit user-provided --settings flag
 		if err := json.Unmarshal(data, &settings); err != nil {
 			_, _ = fmt.Fprintf(hintW, "refusing to overwrite %s: it is not valid JSON (%v).\n"+
-				"Fix or remove it, or run `supergraph install` to print the block and paste it manually.\n",
+				"Fix or remove it, or run `supergraph install-claude-hook` to print the block and paste it manually.\n",
 				settingsPath, err)
 			return fmt.Errorf("parse %s: %w", settingsPath, err)
 		}
