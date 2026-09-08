@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"reflect"
 	"strings"
@@ -175,6 +177,67 @@ func TestRevalidateEmitsOnlyOnChange(t *testing.T) {
 	ev := rec.events()
 	if len(ev) != 1 || ev[0].Type != "github.node.updated" {
 		t.Fatalf("changed revalidate emits = %+v, want one github.node.updated", ev)
+	}
+}
+
+// TestFetchKeepsStoredShapeWhenGraphQLPointOpFails: REST 200s for an issue but the
+// GraphQL point op (repository.issue) comes back empty — the stored GraphQL-shaped
+// node must be kept as-is (labels/assignees/updatedAt intact) rather than clobbered
+// with the flat REST body, and no github.node.updated fires (CodeRabbit finding,
+// proxy.go canonicalBody fallthrough).
+func TestFetchKeepsStoredShapeWhenGraphQLPointOpFails(t *testing.T) {
+	srv := fakegh.New()
+	defer srv.Close()
+	p := newReconcilePlugin(t, srv)
+	rec := &recorder{}
+	rec.install(p)
+	ctx := context.Background()
+	srv.AddRepo("o", "r")
+	srv.AddRichIssue("o", "r", 5, "Five", "OPEN", "2026-09-01T00:00:00Z", []string{"bug", "p1"}, []string{"alice"})
+
+	seedIssueViaListPath(t, p, ctx)
+	before, _ := p.store.get(ctx, "issue:o/r#5")
+	if before == nil {
+		t.Fatal("issue not seeded by the list path")
+	}
+
+	// GraphQL endpoint now answers every query with an empty repository (as if the
+	// point op errored or the node vanished); REST (srv) still serves the issue.
+	broken := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"repository":{}}}`))
+	}))
+	defer broken.Close()
+	p.cfg.graphqlURL = broken.URL
+	rec.ev = nil
+
+	n, outcome, err := p.fetchNode(ctx, "issue:o/r#5", before)
+	if err != nil {
+		t.Fatalf("fetchNode: %v", err)
+	}
+	if outcome != outcomeOther {
+		t.Errorf("outcome = %v, want outcomeOther", outcome)
+	}
+	if n == nil || !reflect.DeepEqual(njson(n.JSON), njson(before.JSON)) {
+		t.Fatalf("fetchNode did not keep the stored node:\n before=%s\n got   =%s", before.JSON, n.JSON)
+	}
+
+	after, _ := p.store.get(ctx, "issue:o/r#5")
+	if !reflect.DeepEqual(njson(before.JSON), njson(after.JSON)) {
+		t.Fatalf("store was clobbered with the flat REST body:\n before=%s\n after =%s", before.JSON, after.JSON)
+	}
+	got := njson(after.JSON)
+	if len(got.Labels.Nodes) != 2 || got.Labels.Nodes[0].Name != "bug" {
+		t.Errorf("labels lost after failed canonicalization: %+v", got.Labels.Nodes)
+	}
+	if len(got.Assignees.Nodes) != 1 || got.Assignees.Nodes[0].Login != "alice" {
+		t.Errorf("assignees lost after failed canonicalization: %+v", got.Assignees.Nodes)
+	}
+	if got.UpdatedAt != "2026-09-01T00:00:00Z" {
+		t.Errorf("updatedAt lost after failed canonicalization: %q", got.UpdatedAt)
+	}
+	if evs := rec.events(); len(evs) != 0 {
+		t.Errorf("emitted %d events on a failed canonicalization, want 0: %+v", len(evs), evs)
 	}
 }
 

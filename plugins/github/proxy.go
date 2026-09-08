@@ -114,6 +114,8 @@ func (p *Plugin) fetchNode(ctx context.Context, key string, stored *node) (*node
 	canonical := body
 	if cb, ok := p.canonicalBody(ctx, key); ok {
 		canonical = cb
+	} else if _, needsCanonical := graphqlPointOps[kindOf(key)]; stored != nil && needsCanonical && isGraphQLShape(stored.JSON) {
+		return stored, outcomeOther, nil // canonicalization failed; keep the existing GraphQL-shaped node
 	}
 	var bodyMap map[string]any
 	_ = json.Unmarshal(canonical, &bodyMap)
@@ -142,6 +144,11 @@ var graphqlPointOps = map[string]struct{ op, field string }{
 	"issue": {"issue", "issue"},
 	"pr":    {"pr", "pullRequest"},
 }
+
+// isGraphQLShape reports whether raw is already the camelCase GraphQL node shape
+// (updatedAt) rather than the flat REST projection (updated_at) — the thing worth
+// protecting from a failed canonicalization.
+func isGraphQLShape(raw []byte) bool { return strings.Contains(string(raw), `"updatedAt"`) }
 
 // canonicalBody re-reads key's body through its GraphQL point op and returns the
 // marshaled node object, so a landed Issue/PullRequest body is stored in the same
