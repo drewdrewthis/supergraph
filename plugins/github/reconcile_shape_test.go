@@ -241,6 +241,67 @@ func TestFetchKeepsStoredShapeWhenGraphQLPointOpFails(t *testing.T) {
 	}
 }
 
+// TestNonPinnedNodesCarriesJSONForReconcileShapeGuard: nonPinnedNodes must return
+// each node's stored JSON, not just key/etag/content_hash — otherwise fetchNode's
+// isGraphQLShape guard (proxy.go) always sees a nil body on the reconcile path and
+// can never fire, so a failed canonicalization during reconcile silently clobbers a
+// GraphQL-shaped node with the flat REST body (the bug this test pins, mirroring
+// TestFetchKeepsStoredShapeWhenGraphQLPointOpFails but through revalidate/
+// nonPinnedNodes instead of a direct fetchNode call).
+func TestNonPinnedNodesCarriesJSONForReconcileShapeGuard(t *testing.T) {
+	srv := fakegh.New()
+	defer srv.Close()
+	p := newReconcilePlugin(t, srv)
+	rec := &recorder{}
+	rec.install(p)
+	ctx := context.Background()
+	srv.AddRepo("o", "r")
+	srv.AddRichIssue("o", "r", 5, "Five", "OPEN", "2026-09-01T00:00:00Z", []string{"bug", "p1"}, []string{"alice"})
+
+	seedIssueViaListPath(t, p, ctx)
+	before, _ := p.store.get(ctx, "issue:o/r#5")
+	if before == nil {
+		t.Fatal("issue not seeded by the list path")
+	}
+
+	nodes, err := p.store.nonPinnedNodes(ctx)
+	if err != nil {
+		t.Fatalf("nonPinnedNodes: %v", err)
+	}
+	var got *node
+	for _, n := range nodes {
+		if n.Key == "issue:o/r#5" {
+			got = n
+		}
+	}
+	if got == nil {
+		t.Fatal("nonPinnedNodes did not return the seeded issue")
+	}
+	if len(got.JSON) == 0 {
+		t.Fatal("nonPinnedNodes returned a nil/empty JSON body — the reconcile-path shape guard can never fire")
+	}
+
+	// GraphQL endpoint now answers every query with an empty repository, as
+	// revalidate would hit on a real canonicalization failure during reconcile.
+	broken := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"repository":{}}}`))
+	}))
+	defer broken.Close()
+	p.cfg.graphqlURL = broken.URL
+	rec.ev = nil
+
+	p.revalidate(ctx)
+
+	after, _ := p.store.get(ctx, "issue:o/r#5")
+	if !reflect.DeepEqual(njson(before.JSON), njson(after.JSON)) {
+		t.Fatalf("reconcile clobbered the stored node with the flat REST body:\n before=%s\n after =%s", before.JSON, after.JSON)
+	}
+	if evs := rec.events(); len(evs) != 0 {
+		t.Errorf("emitted %d events on a failed reconcile canonicalization, want 0: %+v", len(evs), evs)
+	}
+}
+
 // TestReconcileLogsSummary: revalidate logs one INFO line with the pass tally.
 func TestReconcileLogsSummary(t *testing.T) {
 	srv := fakegh.New()

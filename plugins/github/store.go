@@ -184,13 +184,16 @@ func (s *store) purge(ctx context.Context, key string) ([]string, error) {
 	return deleted, nil
 }
 
-// nonPinnedNodes returns every cached object node (key + etag + content_hash) that
-// is neither pinned nor a list result, so reconcile can revalidate each against
-// upstream, heal a dropped webhook within one interval (P1), and suppress a
-// no-change update by comparing the stored content_hash.
+// nonPinnedNodes returns every cached object node (key + etag + content_hash +
+// JSON) that is neither pinned nor a list result, so reconcile can revalidate each
+// against upstream, heal a dropped webhook within one interval (P1), suppress a
+// no-change update by comparing the stored content_hash, and — via fetchNode's
+// isGraphQLShape guard — keep a GraphQL-shaped node on a failed canonicalization
+// instead of clobbering it with the flat REST body (the JSON column is required
+// for that guard to see the stored shape on the reconcile path, not just fetch's).
 func (s *store) nonPinnedNodes(ctx context.Context) ([]*node, error) {
 	rows, err := s.db().QueryContext(ctx,
-		`SELECT key, etag, content_hash FROM github_nodes WHERE pinned=0 AND typename<>'_list'`)
+		`SELECT key, node_json, etag, content_hash FROM github_nodes WHERE pinned=0 AND typename<>'_list'`)
 	if err != nil {
 		return nil, err
 	}
@@ -199,7 +202,7 @@ func (s *store) nonPinnedNodes(ctx context.Context) ([]*node, error) {
 	for rows.Next() {
 		n := &node{}
 		var hash sql.NullString
-		if err := rows.Scan(&n.Key, &n.ETag, &hash); err != nil {
+		if err := rows.Scan(&n.Key, &n.JSON, &n.ETag, &hash); err != nil {
 			return nil, err
 		}
 		n.ContentHash = hash.String
