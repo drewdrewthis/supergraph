@@ -47,3 +47,10 @@ models:
     model: github.com/drewdrewthis/supergraph/plugins/github.PRNode
   Assignee:
     model: github.com/drewdrewthis/supergraph/plugins/github.Assignee
+  # Bind the git read model onto its hand-written structs (mirrors Issue/PullRequest):
+  # scalar fields live on the struct (no resolver), while the absent worktrees /
+  # tmuxSession / issue / pullRequest edges get field-resolver stubs in graph/ (D2).
+  Repo:
+    model: github.com/drewdrewthis/supergraph/plugins/git.RepoNode
+  Worktree:
+    model: github.com/drewdrewthis/supergraph/plugins/git.WorktreeNode

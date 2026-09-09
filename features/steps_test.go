@@ -41,6 +41,7 @@ func InitializeScenario(sc *godog.ScenarioContext) {
 	registerPRDSteps(sc)
 	registerGithubSteps(sc)
 	registerPeerSteps(sc)
+	registerGitSteps(sc)
 
 	// --- shared ---
 	sc.Step(lit("a supergraph server started with the template plugin and data dir <tmp>"), w.startDefaultServer)

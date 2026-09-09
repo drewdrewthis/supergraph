@@ -127,6 +127,17 @@ plugin exposes no peer executor, so its rows do not replicate (`docs/edr/claude.
 §Privacy). Leave it empty unless you want prompt text in the local db. A leading `~/` in
 `stateDir` expands against `$HOME`. `paneTitles` never spawns `tmux` while false.
 
+The git plugin (a read model of local git worktrees under configured repo roots, see
+[docs/edr/git.md](docs/edr/git.md)):
+
+```toml
+[plugins.git]
+repos = ["~/work/supergraph", "~/work/orchardist"]  # repo roots to watch; "~/" expands
+reconcileIntervalSeconds = 30                        # backstop poll cadence
+```
+
+Omitting `[plugins.git]`, or leaving `repos` empty, leaves the plugin dormant.
+
 ### Querying a cached issue
 
 The `issue(key: String!): Issue` field (github plugin, cache-only — no upstream

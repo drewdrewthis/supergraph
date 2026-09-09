@@ -247,3 +247,27 @@ spike-measure:
 # doc so it is regenerated in place. This is the only target that writes into the repo.
 spike-measure-publish:
 	@OUT=docs/spike-results.md scripts/spike-measure.sh
+
+# --- git plugin targets (appended; see docs/edr/git.md) ---
+.PHONY: features-git loc-git
+
+# GIT_LOC_CAP is the ratified LOC budget for the git plugin. Owner rule: measured +
+# 5% rounded up to a multiple of 10. Measured 602 -> cap 640.
+GIT_LOC_CAP := 640
+
+# features-git runs only the git plugin's @local scenarios (AC-GIT-*), excluding
+# both @pending and @live (opt-in via make features-live).
+features-git:
+	FEATURES_TAGS="@git && ~@pending && ~@live" go test ./features/ -run TestFeatures -v
+
+# loc-git prints the git plugin's non-comment non-blank non-test LOC and fails if it
+# exceeds GIT_LOC_CAP. Same portable POSIX [[:space:]] formula as loc-github (not
+# \s, which BSD/macOS sed does not honor, silently under-stripping indented comments).
+loc-git:
+	@files=$$(find plugins/git -name '*.go' ! -name '*_test.go' 2>/dev/null); \
+	if [ -z "$$files" ]; then count=0; else count=$$(echo "$$files" | xargs sed -E '/^[[:space:]]*\/\//d;/^[[:space:]]*$$/d' | wc -l | tr -d ' '); fi; \
+	echo "plugins/git prod LOC: $$count"; \
+	if [ "$$count" -gt $(GIT_LOC_CAP) ]; then \
+		echo "loc-git: $$count LOC exceeds the $(GIT_LOC_CAP) budget" >&2; \
+		exit 1; \
+	fi

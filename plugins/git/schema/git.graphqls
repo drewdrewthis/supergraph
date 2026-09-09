@@ -1,0 +1,51 @@
+# git plugin's GraphQL contribution (S5 zero-core-edit seam): a read model of the
+# local git worktrees under the configured repo roots, served over the gqlgen
+# extend-type glob seam (D6) — no webhook, no HTTPRoutes. The scalar fields are
+# flattened onto the bound Go structs (git.RepoNode / git.WorktreeNode, see
+# gqlgen.yml) so gqlgen emits NO resolver for them; the edges below are deliberately
+# ABSENT from those structs so gqlgen generates field-resolver stubs for the
+# cross-plugin join implemented in graph/ (the D2 seam):
+#   Repo.worktrees, Worktree.tmuxSession, Worktree.issue, Worktree.pullRequest.
+# ahead/behind are nullable BY DESIGN: null means no upstream (or a detached HEAD),
+# kept distinct from a genuine 0 "level with upstream" a consumer must not confuse
+# for "unknown". branch is nullable in GraphQL but a Go string on the struct (gqlgen
+# maps a Go string to a nullable String, emitting "" for a detached/bare worktree),
+# mirroring how TmuxSession.worktree binds a Go string to `worktree: String`.
+type Repo {
+  hostId: String!
+  slug: String!
+  root: String!
+  staleSince: Time
+  worktrees: [Worktree!]!
+}
+
+type Worktree {
+  hostId: String!
+  repoSlug: String!
+  path: String!
+  branch: String
+  head: String!
+  detached: Boolean!
+  ahead: Int
+  behind: Int
+  staleSince: Time
+  tmuxSession: TmuxSession
+  issue: Issue
+  pullRequest: PullRequest
+}
+
+type GitEvent {
+  ts: Time!
+  type: String!
+  v: Int!
+  key: String!
+  payload: String!
+}
+
+extend type Query {
+  repos(hostId: String): [Repo!]!
+}
+
+extend type Subscription {
+  worktreeUpdated: GitEvent!
+}

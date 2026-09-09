@@ -1,0 +1,234 @@
+package git
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	"github.com/drewdrewthis/supergraph/core"
+)
+
+// fakeGit is the injected runner (AC-GIT-RECONCILE's seam): it answers `git worktree
+// list` per root from a fixture map, can fail a chosen root's list, and errors
+// rev-list by default so ahead/behind stay nil unless a fixture supplies a count.
+type fakeGit struct {
+	list    map[string]string
+	listErr map[string]bool
+	revlist map[string]string
+}
+
+func (f *fakeGit) run(ctx context.Context, dir string, args ...string) (string, error) {
+	if len(args) == 0 {
+		return "", nil
+	}
+	switch args[0] {
+	case "worktree":
+		if f.listErr[dir] {
+			return "", errors.New("fatal: not a git repository")
+		}
+		return f.list[dir], nil
+	case "remote":
+		return "", nil // no origin → RepoSlug falls back to the dir basename
+	case "rev-list":
+		if v, ok := f.revlist[dir]; ok {
+			return v, nil
+		}
+		return "", errors.New("fatal: no upstream configured")
+	}
+	return "", nil
+}
+
+func newPlugin(t *testing.T, roots []string) (*Plugin, *fakeGit) {
+	t.Helper()
+	fg := &fakeGit{list: map[string]string{}, listErr: map[string]bool{}, revlist: map[string]string{}}
+	p := &Plugin{
+		cfg:    config{roots: roots, reconcileInterval: time.Second, configured: true},
+		hostID: "h",
+		store:  newStore(t),
+		run:    fg.run,
+		now:    func() time.Time { return time.Unix(1, 0).UTC() },
+		hashes: map[string]string{},
+	}
+	return p, fg
+}
+
+func wt(path, head, branch string) string {
+	return "worktree " + path + "\nHEAD " + head + "\nbranch refs/heads/" + branch + "\n\n"
+}
+
+func wtDetached(path, head string) string {
+	return "worktree " + path + "\nHEAD " + head + "\ndetached\n\n"
+}
+
+func countType(es []core.Envelope, typ string) int {
+	n := 0
+	for _, e := range es {
+		if e.Type == typ {
+			n++
+		}
+	}
+	return n
+}
+
+// TestReconcileVanishedWorktreeStaled: a worktree present in the first reconcile but
+// absent from the second is stale-marked, yet still returned by scanWorktrees (a
+// vanished row is retained-and-flagged, not deleted — AC-GIT-RECONCILE).
+func TestReconcileVanishedWorktreeStaled(t *testing.T) {
+	ctx := context.Background()
+	p, fg := newPlugin(t, []string{"/repo/a"})
+
+	fg.list["/repo/a"] = wt("/repo/a", "aaa", "main") + wt("/repo/a/feat", "bbb", "feat")
+	if err := p.reconcile(ctx); err != nil {
+		t.Fatalf("reconcile 1: %v", err)
+	}
+	fg.list["/repo/a"] = wt("/repo/a", "aaa", "main")
+	if err := p.reconcile(ctx); err != nil {
+		t.Fatalf("reconcile 2: %v", err)
+	}
+
+	got := worktreesByKey(t, p.store, "h:/repo/a")
+	if len(got) != 2 {
+		t.Fatalf("vanished worktree should be retained: %d rows", len(got))
+	}
+	if got["h:/repo/a/feat"].StaleSince == nil {
+		t.Fatal("vanished worktree not stale-marked")
+	}
+	if got["h:/repo/a"].StaleSince != nil {
+		t.Fatal("surviving worktree wrongly stale-marked")
+	}
+}
+
+// TestReconcileRootErrorIsolated: root A's `worktree list` failing leaves A's cached
+// rows unchanged and un-staled, while root B still reconciles normally — one root's
+// git error is contained to that root (AC-GIT-RECONCILE).
+func TestReconcileRootErrorIsolated(t *testing.T) {
+	ctx := context.Background()
+	p, fg := newPlugin(t, []string{"/repo/a", "/repo/b"})
+
+	fg.list["/repo/a"] = wt("/repo/a", "aaa", "main")
+	fg.list["/repo/b"] = wt("/repo/b", "b111", "main")
+	if err := p.reconcile(ctx); err != nil {
+		t.Fatalf("reconcile 1: %v", err)
+	}
+
+	// A now fails; B advances to a new head.
+	fg.listErr["/repo/a"] = true
+	fg.list["/repo/b"] = wt("/repo/b", "b222", "main")
+	if err := p.reconcile(ctx); err != nil {
+		t.Fatalf("reconcile 2: %v", err)
+	}
+
+	a := worktreesByKey(t, p.store, "h:/repo/a")
+	if a["h:/repo/a"].StaleSince != nil {
+		t.Fatal("errored root A's rows were stale-marked")
+	}
+	if a["h:/repo/a"].Head != "aaa" {
+		t.Fatalf("errored root A's row was mutated: head=%q", a["h:/repo/a"].Head)
+	}
+	b := worktreesByKey(t, p.store, "h:/repo/b")
+	if b["h:/repo/b"].Head != "b222" {
+		t.Fatalf("healthy root B did not advance: head=%q", b["h:/repo/b"].Head)
+	}
+}
+
+// TestReconcileEmitHashGated: an unchanged reconcile emits nothing while a new or
+// changed worktree emits exactly one git.worktree.updated (AC-GIT-SUBSCRIBE).
+func TestReconcileEmitHashGated(t *testing.T) {
+	ctx := context.Background()
+	p, fg := newPlugin(t, []string{"/repo/a"})
+
+	var emitted []core.Envelope
+	p.emitFn = func(ctx context.Context, e core.Envelope) error {
+		emitted = append(emitted, e)
+		return nil
+	}
+
+	fg.list["/repo/a"] = wt("/repo/a", "aaa", "main")
+	_ = p.reconcile(ctx)
+	if got := countType(emitted, "git.worktree.updated"); got != 1 {
+		t.Fatalf("first reconcile: want 1 updated, got %d", got)
+	}
+	if e := emitted[0]; e.V != 1 || e.Source != "git" {
+		t.Fatalf("envelope shape wrong: %+v", e)
+	}
+
+	emitted = nil
+	_ = p.reconcile(ctx) // identical → hash gate suppresses
+	if len(emitted) != 0 {
+		t.Fatalf("unchanged reconcile emitted %d envelopes", len(emitted))
+	}
+
+	emitted = nil
+	fg.list["/repo/a"] = wt("/repo/a", "ccc", "main") // head moved
+	_ = p.reconcile(ctx)
+	if got := countType(emitted, "git.worktree.updated"); got != 1 {
+		t.Fatalf("changed reconcile: want 1 updated, got %d", got)
+	}
+}
+
+// failingStore wraps a real *store and fails upsertRepo for one chosen root, so
+// tests can drive the store-error isolation branch without a fake DB layer.
+type failingStore struct {
+	*store
+	failRoot string
+}
+
+func (f *failingStore) upsertRepo(ctx context.Context, r RepoNode, now time.Time) error {
+	if f.failRoot != "" && r.Root == f.failRoot {
+		return errors.New("store: simulated failure")
+	}
+	return f.store.upsertRepo(ctx, r, now)
+}
+
+// TestReconcileStoreErrorIsolated: a store failure upserting root A's repo leaves
+// root B's reconcile unaffected — mirrors TestReconcileRootErrorIsolated's git-error
+// case, but for the store side of the isolation the store error must ALSO not
+// vanish silently, so reconcile's returned error is asserted non-nil (AC-GIT-RECONCILE).
+func TestReconcileStoreErrorIsolated(t *testing.T) {
+	ctx := context.Background()
+	p, fg := newPlugin(t, []string{"/repo/a", "/repo/b"})
+	fs := &failingStore{store: p.store.(*store), failRoot: "/repo/a"}
+	p.store = fs
+
+	fg.list["/repo/a"] = wt("/repo/a", "aaa", "main")
+	fg.list["/repo/b"] = wt("/repo/b", "b111", "main")
+	err := p.reconcile(ctx)
+	if err == nil {
+		t.Fatal("reconcile should report the store error, not swallow it")
+	}
+
+	a := worktreesByKey(t, fs.store, "h:/repo/a")
+	if _, ok := a["h:/repo/a"]; ok {
+		t.Fatal("root A should not have been upserted after its store error")
+	}
+	b := worktreesByKey(t, fs.store, "h:/repo/b")
+	if b["h:/repo/b"].Head != "b111" {
+		t.Fatalf("root B should still reconcile despite root A's store error: head=%q", b["h:/repo/b"].Head)
+	}
+}
+
+// TestReconcileDetachedBranchNil: a detached-HEAD worktree must produce a nil
+// Branch, never "" (AC-GIT-WORKTREES) — the empty-string/null conflation this
+// plugin already avoids for ahead/behind.
+func TestReconcileDetachedBranchNil(t *testing.T) {
+	ctx := context.Background()
+	p, fg := newPlugin(t, []string{"/repo/a"})
+
+	fg.list["/repo/a"] = wtDetached("/repo/a", "aaa")
+	if err := p.reconcile(ctx); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	got := worktreesByKey(t, p.store, "h:/repo/a")
+	row, ok := got["h:/repo/a"]
+	if !ok {
+		t.Fatal("detached worktree not stored")
+	}
+	if !row.Detached {
+		t.Fatal("detached flag not set")
+	}
+	if row.Branch != nil {
+		t.Fatalf("detached worktree branch should be nil, got %q", *row.Branch)
+	}
+}

@@ -42,6 +42,7 @@ var subscriptionFields = map[string][]string{
 	"checkRunUpdated":      {},
 	"claudeSessionUpdated": {"hostId"},
 	"tmuxEvents":           {},
+	"worktreeUpdated":      {},
 }
 
 // subscribeOptions carries `supergraph subscribe`'s resolved flags into

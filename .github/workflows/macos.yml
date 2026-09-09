@@ -119,3 +119,10 @@ jobs:
       # --- github-query shared-derivation gate (appended; docs/edr/github-query.md) ---
       - name: loc-issuekey (AC-GHQ, internal/issuekey prod code <= 30 lines)
         run: make loc-issuekey
+
+      # --- git plugin gates (appended; docs/edr/git.md) ---
+      - name: loc-git (AC-GIT-LOC, plugins/git/** prod code within budget)
+        run: make loc-git
+
+      - name: git plugin feature suite (@git, @local only)
+        run: make features-git
