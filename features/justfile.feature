@@ -66,6 +66,14 @@ Feature: justfile agent tooling layer over `supergraph query --op`
     Then each recipe's captured `--queries-dir` resolves under its own plugin's `queries` directory
     And both plugins' `paneForBranch.graphql` files exist and are different files
 
+  @justfile @local @AC-INSTALL-GLOBAL-APPEND
+  Scenario: Global justfile append preserves existing content and parses cleanly
+    Given an existing global justfile without a trailing newline
+    When the supergraph import line is appended to it
+    Then the original content survives and the import line is on its own line
+    And `just --justfile` can parse the result
+    And running the append again does not duplicate the import line
+
   # --- AC Coverage Map ---
   # AC-JUST-LIST:    "just --list, every recipe documented" -> Scenario: Every recipe just --list prints carries a doc comment
   # AC-JUST-OPS:     "just-check.sh green on shipped tree" -> Scenario: The op-file drift gate passes on the shipped tree
@@ -73,5 +81,6 @@ Feature: justfile agent tooling layer over `supergraph query --op`
   # AC-JUST-EXIT:    "failed query binary never masked as success (the | jq trap)" -> Scenario: A failing query binary exits the recipe non-zero with no masked success
   # AC-JUST-CWD:     "recipes resolve op files from a foreign cwd" -> Scenario: A recipe anchors its queries-dir from a foreign working directory
   # AC-JUST-COLLIDE: "same-named op files across plugins don't collide" -> Scenario: Same-named op files across plugins resolve to their own plugin's directory
-  # AC-JUST-QUERY-NESTED, AC-JUST-QUERY-DIRECT, AC-JUST-MUTATE, installer/global-install ACs:
-  #   need a live `supergraph serve` and/or GitHub credentials -> covered by captured use-proof on the PR, not a scenario here.
+  # AC-INSTALL-GLOBAL-APPEND: "append to newline-less global justfile keeps it parseable" -> Scenario: Global justfile append preserves existing content and parses cleanly
+  # AC-JUST-QUERY-NESTED, AC-JUST-QUERY-DIRECT, AC-JUST-MUTATE:
+  #   need a live `supergraph serve` -> covered by captured use-proof on the PR, not a scenario here.

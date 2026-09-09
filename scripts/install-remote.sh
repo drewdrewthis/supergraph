@@ -100,6 +100,9 @@ if [ -L "$global_justfile" ]; then
 	log "warning: replace it with a real file, then re-run this installer to register supergraph."
 elif [ -e "$global_justfile" ]; then
 	if ! grep -qxF "$import_line" "$global_justfile"; then
+		if [ -s "$global_justfile" ] && [ -n "$(tail -c 1 "$global_justfile")" ]; then
+			printf '\n' >>"$global_justfile"
+		fi
 		printf '%s\n' "$import_line" >>"$global_justfile"
 	fi
 else

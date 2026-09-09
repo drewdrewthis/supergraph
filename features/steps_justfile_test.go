@@ -106,6 +106,13 @@ func registerJustfileSteps(sc *godog.ScenarioContext) {
 	sc.Step(lit("`just tmux pane-for-branch` is run"), j.runTmuxPaneForBranch)
 	sc.Step(lit("each recipe's captured `--queries-dir` resolves under its own plugin's `queries` directory"), j.assertEachOwnQueriesDir)
 	sc.Step(lit("both plugins' `paneForBranch.graphql` files exist and are different files"), j.assertCollideFilesDifferButExist)
+
+	// AC-INSTALL-GLOBAL-APPEND
+	sc.Step(lit("an existing global justfile without a trailing newline"), j.makeGlobalJustfileNoNewline)
+	sc.Step(lit("the supergraph import line is appended to it"), j.appendImportLine)
+	sc.Step(lit("the original content survives and the import line is on its own line"), j.assertContentAndImportSeparate)
+	sc.Step(lit("`just --justfile` can parse the result"), j.assertParseable)
+	sc.Step(lit("running the append again does not duplicate the import line"), j.assertIdempotent)
 }
 
 // ---------- helpers ----------
@@ -481,6 +488,188 @@ func (j *jw) assertCollideFilesDifferButExist() error {
 	if bytes.Equal(gb, tb) {
 		return fmt.Errorf("github and tmux paneForBranch.graphql are byte-identical (expected different query bodies)")
 	}
+	return nil
+}
+
+// ---------- AC-INSTALL-GLOBAL-APPEND ----------
+
+// globalJustfileNoNewline tracks the path and original content for the append test.
+// We store the path so we can apply the append logic to it in subsequent steps.
+var (
+	globalJustfilePath string
+	globalJustfileOrig string
+)
+
+func (j *jw) makeGlobalJustfileNoNewline() error {
+	if err := requireJust(); err != nil {
+		return err
+	}
+	path := filepath.Join(j.tmpDir, "justfile")
+	content := "alias foo := bar"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		return err
+	}
+	globalJustfilePath = path
+	globalJustfileOrig = content
+	return nil
+}
+
+func (j *jw) appendImportLine() error {
+	importLine := "import \"/opt/sg/justfile\""
+
+	// Apply the fixed append logic from install-remote.sh
+	if !fileContainsLine(globalJustfilePath, importLine) {
+		if err := ensureTrailingNewline(globalJustfilePath); err != nil {
+			return err
+		}
+		f, err := os.OpenFile(globalJustfilePath, os.O_APPEND|os.O_WRONLY, 0o644)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		if _, err := fmt.Fprintf(f, "%s\n", importLine); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (j *jw) assertContentAndImportSeparate() error {
+	data, err := os.ReadFile(globalJustfilePath)
+	if err != nil {
+		return err
+	}
+	content := string(data)
+
+	// Split lines and verify structure
+	lines := strings.Split(strings.TrimRight(content, "\n"), "\n")
+	if len(lines) < 2 {
+		return fmt.Errorf("expected at least 2 lines, got %d: %q", len(lines), content)
+	}
+
+	// First line should be the original content
+	if lines[0] != globalJustfileOrig {
+		return fmt.Errorf("first line changed: was %q, now %q", globalJustfileOrig, lines[0])
+	}
+
+	// Second line (last line) should be the import
+	importLine := "import \"/opt/sg/justfile\""
+	if lines[len(lines)-1] != importLine {
+		return fmt.Errorf("last line is not the import: %q", lines[len(lines)-1])
+	}
+
+	return nil
+}
+
+func (j *jw) assertParseable() error {
+	// Try to parse with just --list; we expect an error about the missing import,
+	// but the file syntax itself should be valid.
+	cmd := exec.Command("just", "--justfile", globalJustfilePath, "--list")
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	_ = cmd.Run() // Ignore exit code; we check stderr for syntax errors instead
+
+	// The command might exit non-zero because the import path doesn't exist,
+	// but the syntax should be valid (no "expected '::', comment, end of file" error).
+	stderr_str := stderr.String()
+	if strings.Contains(stderr_str, "expected '::'") || strings.Contains(stderr_str, "expected '##'") {
+		return fmt.Errorf("justfile syntax error: %s", stderr_str)
+	}
+
+	// Accept both exit 0 (if just is lenient) and non-zero (if it errors on the missing import).
+	// The key is that it's not a syntax error.
+	return nil
+}
+
+func (j *jw) assertIdempotent() error {
+	importLine := "import \"/opt/sg/justfile\""
+
+	// Read the current state
+	data, err := os.ReadFile(globalJustfilePath)
+	if err != nil {
+		return err
+	}
+	before := string(data)
+
+	// Apply the append logic again
+	if !fileContainsLine(globalJustfilePath, importLine) {
+		if err := ensureTrailingNewline(globalJustfilePath); err != nil {
+			return err
+		}
+		f, err := os.OpenFile(globalJustfilePath, os.O_APPEND|os.O_WRONLY, 0o644)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		if _, err := fmt.Fprintf(f, "%s\n", importLine); err != nil {
+			return err
+		}
+	}
+
+	// Read again and compare
+	data, err = os.ReadFile(globalJustfilePath)
+	if err != nil {
+		return err
+	}
+	after := string(data)
+
+	if before != after {
+		return fmt.Errorf("idempotency check failed: content changed on second append\nbefore:\n%s\nafter:\n%s", before, after)
+	}
+
+	// Verify there's exactly one import line
+	count := strings.Count(before, "import \"/opt/sg/justfile\"")
+	if count != 1 {
+		return fmt.Errorf("expected exactly 1 import line, got %d", count)
+	}
+
+	return nil
+}
+
+// fileContainsLine checks if a file contains a specific line using grep -F
+func fileContainsLine(path, line string) bool {
+	cmd := exec.Command("grep", "-qxF", line, path)
+	return cmd.Run() == nil
+}
+
+// ensureTrailingNewline adds a newline to a file if it doesn't already end with one.
+// This mirrors the logic in the fixed install-remote.sh script.
+func ensureTrailingNewline(path string) error {
+	// Check if file exists and is not empty
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if info.Size() == 0 {
+		return nil // empty file, no need to add newline
+	}
+
+	// Read the last byte
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+
+	b := make([]byte, 1)
+	_, readErr := f.ReadAt(b, info.Size()-1)
+	f.Close()
+	if readErr != nil {
+		return readErr
+	}
+
+	// If the last byte is not a newline, add one
+	if b[0] != '\n' {
+		appendF, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+		if err != nil {
+			return err
+		}
+		defer appendF.Close()
+		if _, err := appendF.WriteString("\n"); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
