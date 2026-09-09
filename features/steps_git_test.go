@@ -20,17 +20,11 @@ import (
 // Steps are black-box: real `git` (init/commit/worktree/remote) against temp repos
 // created per scenario, a real `supergraph serve` subprocess reading a generated
 // config.toml, and GraphQL queries via `supergraph query` (the same pattern
-// steps_tmux_test.go / tmux_helpers_test.go already use for the tmux plugin) — no
-// import of the not-yet-built plugins/git package. @tmux scenarios additionally
+// steps_tmux_test.go / tmux_helpers_test.go already use for the tmux plugin) — the
+// plugins/git package is never imported, so these scenarios exercise the plugin
+// only through the surfaces its real consumer uses. @tmux scenarios additionally
 // spin up a real tmux server on a private `-L` socket, reusing killTmuxServer from
 // tmux_helpers_test.go for verified teardown.
-//
-// NOTE FOR WHOEVER WIRES THIS IN: this file intentionally does NOT edit
-// features/steps_test.go (out of scope for this change — see the issue #29 test
-// brief). InitializeScenario must call `registerGitSteps(sc)` alongside the other
-// register*Steps calls before these scenarios can run at all; until then every
-// step below is "undefined", which fails loudly under Strict mode — that is the
-// correct failing-red state for a plugin that doesn't exist yet.
 func registerGitSteps(sc *godog.ScenarioContext) {
 	g := &gitWorld{}
 

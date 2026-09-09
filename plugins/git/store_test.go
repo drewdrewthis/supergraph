@@ -106,7 +106,7 @@ func TestScanReposHostFilter(t *testing.T) {
 	}
 }
 
-func mustRepos(t *testing.T, s *store, host string) []RepoNode {
+func mustRepos(t *testing.T, s gitStore, host string) []RepoNode {
 	t.Helper()
 	got, err := s.scanRepos(context.Background(), host)
 	if err != nil {
@@ -158,7 +158,7 @@ func TestMarkStaleScopedToRepo(t *testing.T) {
 	}
 }
 
-func worktreesByKey(t *testing.T, s *store, repoKey string) map[string]WorktreeNode {
+func worktreesByKey(t *testing.T, s gitStore, repoKey string) map[string]WorktreeNode {
 	t.Helper()
 	got, err := s.scanWorktrees(context.Background(), repoKey)
 	if err != nil {

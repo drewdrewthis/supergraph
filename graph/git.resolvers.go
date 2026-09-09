@@ -101,9 +101,10 @@ func (r *worktreeResolver) Issue(ctx context.Context, obj *git.WorktreeNode) (*g
 }
 
 // PullRequest is the resolver for the pullRequest field (AC-GIT-PR-JOIN). See
-// pullRequestForWorktree in graph/git_map.go for the two-path join (issue-key cache
-// hit checked against HeadRefName, then a fallback scan of cached PRs) — state is
-// never filtered, so a closed/merged PR on the branch is still returned.
+// pullRequestForWorktree in graph/git_map.go for the join (issue-key cache hit,
+// checked against HeadRefName, treated as one candidate among a scan of cached PRs
+// — the largest Number wins, D7) — state is never filtered, so a closed/merged PR
+// on the branch is still returned.
 func (r *worktreeResolver) PullRequest(ctx context.Context, obj *git.WorktreeNode) (*github.PRNode, error) {
 	if obj.Branch == nil {
 		return nil, nil

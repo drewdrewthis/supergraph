@@ -66,20 +66,24 @@ func splitRepoSlug(slug string) (owner, repo string, ok bool) {
 // pullRequestForWorktree is the Worktree.pullRequest join (AC-GIT-PR-JOIN). direct
 // is the issue-key-derived cache lookup (cheap, exact when it hits and its head ref
 // matches branch — PR #N and issue #N are different numbers in the same repo, so a
-// hit on the wrong node must be rejected). cached is the fallback scan for the
-// exact head branch when direct misses. Neither path filters by state — a closed or
-// merged PR on the branch is still returned, since the sidebar renders PR state.
+// hit on the wrong node must be rejected); it is one candidate among cached's
+// matches, never a short-circuit, so a stale direct-hit can't shadow a newer PR
+// that cached would have found. Across every matching candidate the LARGEST Number
+// wins (D7): a branch reused across PRs (a merged #5, later an open #12) must
+// resolve to the current PR, not the first/smallest match. Neither path filters by
+// state — a closed or merged PR on the branch is still returned, since the sidebar
+// renders PR state.
 func pullRequestForWorktree(direct *github.PRNode, cached []github.PRNode, branch string) *github.PRNode {
-	if direct != nil && direct.HeadRefName == branch {
-		return direct
-	}
 	var best *github.PRNode
+	if direct != nil && direct.HeadRefName == branch {
+		best = direct
+	}
 	for i := range cached {
 		pr := &cached[i]
 		if pr.HeadRefName != branch {
 			continue
 		}
-		if best == nil || pr.Number < best.Number {
+		if best == nil || pr.Number > best.Number {
 			best = pr
 		}
 	}

@@ -13,6 +13,7 @@ package git
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -35,13 +36,26 @@ type config struct {
 	configured        bool
 }
 
+// gitStore is store's method set, named so reconcile_test.go can wrap the real
+// *store with a fake that fails one root's writes on demand — the same
+// injectable-seam pattern as runner (AC-GIT-RECONCILE's store-error isolation
+// branch), without changing store.go itself.
+type gitStore interface {
+	migrate(ctx context.Context) error
+	upsertRepo(ctx context.Context, r RepoNode, now time.Time) error
+	upsertWorktree(ctx context.Context, r WorktreeNode, now time.Time) error
+	markWorktreesStaleForRepo(ctx context.Context, repoKey string, keepKeys []string, now time.Time) ([]string, error)
+	scanRepos(ctx context.Context, hostID string) ([]RepoNode, error)
+	scanWorktrees(ctx context.Context, repoKey string) ([]WorktreeNode, error)
+}
+
 // Plugin is the git plugin. It holds the store, resolved config, captured emit, the
 // injectable git runner the tests replace with a fake, and the in-memory emit gate
 // (per-worktree state hashes + the reconcile worktree count for Cursor).
 type Plugin struct {
 	cfg    config
 	hostID string
-	store  *store
+	store  gitStore
 	run    runner
 	now    func() time.Time
 
@@ -81,6 +95,9 @@ func New(cfg core.PluginConfig) (core.Plugin, error) {
 		now:    func() time.Time { return time.Now().UTC() },
 		hashes: map[string]string{},
 	}
+	// Publish early (store still nil): resolvers called before Migrate runs see a
+	// live instance whose nil-store branch returns [] rather than reading through a
+	// stale/absent current — see the second Set below for why Migrate must ALSO call it.
 	current.Set(p)
 	return p, nil
 }
@@ -92,6 +109,10 @@ func (p *Plugin) Name() string { return "git" }
 // reconcile loop and the graph resolvers.
 func (p *Plugin) Migrate(ctx context.Context, s *core.Store) error {
 	p.store = &store{core: s}
+	// Same pointer as New's Set, but load-bearing on its own: single.Ptr wraps
+	// atomic.Pointer, so THIS Store call is what happens-before a concurrent
+	// resolver's Get — without it the plain p.store write above would be a data
+	// race with any goroutine reading p.store through current.Get().
 	current.Set(p)
 	return p.store.migrate(ctx)
 }
@@ -109,7 +130,7 @@ func (p *Plugin) Start(ctx context.Context, emit core.Emit) error {
 		return nil
 	}
 
-	_ = p.reconcile(ctx)
+	p.logReconcileErr(p.reconcile(ctx))
 	ticker := time.NewTicker(p.cfg.reconcileInterval)
 	defer ticker.Stop()
 	for {
@@ -117,8 +138,18 @@ func (p *Plugin) Start(ctx context.Context, emit core.Emit) error {
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			_ = p.reconcile(ctx)
+			p.logReconcileErr(p.reconcile(ctx))
 		}
+	}
+}
+
+// logReconcileErr surfaces a reconcile error instead of discarding it: a
+// persistently failing store would otherwise reconcile into silence, with a
+// frozen Cursor as the only symptom. err is the aggregated per-root error
+// reconcile returns (errors.Join); nil means every root reconciled cleanly.
+func (p *Plugin) logReconcileErr(err error) {
+	if err != nil {
+		log.Printf("git: reconcile: %v", err)
 	}
 }
 

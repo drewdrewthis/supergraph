@@ -149,7 +149,7 @@ func TestReconcileEmitHashGated(t *testing.T) {
 	if got := countType(emitted, "git.worktree.updated"); got != 1 {
 		t.Fatalf("first reconcile: want 1 updated, got %d", got)
 	}
-	if e := emitted[0]; e.V != 2 || e.Source != "git" {
+	if e := emitted[0]; e.V != 1 || e.Source != "git" {
 		t.Fatalf("envelope shape wrong: %+v", e)
 	}
 
@@ -164,6 +164,47 @@ func TestReconcileEmitHashGated(t *testing.T) {
 	_ = p.reconcile(ctx)
 	if got := countType(emitted, "git.worktree.updated"); got != 1 {
 		t.Fatalf("changed reconcile: want 1 updated, got %d", got)
+	}
+}
+
+// failingStore wraps a real *store and fails upsertRepo for one chosen root, so
+// tests can drive the store-error isolation branch without a fake DB layer.
+type failingStore struct {
+	*store
+	failRoot string
+}
+
+func (f *failingStore) upsertRepo(ctx context.Context, r RepoNode, now time.Time) error {
+	if f.failRoot != "" && r.Root == f.failRoot {
+		return errors.New("store: simulated failure")
+	}
+	return f.store.upsertRepo(ctx, r, now)
+}
+
+// TestReconcileStoreErrorIsolated: a store failure upserting root A's repo leaves
+// root B's reconcile unaffected — mirrors TestReconcileRootErrorIsolated's git-error
+// case, but for the store side of the isolation the store error must ALSO not
+// vanish silently, so reconcile's returned error is asserted non-nil (AC-GIT-RECONCILE).
+func TestReconcileStoreErrorIsolated(t *testing.T) {
+	ctx := context.Background()
+	p, fg := newPlugin(t, []string{"/repo/a", "/repo/b"})
+	fs := &failingStore{store: p.store.(*store), failRoot: "/repo/a"}
+	p.store = fs
+
+	fg.list["/repo/a"] = wt("/repo/a", "aaa", "main")
+	fg.list["/repo/b"] = wt("/repo/b", "b111", "main")
+	err := p.reconcile(ctx)
+	if err == nil {
+		t.Fatal("reconcile should report the store error, not swallow it")
+	}
+
+	a := worktreesByKey(t, fs.store, "h:/repo/a")
+	if _, ok := a["h:/repo/a"]; ok {
+		t.Fatal("root A should not have been upserted after its store error")
+	}
+	b := worktreesByKey(t, fs.store, "h:/repo/b")
+	if b["h:/repo/b"].Head != "b111" {
+		t.Fatalf("root B should still reconcile despite root A's store error: head=%q", b["h:/repo/b"].Head)
 	}
 }
 

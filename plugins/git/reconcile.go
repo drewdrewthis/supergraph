@@ -3,6 +3,7 @@ package git
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 	"path/filepath"
@@ -18,23 +19,37 @@ import (
 type runner func(ctx context.Context, dir string, args ...string) (string, error)
 
 // gitRunner is the production runner: it runs the operator's git in dir and returns
-// combined output as a string, surfacing a non-zero exit as an error so a failed
-// root is skipped rather than read as empty (AC-GIT-RECONCILE).
+// STDOUT ONLY, surfacing a non-zero exit as an error so a failed root is skipped
+// rather than read as empty (AC-GIT-RECONCILE). Stdout is kept separate from
+// stderr deliberately: parseAheadBehind expects exactly two whitespace-separated
+// fields, and a `warning:` git writes to stderr (e.g. a dubious-ownership notice)
+// would otherwise merge into stdout and collapse the parse to (nil, nil).
 func gitRunner(ctx context.Context, dir string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", args...) //nolint:gosec // G204: operator-configured repo roots, fixed git subcommands, not attacker input
 	cmd.Dir = dir
-	out, err := cmd.CombinedOutput()
-	return string(out), err
+	out, err := cmd.Output()
+	if err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) && len(ee.Stderr) > 0 {
+			return string(out), fmt.Errorf("%w: %s", err, ee.Stderr)
+		}
+		return string(out), err
+	}
+	return string(out), nil
 }
 
 // reconcile runs one backstop poll across every configured root, INDEPENDENTLY: a
-// git failure in one root is logged-and-skipped so it can neither abort the other
-// roots nor stale-mark their rows (AC-GIT-RECONCILE). For each surviving root it
-// upserts the repo and its non-bare worktrees, computes ahead/behind against each
-// worktree's own upstream, stale-marks the vanished, and emits hash-gated events.
+// git failure OR a store failure in one root is logged-and-skipped so it can
+// neither abort the other roots nor stale-mark their rows (AC-GIT-RECONCILE, and
+// the store-error isolation this join extends D3 to cover). For each surviving
+// root it upserts the repo and its non-bare worktrees, computes ahead/behind
+// against each worktree's own upstream, stale-marks the vanished, and emits
+// hash-gated events. Store errors are collected and returned joined so the caller
+// (Start) can log that something went wrong instead of the failure vanishing.
 func (p *Plugin) reconcile(ctx context.Context) error {
 	now := p.now()
 	total := 0
+	var errs []error
 	for _, root := range p.cfg.roots {
 		wtOut, err := p.run(ctx, root, "worktree", "list", "--porcelain")
 		if err != nil {
@@ -47,10 +62,14 @@ func (p *Plugin) reconcile(ctx context.Context) error {
 		slug := RepoSlug(remote, root)
 		repoKey := p.hostID + ":" + root
 		if err := p.store.upsertRepo(ctx, RepoNode{Key: repoKey, HostID: p.hostID, Slug: slug, Root: root}, now); err != nil {
-			return err
+			// Skip THIS root only, same as a git failure above — a store error must
+			// not stop reconcile from reaching later roots.
+			errs = append(errs, fmt.Errorf("root %s: upsert repo: %w", root, err))
+			continue
 		}
 
 		var seen []string
+		rootFailed := false
 		for _, wt := range parseWorktreeList(wtOut) {
 			// Bare worktrees have no branch state and are not sidebar rows — skip them.
 			if wt.Bare {
@@ -58,16 +77,25 @@ func (p *Plugin) reconcile(ctx context.Context) error {
 			}
 			node := p.worktreeNode(ctx, repoKey, slug, wt)
 			if err := p.store.upsertWorktree(ctx, node, now); err != nil {
-				return err
+				errs = append(errs, fmt.Errorf("root %s: upsert worktree %s: %w", root, node.Key, err))
+				rootFailed = true
+				continue
 			}
 			seen = append(seen, node.Key)
 			total++
 			p.emitIfChanged(ctx, node, now)
 		}
+		if rootFailed {
+			// A worktree upsert failed: skip this root's stale-marking pass too — seen
+			// is incomplete, so marking against it would wrongly stale-mark worktrees
+			// that never got a chance to upsert this round.
+			continue
+		}
 
 		gone, err := p.store.markWorktreesStaleForRepo(ctx, repoKey, seen, now)
 		if err != nil {
-			return err
+			errs = append(errs, fmt.Errorf("root %s: mark stale: %w", root, err))
+			continue
 		}
 		for _, k := range gone {
 			p.forget(k)
@@ -78,7 +106,7 @@ func (p *Plugin) reconcile(ctx context.Context) error {
 	p.mu.Lock()
 	p.wtCount = total
 	p.mu.Unlock()
-	return nil
+	return errors.Join(errs...)
 }
 
 // worktreeNode builds one worktree row, resolving ahead/behind against the
@@ -135,13 +163,15 @@ func (p *Plugin) forget(key string) {
 }
 
 // worktreeHash is a stable digest of the fields a subscriber keys on: branch, head,
-// detached, ahead/behind, and staleness. ptrStr/ptrStrBranch render a nil as a
-// sentinel distinct from any real value, so a nil branch never hash-collides with a
-// branch literally named "\x00" — and never with a genuine "" either, matching the
-// nil/0 discipline ahead/behind already gets.
+// detached, and ahead/behind. StaleSince is deliberately excluded — worktreeNode
+// never sets it (a stale transition goes through forget + the "removed" event, not
+// this hash), so including it would always compare false and add nothing.
+// ptrStr/ptrStrBranch render a nil as a sentinel distinct from any real value, so a
+// nil branch never hash-collides with a branch literally named "\x00" — and never
+// with a genuine "" either, matching the nil/0 discipline ahead/behind already gets.
 func worktreeHash(n WorktreeNode) string {
-	return fmt.Sprintf("%s|%s|%v|%s|%s|%v",
-		ptrStrBranch(n.Branch), n.Head, n.Detached, ptrStr(n.Ahead), ptrStr(n.Behind), n.StaleSince != nil)
+	return fmt.Sprintf("%s|%s|%v|%s|%s",
+		ptrStrBranch(n.Branch), n.Head, n.Detached, ptrStr(n.Ahead), ptrStr(n.Behind))
 }
 
 func ptrStr(p *int) string {
@@ -170,7 +200,9 @@ func worktreePayload(n WorktreeNode) map[string]any {
 	}
 }
 
-// emit builds and sends one V:2 envelope through the captured emit closure.
+// emit builds and sends one V:1 envelope through the captured emit closure — the
+// first schema for git.worktree.* (issue #29), matching every other plugin's first
+// version (tmux/snapshot.go, claude/claude.go, github/proxy.go, peer/liveness.go).
 func (p *Plugin) emit(ctx context.Context, typ, key string, payload map[string]any, now time.Time) {
 	p.emitMu.RLock()
 	emit := p.emitFn
@@ -182,5 +214,5 @@ func (p *Plugin) emit(ctx context.Context, typ, key string, payload map[string]a
 	if err != nil {
 		return
 	}
-	_ = emit(ctx, core.Envelope{TS: now, Source: p.Name(), Type: typ, V: 2, Key: key, Payload: body})
+	_ = emit(ctx, core.Envelope{TS: now, Source: p.Name(), Type: typ, V: 1, Key: key, Payload: body})
 }

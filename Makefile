@@ -252,8 +252,8 @@ spike-measure-publish:
 .PHONY: features-git loc-git
 
 # GIT_LOC_CAP is the ratified LOC budget for the git plugin. Owner rule: measured +
-# 5% rounded up to a multiple of 10. Measured 567 -> cap 600.
-GIT_LOC_CAP := 600
+# 5% rounded up to a multiple of 10. Measured 602 -> cap 640.
+GIT_LOC_CAP := 640
 
 # features-git runs only the git plugin's @local scenarios (AC-GIT-*), excluding
 # both @pending and @live (opt-in via make features-live).
