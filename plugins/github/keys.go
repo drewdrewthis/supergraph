@@ -246,7 +246,7 @@ func relatedKeys(event string, payload map[string]any) []string {
 		if disc == "" {
 			continue
 		}
-		out = append(out, fill("pr:{owner}/{repo}#{disc}", map[string]string{"owner": owner, "repo": repo, "disc": disc}))
+		out = append(out, fill(specByKind["pr"].keyfmt, map[string]string{"owner": owner, "repo": repo, "disc": disc}))
 	}
 	return out
 }

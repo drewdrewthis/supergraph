@@ -271,15 +271,9 @@ Feature: GitHub typed Query + the PRD first cross-plugin join
     When `git diff main -- plugins/github/schema/github.graphqls` is run
     Then the schema diff has no deleted or retyped lines
 
-  @github @local @AC-GHPR-ZEROCORE
-  Scenario: The PR sidebar-parity fields add no core edit
-    Given the github-query change is applied
-    When `git diff --stat core/ server/` is run
-    Then the diffstat is empty
-
   # ---------- Guards ----------
 
-  @github @local @AC-GHQ-ZEROCORE
+  @github @local @AC-GHQ-ZEROCORE @AC-GHPR-ZEROCORE
   Scenario: The feature adds no core edit
     Given the github-query change is applied
     When `git diff --stat core/ server/` is run
