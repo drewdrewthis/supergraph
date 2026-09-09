@@ -23,20 +23,23 @@ type ClaudeInstance struct {
 }
 
 type ClaudeSession struct {
-	HostID      string     `json:"hostId"`
-	SessionID   string     `json:"sessionId"`
-	Cwd         string     `json:"cwd"`
-	GitBranch   *string    `json:"gitBranch,omitempty"`
-	IssueNumber *int       `json:"issueNumber,omitempty"`
-	Model       *string    `json:"model,omitempty"`
-	State       string     `json:"state"`
-	LastTool    *string    `json:"lastTool,omitempty"`
-	ToolCalls   int        `json:"toolCalls"`
-	PrNumber    *int       `json:"prNumber,omitempty"`
-	PrURL       *string    `json:"prUrl,omitempty"`
-	StartedAt   time.Time  `json:"startedAt"`
-	LastEventAt time.Time  `json:"lastEventAt"`
-	StaleSince  *time.Time `json:"staleSince,omitempty"`
+	HostID       string     `json:"hostId"`
+	SessionID    string     `json:"sessionId"`
+	Cwd          string     `json:"cwd"`
+	GitBranch    *string    `json:"gitBranch,omitempty"`
+	IssueNumber  *int       `json:"issueNumber,omitempty"`
+	Model        *string    `json:"model,omitempty"`
+	State        string     `json:"state"`
+	LastTool     *string    `json:"lastTool,omitempty"`
+	ToolCalls    int        `json:"toolCalls"`
+	PrNumber     *int       `json:"prNumber,omitempty"`
+	PrURL        *string    `json:"prUrl,omitempty"`
+	StartedAt    time.Time  `json:"startedAt"`
+	LastEventAt  time.Time  `json:"lastEventAt"`
+	StaleSince   *time.Time `json:"staleSince,omitempty"`
+	Mission      *string    `json:"mission,omitempty"`
+	LastResponse *string    `json:"lastResponse,omitempty"`
+	PaneTitle    *string    `json:"paneTitle,omitempty"`
 }
 
 type GithubEvent struct {

@@ -62,20 +62,23 @@ type ComplexityRoot struct {
 	}
 
 	ClaudeSession struct {
-		Cwd         func(childComplexity int) int
-		GitBranch   func(childComplexity int) int
-		HostID      func(childComplexity int) int
-		IssueNumber func(childComplexity int) int
-		LastEventAt func(childComplexity int) int
-		LastTool    func(childComplexity int) int
-		Model       func(childComplexity int) int
-		PrNumber    func(childComplexity int) int
-		PrURL       func(childComplexity int) int
-		SessionID   func(childComplexity int) int
-		StaleSince  func(childComplexity int) int
-		StartedAt   func(childComplexity int) int
-		State       func(childComplexity int) int
-		ToolCalls   func(childComplexity int) int
+		Cwd          func(childComplexity int) int
+		GitBranch    func(childComplexity int) int
+		HostID       func(childComplexity int) int
+		IssueNumber  func(childComplexity int) int
+		LastEventAt  func(childComplexity int) int
+		LastResponse func(childComplexity int) int
+		LastTool     func(childComplexity int) int
+		Mission      func(childComplexity int) int
+		Model        func(childComplexity int) int
+		PaneTitle    func(childComplexity int) int
+		PrNumber     func(childComplexity int) int
+		PrURL        func(childComplexity int) int
+		SessionID    func(childComplexity int) int
+		StaleSince   func(childComplexity int) int
+		StartedAt    func(childComplexity int) int
+		State        func(childComplexity int) int
+		ToolCalls    func(childComplexity int) int
 	}
 
 	GithubEvent struct {
@@ -364,18 +367,36 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.ClaudeSession.LastEventAt(childComplexity), true
+	case "ClaudeSession.lastResponse":
+		if e.ComplexityRoot.ClaudeSession.LastResponse == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClaudeSession.LastResponse(childComplexity), true
 	case "ClaudeSession.lastTool":
 		if e.ComplexityRoot.ClaudeSession.LastTool == nil {
 			break
 		}
 
 		return e.ComplexityRoot.ClaudeSession.LastTool(childComplexity), true
+	case "ClaudeSession.mission":
+		if e.ComplexityRoot.ClaudeSession.Mission == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClaudeSession.Mission(childComplexity), true
 	case "ClaudeSession.model":
 		if e.ComplexityRoot.ClaudeSession.Model == nil {
 			break
 		}
 
 		return e.ComplexityRoot.ClaudeSession.Model(childComplexity), true
+	case "ClaudeSession.paneTitle":
+		if e.ComplexityRoot.ClaudeSession.PaneTitle == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClaudeSession.PaneTitle(childComplexity), true
 	case "ClaudeSession.prNumber":
 		if e.ComplexityRoot.ClaudeSession.PrNumber == nil {
 			break
@@ -1215,6 +1236,13 @@ type ClaudeSession {
   startedAt: Time!
   lastEventAt: Time!
   staleSince: Time
+  # The following three are set only by the opt-in state-file channel (issue #28) and
+  # are null on sessions seen only through the hook/transcript channels. mission and
+  # lastResponse are rune-truncated prompt/response text — the plugin's only stored
+  # content — replicated over the peer mesh only when stateDir is enabled.
+  mission: String       # first prompt, truncated to 120 runes
+  lastResponse: String  # last assistant response, truncated to 200 runes
+  paneTitle: String     # tmux pane title for the session's pane
 }
 
 # ClaudeInstance is the projection of sessions pinned to a tmux pane+pid; its pane is
@@ -1500,6 +1528,12 @@ func (ec *executionContext) childFields_ClaudeSession(ctx context.Context, field
 		return ec.fieldContext_ClaudeSession_lastEventAt(ctx, field)
 	case "staleSince":
 		return ec.fieldContext_ClaudeSession_staleSince(ctx, field)
+	case "mission":
+		return ec.fieldContext_ClaudeSession_mission(ctx, field)
+	case "lastResponse":
+		return ec.fieldContext_ClaudeSession_lastResponse(ctx, field)
+	case "paneTitle":
+		return ec.fieldContext_ClaudeSession_paneTitle(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type ClaudeSession", field.Name)
 }
@@ -2720,6 +2754,75 @@ func (ec *executionContext) _ClaudeSession_staleSince(ctx context.Context, field
 }
 func (ec *executionContext) fieldContext_ClaudeSession_staleSince(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("ClaudeSession", field, false, false, errors.New("field of type Time does not have child fields"))
+}
+
+func (ec *executionContext) _ClaudeSession_mission(ctx context.Context, field graphql.CollectedField, obj *model.ClaudeSession) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ClaudeSession_mission(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Mission, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_ClaudeSession_mission(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ClaudeSession", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _ClaudeSession_lastResponse(ctx context.Context, field graphql.CollectedField, obj *model.ClaudeSession) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ClaudeSession_lastResponse(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.LastResponse, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_ClaudeSession_lastResponse(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ClaudeSession", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _ClaudeSession_paneTitle(ctx context.Context, field graphql.CollectedField, obj *model.ClaudeSession) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ClaudeSession_paneTitle(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.PaneTitle, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_ClaudeSession_paneTitle(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ClaudeSession", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
 func (ec *executionContext) _GithubEvent_ts(ctx context.Context, field graphql.CollectedField, obj *model.GithubEvent) (ret graphql.Marshaler) {
@@ -6642,6 +6745,21 @@ func (ec *executionContext) _ClaudeSession(ctx context.Context, sel ast.Selectio
 			}
 		case "staleSince":
 			out.Values[i] = ec._ClaudeSession_staleSince(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "mission":
+			out.Values[i] = ec._ClaudeSession_mission(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "lastResponse":
+			out.Values[i] = ec._ClaudeSession_lastResponse(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "paneTitle":
+			out.Values[i] = ec._ClaudeSession_paneTitle(ctx, field, obj)
 			if out.Values[i] == graphql.RequiredNull {
 				out.Invalids++
 			}

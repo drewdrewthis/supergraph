@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/drewdrewthis/supergraph/core"
 )
@@ -199,5 +200,50 @@ func TestStaleScanInjectedLiveness(t *testing.T) {
 	r, _ := st.get(ctx, "dead")
 	if r.StaleSince == nil {
 		t.Fatal("dead session should carry a staleSince marker, never be deleted")
+	}
+}
+
+func TestTruncRunes(t *testing.T) {
+	// A multibyte string so a byte-based cut would split a rune; truncRunes must not.
+	multi := strings.Repeat("é", 500) // 500 runes, 1000 bytes
+	got := truncRunes(multi, missionMaxRunes)
+	if n := utf8.RuneCountInString(got); n != missionMaxRunes {
+		t.Fatalf("truncRunes(500 runes,120) rune count = %d, want %d", n, missionMaxRunes)
+	}
+	if !utf8.ValidString(got) {
+		t.Fatal("truncRunes produced invalid UTF-8 (rune split at the boundary)")
+	}
+	if !strings.HasPrefix(multi, got) {
+		t.Fatal("truncRunes result is not a prefix of the input")
+	}
+	// Exactly n runes and fewer-than-n runes are returned unchanged.
+	if s := strings.Repeat("é", missionMaxRunes); truncRunes(s, missionMaxRunes) != s {
+		t.Fatal("a string of exactly n runes must be returned unchanged")
+	}
+	if s := "short"; truncRunes(s, missionMaxRunes) != s {
+		t.Fatal("a string shorter than n must be returned unchanged, unpadded")
+	}
+	// n+1 runes truncates to exactly n.
+	if s := strings.Repeat("a", missionMaxRunes+1); len(truncRunes(s, missionMaxRunes)) != missionMaxRunes {
+		t.Fatal("n+1 ASCII runes must truncate to exactly n")
+	}
+}
+
+func TestExpandTilde(t *testing.T) {
+	home := "/home/u"
+	cases := map[string]string{
+		"~/.local/state": "/home/u/.local/state",
+		"/abs/path":      "/abs/path",
+		"":               "",
+		"~notslash":      "~notslash", // only a leading "~/" expands
+	}
+	for in, want := range cases {
+		if got := expandTilde(in, home); got != want {
+			t.Errorf("expandTilde(%q,%q) = %q, want %q", in, home, got, want)
+		}
+	}
+	// An empty home leaves a "~/" path untouched (no anchor to expand against).
+	if got := expandTilde("~/x", ""); got != "~/x" {
+		t.Errorf("expandTilde with empty home = %q, want ~/x", got)
 	}
 }

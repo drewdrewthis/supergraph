@@ -34,5 +34,14 @@ func claudeSessionModel(row claude.SessionRow) model.ClaudeSession {
 	if row.PrURL != "" {
 		m.PrURL = &row.PrURL
 	}
+	if row.Mission != "" {
+		m.Mission = &row.Mission
+	}
+	if row.LastResponse != "" {
+		m.LastResponse = &row.LastResponse
+	}
+	if row.PaneTitle != "" {
+		m.PaneTitle = &row.PaneTitle
+	}
 	return m
 }

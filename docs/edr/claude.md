@@ -133,8 +133,8 @@ bodies would **replicate potentially sensitive session content across every box*
 | `sessionId`, `hostId`, `cwd`, `gitBranch`, `issueNumber` | **stored** | structural; join keys; `cwd` is a path, not content — **but a path can embed the OS username** (`/home/<user>/…`, `/Users/<user>/…`), which is stored and emitted, so it is not fully anonymous |
 | `model`, `state`, `lastTool` (name), `toolCalls` (count), `pane`, `pid` | **stored** | operational metadata; `lastTool` is the tool **name** only |
 | `startedAt`, `lastEventAt`, `staleSince`, `prNumber`, `prUrl` | **stored** | timing; PR fields are public |
-| **prompt text** (`last_prompt`/`first_prompt`) | **redacted** | user content; never crosses the mesh |
-| **assistant response text** (`last_response`) | **redacted** | model output content |
+| **prompt text** (`last_prompt`/`first_prompt`) | **redacted** on the hook/transcript channels; **opt-in** via the state-file channel as `mission` (below) | user content; stored only under `stateDir`, and box-local while the plugin exposes no executor (AC-CLAUDE-NO-EXECUTOR) |
+| **assistant response text** (`last_response`) | **redacted** on the hook/transcript channels; **opt-in** via the state-file channel as `lastResponse` (below) | model output content |
 | **`tool_input`** (command bodies, file contents, paths) | **redacted** | may contain secrets/paths; only the tool **name** is kept |
 | **`Notification` message body** | **redacted** | may name a gated command; stored as `awaitingInput:true` + `state:input` only |
 
@@ -142,6 +142,44 @@ bodies would **replicate potentially sensitive session content across every box*
 a new transcript field is dropped by default, not leaked. **AC-CLAUDE-PRIVACY** is a negative control:
 dump the db after a session with prompts/tool calls and assert **no prompt/response/tool_input bytes
 are present**.
+
+### The state-file carve-out (`mission`/`lastResponse`/`paneTitle`, issue #28, opt-in)
+
+A **third ingest channel** (`statefile.go`) scans `stateDir/*.json` — a Claude Code session's own state
+file — and is the **only prompt-bearing path** in the plugin. It has its own whitelist struct
+(`stateFile` in `redact.go`, carrying only `sid,cwd,pid,pane,state,first_prompt,last_response`); the
+`hookPayload` and `transcriptRecord` whitelists are **byte-for-byte unchanged**, so AC-CLAUDE-PRIVACY
+still passes on those two channels.
+
+| Field | Stored? | Why |
+|---|---|---|
+| `mission` (from `first_prompt`, ≤ 120 runes) | **stored only when `stateDir` is set** | opt-in prompt text; truncated to a valid-UTF-8 prefix |
+| `lastResponse` (from `last_response`, ≤ 200 runes) | **stored only when `stateDir` is set** | opt-in response text; truncated the same way |
+| `paneTitle` (from `tmux list-panes`, opt-in via `paneTitles`) | **stored only when `paneTitles` is true** | operational metadata; tmux is never spawned when off |
+
+**This channel is off by default** (`stateDir = ""` reads no directory at all), because it is the only
+one that stores user prompt text at all — the same concern that kept `ClaudeSession` free of a text
+field. Enabling it is an explicit operator choice.
+
+**Mesh status, stated precisely.** `plugins/peer/mirror.go` maps the `claude` op to the `claude` plugin,
+but that mapping has **no executor behind it**: the plugin registers only a `hook` route, so a peer's
+`POST /plugins/claude/graphql` 404s and **claude rows do not replicate today**. Prompt text stored under
+`stateDir` is therefore **box-local**. This is a property of the current routes, not a guarantee of the
+design — so it is pinned by **AC-CLAUDE-NO-EXECUTOR**, which fails the moment a `graphql` route appears
+on this plugin. Whoever adds that executor MUST decide what it exposes, and **must exclude `mission` and
+`lastResponse`** unless the mesh's privacy posture is deliberately widened at the same time.
+**AC-CLAUDE-PRIVACY-CARVEOUT** is the negative control: with `stateDir` empty a state file's secrets
+appear in **no** db byte, envelope, or GraphQL field; with it set they appear in `mission`/`lastResponse`
+and **nowhere else**.
+
+**Accepted: an inert state-file session can be pruned then reborn.** `applyStateFile` deliberately skips
+its write — and so does not bump `last_event_at` — when a re-scan finds nothing changed
+(AC-CLAUDE-STATEFILE-EMIT); that is what keeps an unchanged re-scan silent. The consequence: a
+state-file-only session that stays completely inert for `retentionDays` (default 30) gets pruned by
+`store.prune`, and the next scan simply re-inserts it as a "new" row. This is accepted, not a bug: a
+live session's state file changes on every real event, so a row that is 30 days inert is effectively
+dead already, and `pidLiveness` — not `last_event_at` — is the actual liveness signal; `last_event_at`
+is only a coarse GC clock.
 
 ## Install story — hook registration is OPT-IN, idempotent (owner decision C1)
 
@@ -172,9 +210,9 @@ correctness dependency — a box that never installs the hook still gets every s
 
 ## SQLite state (add-only, `IF NOT EXISTS`)
 
-- `claude_sessions(sid TEXT PK, host_id, cwd, git_branch, issue_number INT, model, state, last_tool, tool_calls INT, pane, pid INT, pr_number INT, pr_url, started_at, last_event_at, stale_since)` — `ClaudeInstance` is the projection of rows with a non-null `pane` (no second table).
+- `claude_sessions(sid TEXT PK, host_id, cwd, git_branch, issue_number INT, model, state, last_tool, tool_calls INT, pane, pid INT, pr_number INT, pr_url, started_at, last_event_at, stale_since, mission, last_response, pane_title)` — `ClaudeInstance` is the projection of rows with a non-null `pane` (no second table). `mission`/`last_response`/`pane_title` are add-only nullable columns (issue #28) applied idempotently by `ALTER TABLE ADD COLUMN` in `migrate` (a duplicate-column error is tolerated), written **only** by the opt-in state-file channel.
 - cursors live in core's `cursors` table: `tail:<transcriptPath>` = last byte offset (resume without re-reading); **AC-CLAUDE-CURSOR**.
-- **No prompt/response/tool_input columns exist** — privacy enforced by schema, not just by code.
+- **No `tool_input`/`Notification`-body column exists** — the hook/transcript channels store no content; `mission`/`last_response` hold prompt/response text **only** through the opt-in state-file channel (carve-out above).
 
 ## Schema (`plugins/claude/schema/claude.graphqls`, extend seam)
 
@@ -188,7 +226,8 @@ extend type Subscription { claudeSessionUpdated(hostId: String): ClaudeEvent! }
 
 type ClaudeSession { hostId: String!, sessionId: String!, cwd: String!, gitBranch: String,
   issueNumber: Int, model: String, state: String!, lastTool: String, toolCalls: Int!,
-  prNumber: Int, prUrl: String, startedAt: Time!, lastEventAt: Time!, staleSince: Time }
+  prNumber: Int, prUrl: String, startedAt: Time!, lastEventAt: Time!, staleSince: Time,
+  mission: String, lastResponse: String, paneTitle: String }  # last 3: opt-in state-file channel (issue #28)
 type ClaudeInstance { hostId: String!, pane: String!, pid: Int!, session: ClaudeSession!, staleSince: Time }
 # ClaudeEvent mirrors core.Envelope (Payload flattened to a string), matching TemplateEvent/GithubEvent
 # so the subscription resolver stays a plain envelope→model mapping — and so AC-CLAUDE-PRIVACY can read
@@ -222,12 +261,16 @@ S4 claude half) and `instances.graphql` (`$hostId`, the tmux-pinned instances).
 `hostId` (else hostname), `projectsDir` (default `~/.claude/projects`), `pidLiveness` (bool, default
 true), `scanIntervalSeconds` (tail poll cadence, default 5), `retentionDays` (prune sessions/folds whose
 last event is older than this on each tail tick, default 30; 0 disables), `settingsPath` (default
-`~/.claude/settings.json`, test override), `projectsDir` override drives `@local` tests. Stale-lag is
+`~/.claude/settings.json`, test override), `projectsDir` override drives `@local` tests.
+`stateDir` (issue #28 state-file channel; **default `""` = the prompt-bearing channel is disabled and no
+directory is read at all**; a leading `~/` expands against `$HOME`) and `paneTitles` (bool, **default
+false**; when true, `tmux list-panes` resolves `paneTitle` once per scan — tmux is never spawned when
+false). Stale-lag is
 core's global `lagThresholdSeconds` (the plugin does not duplicate it); the plugin's own liveness signal
 is the pid-liveness sweep. Hook install is a `supergraph install-claude-hook --install-hook` CLI flag (owner
 decision C1, default off), **not** a plugin config key — the plugin never writes settings itself.
 
-## LOC budget (prod, guard **750**; tests excluded)
+## LOC budget (prod, guard **900**; tests excluded)
 
 Table shows target vs **Actual** LOC (EDR strip formula: non-comment, non-blank). CLI hook-install delta
 lives in `cmd/supergraph/` and is counted separately, like github's. The **Actual** column is measured
@@ -243,10 +286,11 @@ measure (677).
 | `reducer.go` | 100 | **34** | 0 | ported state machine shared by hook + tail |
 | `tail.go` | 120 | **128** | +29 | poll-scan + JSONL parse + offset cursor + backfill/enrich + stale sweep; +capped `readLine` + retention call (S1/S2) |
 | `redact.go` | 30 | **76** | 0 | whitelist projection: hook + transcript record → body-free foldInput/enrichment (comment softened, S4) |
-| **Total** | **690** | **710** | +33 | guard **750** = measured 710 + 5% rounded up to a multiple of 10 (owner rule); ratcheted 790→750 after the config helpers moved to `plugins/internal/pluginconfig` (−35) |
+| `statefile.go` | — | **~80** | +80 | issue #28: third ingest channel — scan `stateDir/*.json` through the `stateFile` whitelist, rune-truncate `mission`/`lastResponse`, tmux pane titles, `~` expansion |
+| **Total** | **690** | **850** | +140 | guard **900** = measured 850 + 5% rounded up to a multiple of 10 (owner rule); ratcheted 750→900 for issue #28's state-file channel + the `mission`/`lastResponse`/`pane_title` columns (`store.go` grew with `applyStateFile`) |
 
-`live` was moved to `plugins/internal/single.Ptr[Plugin]` (post-tier §A) — LOC-neutral, measured
-holds at **710**, cap stays 750.
+`live` was moved to `plugins/internal/single.Ptr[Plugin]` (post-tier §A) — LOC-neutral. Issue #28 then
+added the state-file channel; measured total **850**, cap raised 750→900.
 
 CLI delta (`cmd/supergraph/install.go`, counted separately like github's): **183** actual (was 150) — the
 opt-in `install` (print-block + idempotent, now **atomic** `--install-hook` merge that refuses to
@@ -254,9 +298,9 @@ overwrite an unparseable file, M1) **and** the `claude-hook` stdin→POST forwar
 pick, S6). The `query --op --plugin` client change lives in `cmd/supergraph/query.go`, also separate.
 
 - **AC-CLAUDE-LOC** guards it: a CI step counts non-comment, non-blank prod lines under
-  `plugins/claude` excluding `*_test.go` and fails > **750** (same `sed`/`wc` formula as `make
-  loc-github`). Measured total **710**; the guard is measured + 5% rounded up to a multiple of 10
-  (**750**) per the owner rule — the Target column is the original estimate, not the guard.
+  `plugins/claude` excluding `*_test.go` and fails > **900** (same `sed`/`wc` formula as `make
+  loc-github`). Measured total **850**; the guard is measured + 5% rounded up to a multiple of 10
+  (**900**) per the owner rule — the Target column is the original estimate, not the guard.
 
 ## Failure modes
 

@@ -45,6 +45,11 @@ func (p *Plugin) runTail(ctx context.Context) {
 
 // scanOnce folds every new transcript line then runs the pid-liveness sweep.
 func (p *Plugin) scanOnce(ctx context.Context) {
+	// State files first: this channel is cheap (one small JSON read per session) and
+	// latency-sensitive — it carries `state`, including `input`, which the sidebar must
+	// see promptly. The transcript backfill below is neither: on a real history it can
+	// run for minutes, and scanning it first starves the state-file channel entirely.
+	p.scanStateFiles(ctx)
 	files, _ := filepath.Glob(filepath.Join(p.projectsDir, "*", "*.jsonl"))
 	for _, f := range files {
 		p.scanFile(ctx, f)

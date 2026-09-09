@@ -32,6 +32,13 @@ type ClaudeSession {
   startedAt: Time!
   lastEventAt: Time!
   staleSince: Time
+  # The following three are set only by the opt-in state-file channel (issue #28) and
+  # are null on sessions seen only through the hook/transcript channels. mission and
+  # lastResponse are rune-truncated prompt/response text — the plugin's only stored
+  # content — and are box-local: this plugin exposes no peer executor (AC-CLAUDE-NO-EXECUTOR).
+  mission: String       # first prompt, truncated to 120 runes
+  lastResponse: String  # last assistant response, truncated to 200 runes
+  paneTitle: String     # tmux pane title for the session's pane
 }
 
 # ClaudeInstance is the projection of sessions pinned to a tmux pane+pid; its pane is
