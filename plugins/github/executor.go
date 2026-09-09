@@ -239,7 +239,7 @@ func (p *Plugin) extractAndStore(ctx context.Context, template string, vars map[
 		}
 		body, _ := json.Marshal(obj)
 		n := &node{
-			Key: key, Typename: typenameFor(key), JSON: body,
+			Key: key, Typename: typenameFor(key), JSON: body, ContentHash: contentHash(body),
 			Pinned: p.evalPin(key, obj), FetchedAt: now, UpdatedAt: now,
 		}
 		if err := p.store.upsert(ctx, n); err != nil {

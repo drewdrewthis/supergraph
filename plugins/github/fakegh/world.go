@@ -92,6 +92,70 @@ func (s *Server) AddIssue(owner, repo string, number int, title, state string) s
 	})
 }
 
+// AddRichIssue stores an issue node in the full GraphQL node shape the openIssues
+// op returns (updatedAt, labels{nodes{name}}, assignees{nodes{login}}), so a test
+// can prove the reconcile revalidate keeps that shape rather than clobbering it
+// with the flat REST body serveNode returns for the same key.
+func (s *Server) AddRichIssue(owner, repo string, number int, title, state, updatedAt string, labels, assignees []string) string {
+	key := "issue:" + owner + "/" + repo + "#" + strconv.Itoa(number)
+	return s.SetNode(key, "Issue", map[string]any{
+		"number":    number,
+		"title":     title,
+		"state":     state,
+		"id":        key,
+		"url":       "https://github.com/" + owner + "/" + repo + "/issues/" + strconv.Itoa(number),
+		"updatedAt": updatedAt,
+		"labels":    nameNodes(labels),
+		"assignees": loginNodes(assignees),
+	})
+}
+
+// AddRichPR stores a pull-request node in the full GraphQL node shape the pr point
+// op returns (headRefName/baseRefName/body/updatedAt/labels), the PR analogue of
+// AddRichIssue. mergedAt/closedAt, when non-empty, populate the camelCase timestamps
+// the pin policy reads from the canonical GraphQL body (and set merged accordingly).
+func (s *Server) AddRichPR(owner, repo string, number int, title, state, updatedAt, headRef, baseRef, body string, labels []string, mergedAt, closedAt string) string {
+	key := "pr:" + owner + "/" + repo + "#" + strconv.Itoa(number)
+	node := map[string]any{
+		"number":      number,
+		"title":       title,
+		"state":       state,
+		"id":          key,
+		"url":         "https://github.com/" + owner + "/" + repo + "/pull/" + strconv.Itoa(number),
+		"updatedAt":   updatedAt,
+		"headRefName": headRef,
+		"baseRefName": baseRef,
+		"body":        body,
+		"labels":      nameNodes(labels),
+		"merged":      mergedAt != "",
+	}
+	if mergedAt != "" {
+		node["mergedAt"] = mergedAt
+	}
+	if closedAt != "" {
+		node["closedAt"] = closedAt
+	}
+	return s.SetNode(key, "PullRequest", node)
+}
+
+// nameNodes / loginNodes build the GraphQL connection shape ({nodes:[{name}...]})
+// for label and assignee lists.
+func nameNodes(names []string) map[string]any {
+	nodes := make([]any, 0, len(names))
+	for _, n := range names {
+		nodes = append(nodes, map[string]any{"name": n})
+	}
+	return map[string]any{"nodes": nodes}
+}
+
+func loginNodes(logins []string) map[string]any {
+	nodes := make([]any, 0, len(logins))
+	for _, l := range logins {
+		nodes = append(nodes, map[string]any{"login": l})
+	}
+	return map[string]any{"nodes": nodes}
+}
+
 // AddPR stores a pull-request node keyed pr:owner/repo#number. mergedAt is encoded
 // so the plugin's pin-grace logic can classify recently-merged PRs.
 func (s *Server) AddPR(owner, repo string, number int, title, state string, mergedAt time.Time) string {

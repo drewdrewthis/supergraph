@@ -395,6 +395,109 @@ func TestRunSubscribe_ExhaustsRetriesExitsTwoWithStderr(t *testing.T) {
 	}
 }
 
+// ---------- bug repro: a clean close/complete before any event must not exit 0 ----------
+
+func TestRunSubscribe_OnceCompleteBeforeAnyEventExitsTwo(t *testing.T) {
+	srv := fakeSubServer(func(conn *coderws.Conn, _ *http.Request) {
+		sub, err := ackAndSubscribe(conn)
+		if err != nil {
+			return
+		}
+		// Server ends the stream immediately, before ever pushing a `next` frame.
+		_ = srvWrite(conn, map[string]any{"id": sub["id"], "type": "complete"})
+	})
+	defer srv.Close()
+
+	var stdout, stderr strings.Builder
+	opts := subscribeOptions{
+		Field: "tmuxEvents", Once: true, Endpoint: srv.URL + "/graphql",
+		ConfigPath: filepath.Join(t.TempDir(), "missing.toml"),
+		MaxRetries: 1, Backoff: time.Millisecond,
+	}
+	code := runSubscribe(context.Background(), opts, &stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("exit code = %d, want 2 for a server `complete` before any event; stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want empty", stdout.String())
+	}
+	if stderr.Len() == 0 {
+		t.Fatal("stderr is empty, want an error naming the exhausted retries")
+	}
+}
+
+func TestRunSubscribe_OnceCleanSocketCloseBeforeAnyEventExitsTwo(t *testing.T) {
+	srv := fakeSubServer(func(conn *coderws.Conn, _ *http.Request) {
+		if _, err := ackAndSubscribe(conn); err != nil {
+			return
+		}
+		// Close cleanly (code 1000) without ever pushing a `next` frame; the
+		// deferred conn.Close in fakeSubServer would do this too, but make it
+		// explicit here since that's the exact scenario under test.
+		_ = conn.Close(coderws.StatusNormalClosure, "")
+	})
+	defer srv.Close()
+
+	var stdout, stderr strings.Builder
+	opts := subscribeOptions{
+		Field: "tmuxEvents", Once: true, Endpoint: srv.URL + "/graphql",
+		ConfigPath: filepath.Join(t.TempDir(), "missing.toml"),
+		MaxRetries: 1, Backoff: time.Millisecond,
+	}
+	code := runSubscribe(context.Background(), opts, &stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("exit code = %d, want 2 for a clean websocket close before any event; stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want empty", stdout.String())
+	}
+	if stderr.Len() == 0 {
+		t.Fatal("stderr is empty, want an error naming the exhausted retries")
+	}
+}
+
+func TestRunSubscribe_OnceRecoversAfterDropsThenDeliversEventExitsZero(t *testing.T) {
+	var conns int32
+	srv := fakeSubServer(func(conn *coderws.Conn, _ *http.Request) {
+		n := atomic.AddInt32(&conns, 1)
+		sub, err := ackAndSubscribe(conn)
+		if err != nil {
+			return
+		}
+		if n <= 2 {
+			// First two attempts drop (a `complete` with no event) before the
+			// third attempt actually delivers one.
+			_ = srvWrite(conn, map[string]any{"id": sub["id"], "type": "complete"})
+			return
+		}
+		env := map[string]any{"ts": "2026-01-01T00:00:00Z", "type": "tmux.event", "v": float64(1), "key": "k3", "payload": "{}"}
+		_ = srvWrite(conn, map[string]any{"id": sub["id"], "type": "next", "payload": map[string]any{"data": map[string]any{"tmuxEvents": env}}})
+	})
+	defer srv.Close()
+
+	var stdout, stderr strings.Builder
+	opts := subscribeOptions{
+		Field: "tmuxEvents", Once: true, Endpoint: srv.URL + "/graphql",
+		ConfigPath: filepath.Join(t.TempDir(), "missing.toml"),
+		MaxRetries: 2, Backoff: time.Millisecond,
+	}
+	code := runSubscribe(context.Background(), opts, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 after recovering from two drops; stderr=%q", code, stderr.String())
+	}
+	if atomic.LoadInt32(&conns) != 3 {
+		t.Fatalf("server saw %d connection(s), want exactly 3 (two drops then a delivering attempt)", conns)
+	}
+	out := strings.TrimRight(stdout.String(), "\n")
+	lines := strings.Split(out, "\n")
+	if len(lines) != 1 || lines[0] == "" {
+		t.Fatalf("stdout = %q, want exactly one line", stdout.String())
+	}
+	if !strings.Contains(lines[0], `"key":"k3"`) {
+		t.Fatalf("stdout = %q, want the event from the recovering attempt", stdout.String())
+	}
+}
+
 func TestRunSubscribe_UnreachableEndpointExitsTwo(t *testing.T) {
 	var stdout, stderr strings.Builder
 	opts := subscribeOptions{

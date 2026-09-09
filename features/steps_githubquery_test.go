@@ -188,7 +188,7 @@ func registerGithubQuerySteps(sc *godog.ScenarioContext, g *ghWorld) {
 	})
 	sc.Step(re(`^it exits zero against the cap raised to measured plus five percent$`), func() error {
 		if locExit != 0 {
-			return fmt.Errorf("make loc-github exited %d, want 0 (cap 1570)", locExit)
+			return fmt.Errorf("make loc-github exited %d, want 0 (cap 1650)", locExit)
 		}
 		return nil
 	})

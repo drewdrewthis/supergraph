@@ -3,7 +3,7 @@
 query issue($owner: String!, $repo: String!, $number: Int!) {
   repository(owner: $owner, name: $repo) {
     issue(number: $number) {
-      number title state id url updatedAt
+      number title state id url updatedAt closedAt
       labels(first: 20) { nodes { name } }
       assignees(first: 20) { nodes { login } }
     }

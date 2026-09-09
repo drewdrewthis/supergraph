@@ -52,13 +52,25 @@ func (p *Plugin) reconcileOnce(ctx context.Context) {
 // revalidate re-checks every cached non-pinned node against upstream via a
 // conditional GET, so staleness stays bounded by the reconcile interval for ALL
 // mutable kinds, not just open issues (P1). A 304 costs zero body quota; a 200
-// upserts the changed node and emits github.node.updated. fetch already carries the
-// If-None-Match / 304 / 200 logic, so healing is one call per node.
+// re-reads the canonical body and emits github.node.updated only when it changed.
+// One INFO line per pass records the tally so a reconcile run is observable.
 func (p *Plugin) revalidate(ctx context.Context) {
 	nodes, _ := p.store.nonPinnedNodes(ctx)
+	var checked, notModified, fetched, changed int
 	for _, n := range nodes {
-		_, _ = p.fetch(ctx, n.Key, n)
+		checked++
+		_, outcome, _ := p.fetchNode(ctx, n.Key, n)
+		switch outcome {
+		case outcomeNotModified:
+			notModified++
+		case outcomeUnchanged:
+			fetched++
+		case outcomeChanged:
+			fetched++
+			changed++
+		}
 	}
+	log.Printf("github: reconcile checked=%d notModified=%d fetched=%d changed=%d", checked, notModified, fetched, changed)
 }
 
 // discoverRepos pages GET /user/repos?affiliation=owner (F3 zero-config discovery),
