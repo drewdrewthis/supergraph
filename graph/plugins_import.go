@@ -17,4 +17,6 @@ import (
 	_ "github.com/drewdrewthis/supergraph/plugins/claude"
 	// tmux is the local tmux-server read model (docs/edr/tmux.md).
 	_ "github.com/drewdrewthis/supergraph/plugins/tmux"
+	// git is the local worktree read-model plugin (issue #29).
+	_ "github.com/drewdrewthis/supergraph/plugins/git"
 )

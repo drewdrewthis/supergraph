@@ -104,8 +104,8 @@ func TestParseAheadBehind(t *testing.T) {
 		wantAhead  *int
 		wantBehind *int
 	}{
-		{"valid tab-separated", "2\t5\n", intp(2), intp(5)},
-		{"genuine zero-zero is not nil", "0\t0\n", intp(0), intp(0)},
+		{"valid tab-separated", "2\t5\n", wtIntp(2), wtIntp(5)},
+		{"genuine zero-zero is not nil", "0\t0\n", wtIntp(0), wtIntp(0)},
 		{"empty output", "", nil, nil},
 		{"garbage", "garbage", nil, nil},
 		{"wrong field count", "1\t2\t3", nil, nil},
@@ -162,19 +162,19 @@ func TestRepoSlug(t *testing.T) {
 	})
 }
 
-func intp(n int) *int { return &n }
+func wtIntp(n int) *int { return &n }
 
 func assertIntPtrEqual(t *testing.T, label string, got, want *int) {
 	t.Helper()
 	if (got == nil) != (want == nil) {
-		t.Fatalf("%s = %v, want %v (nil-ness mismatch)", label, ptrStr(got), ptrStr(want))
+		t.Fatalf("%s = %v, want %v (nil-ness mismatch)", label, wtPtrStr(got), wtPtrStr(want))
 	}
 	if got != nil && *got != *want {
 		t.Fatalf("%s = %d, want %d", label, *got, *want)
 	}
 }
 
-func ptrStr(p *int) string {
+func wtPtrStr(p *int) string {
 	if p == nil {
 		return "nil"
 	}
