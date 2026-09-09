@@ -9,7 +9,7 @@
 # --queries-dir stays anchored here regardless of caller cwd.
 sg := env_var_or_default("SUPERGRAPH_BIN", "supergraph")
 
-# github pr(owner/repo, number): PR fields (flattened node, no .repository)
+# github pr(owner/repo, number): PR status fields (body omitted — use `q pr` for the raw node)
 pr-status owner_repo number:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -17,7 +17,7 @@ pr-status owner_repo number:
     {{ sg }} query --op pr --plugin github \
         --queries-dir "{{ source_directory() }}/queries" \
         --var owner="$owner" --var repo="$repo" --var number={{ number }} \
-        | jq '.pr'
+        | jq '.pr | {number, title, state, merged, url, headRefName, baseRefName, updatedAt, labels: [.labels.nodes[].name]}'
 
 # github checkRunsForPR: flattened list of check runs on a PR's head commit
 pr-checks owner_repo number:

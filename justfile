@@ -17,6 +17,13 @@ mod? claude "plugins/claude/mod.just"
 # tmux plugin recipes: `just tmux <recipe>`
 mod? tmux "plugins/tmux/mod.just"
 
+# `mod?` + `set fallback` below make this a no-op on a box with no global library.
+
+# global agent recipe library (drewdrewthis/just-recipes convention): `just global <recipe>`
+mod? global '~/.claude/just/justfile'
+
+set fallback
+
 # sg is overridable so CI/dev can point at a freshly-built binary instead of
 # whatever `supergraph` resolves to on PATH.
 sg := env_var_or_default("SUPERGRAPH_BIN", "supergraph")

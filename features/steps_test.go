@@ -163,6 +163,9 @@ func InitializeScenario(sc *godog.ScenarioContext) {
 
 	// --- subscribe CLI (@subscribe) ---
 	registerSubscribeSteps(sc, w)
+
+	// --- justfile agent tooling layer (@justfile @local) ---
+	registerJustfileSteps(sc)
 }
 
 // ---------- shared ----------

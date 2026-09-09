@@ -125,6 +125,24 @@ just -g github pr-status drewdrewthis/supergraph 32
 Suggested alias: `alias sg='just -g'`. `SUPERGRAPH_DATA_DIR` overrides the
 install location.
 
+### Mounting as a module
+
+The supergraph justfile can be mounted as a module from another justfile, so a
+project's own justfile can expose every supergraph recipe under one namespace:
+
+```
+mod? supergraph "~/.local/share/supergraph/justfile"
+```
+
+Then use `just supergraph github pr-status drewdrewthis/supergraph 32`. Nested
+module resolution works because each module anchors on `source_directory()`, so
+recipes still find their own plugin's `queries/` dir.
+
+List a nested module's recipes with `just --list supergraph` (not `just supergraph --list`).
+
+The root justfile mounts the global agent recipe library at `~/.claude/just/justfile`
+via `mod? global` + `set fallback`. Both are no-ops when that library is absent.
+
 ## Test
 
 ```
