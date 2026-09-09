@@ -12,8 +12,9 @@ import (
 
 // store is the claude plugin's SQLite state over core.Store (which owns the events
 // ring and cursors). It holds one table of session rows plus a fold-dedup set. There
-// is deliberately NO prompt/response/tool_input column — privacy is enforced by the
-// schema, not only by code (EDR §"SQLite state").
+// is deliberately NO tool_input or Notification-body column. `mission`/`last_response`
+// DO hold rune-truncated prompt/response text, but only via the opt-in state-file
+// channel — they stay NULL unless `stateDir` is set (EDR §"SQLite state", §Privacy).
 type store struct{ core *core.Store }
 
 // SessionRow is one ClaudeSession. ClaudeInstance is the projection of rows whose
@@ -93,6 +94,8 @@ const insertCols = `INSERT INTO claude_sessions
 
 // enrichSet is the COALESCE tail shared by both upserts: a zero/empty incoming field
 // never clobbers a stored value, so enrichment adds fields without erasing state.
+// NOTE: deliberately omits mission/last_response/pane_title — the state-file channel owns
+// those, and naming them here would let a hook fold clobber file-set text (issue #28).
 const enrichSet = `
 	last_event_at = excluded.last_event_at,
 	cwd          = CASE WHEN excluded.cwd <> ''         THEN excluded.cwd         ELSE claude_sessions.cwd END,
@@ -240,7 +243,18 @@ func (s *store) stateOf(ctx context.Context, sid string) State {
 	return State(st)
 }
 
-const selectCols = `SELECT sid,host_id,cwd,git_branch,issue_number,model,state,last_tool,tool_calls,pane,pid,pr_number,pr_url,started_at,last_event_at,stale_since,mission,last_response,pane_title FROM claude_sessions`
+// selectCols COALESCEs every non-nullable column so a NULL left by any INSERT that
+// omits a column can never make a row unscannable — and therefore invisible to every
+// read. Only mission/last_response/pane_title are intentionally nullable (NullString).
+const selectCols = `SELECT
+	COALESCE(sid,'') AS sid, COALESCE(host_id,'') AS host_id, COALESCE(cwd,'') AS cwd,
+	COALESCE(git_branch,'') AS git_branch, COALESCE(issue_number,0) AS issue_number,
+	COALESCE(model,'') AS model, COALESCE(state,'') AS state, COALESCE(last_tool,'') AS last_tool,
+	COALESCE(tool_calls,0) AS tool_calls, COALESCE(pane,'') AS pane, COALESCE(pid,0) AS pid,
+	COALESCE(pr_number,0) AS pr_number, COALESCE(pr_url,'') AS pr_url,
+	COALESCE(started_at,'') AS started_at, COALESCE(last_event_at,'') AS last_event_at,
+	COALESCE(stale_since,'') AS stale_since, mission, last_response, pane_title
+	FROM claude_sessions`
 
 func scanRow(sc interface{ Scan(...any) error }) (SessionRow, error) {
 	var (

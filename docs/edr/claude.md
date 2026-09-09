@@ -172,6 +172,15 @@ on this plugin. Whoever adds that executor MUST decide what it exposes, and **mu
 appear in **no** db byte, envelope, or GraphQL field; with it set they appear in `mission`/`lastResponse`
 and **nowhere else**.
 
+**Accepted: an inert state-file session can be pruned then reborn.** `applyStateFile` deliberately skips
+its write — and so does not bump `last_event_at` — when a re-scan finds nothing changed
+(AC-CLAUDE-STATEFILE-EMIT); that is what keeps an unchanged re-scan silent. The consequence: a
+state-file-only session that stays completely inert for `retentionDays` (default 30) gets pruned by
+`store.prune`, and the next scan simply re-inserts it as a "new" row. This is accepted, not a bug: a
+live session's state file changes on every real event, so a row that is 30 days inert is effectively
+dead already, and `pidLiveness` — not `last_event_at` — is the actual liveness signal; `last_event_at`
+is only a coarse GC clock.
+
 ## Install story — hook registration is OPT-IN, idempotent (owner decision C1)
 
 Because the **tail is the correctness floor**, the hook is a latency/pane/​input enhancement, never a
