@@ -2,6 +2,7 @@ package features
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -52,20 +53,22 @@ func requireJust() error {
 func registerJustfileSteps(sc *godog.ScenarioContext) {
 	j := &jw{}
 
-	sc.BeforeScenario(func(*godog.Scenario) {
+	sc.Before(func(ctx context.Context, _ *godog.Scenario) (context.Context, error) {
 		tmp, err := os.MkdirTemp("", "sg-justfile-*")
 		if err != nil {
-			panic(err)
+			return ctx, err
 		}
 		j.tmpDir = tmp
 		j.listOut = map[string]string{}
 		j.captures = nil
+		return ctx, nil
 	})
-	sc.AfterScenario(func(*godog.Scenario, error) {
+	sc.After(func(ctx context.Context, _ *godog.Scenario, _ error) (context.Context, error) {
 		if j.tmpDir != "" {
 			os.RemoveAll(j.tmpDir)
 		}
 		*j = jw{}
+		return ctx, nil
 	})
 
 	// AC-JUST-LIST
