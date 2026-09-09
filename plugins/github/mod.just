@@ -108,9 +108,14 @@ branch-ref owner_repo branch:
         --var owner="$owner" --var repo="$repo" --var branch="$2" \
         | jq '.paneForBranch.repository.ref'
 
-# NOTE: plugins/github/queries/issue.graphql (the executor variant) is
-# shadowed — `--op issue --plugin github` always routes to the core-typed op
-# below, so the executor file is unreachable from the CLI and has no recipe.
+# NOTE: plugins/github/queries/issue.graphql has no recipe here, but DO NOT
+# DELETE IT. `--op issue --plugin github` always routes to the core-typed op
+# below (cmd/supergraph/query.go coreTypedOps), so the file is unreachable
+# from the CLI only. It is still load-bearing SERVER-side: executor.go embeds
+# queries/*.graphql into p.ops, and proxy.go's canonicalBody looks up
+# p.ops["issue"] to re-read a landed issue through its GraphQL point op.
+# Removing the file makes that lookup miss and silently falls back to the REST
+# body — reintroducing the empty-labels bug PR #32 fixed.
 
 # --- github (cached/typed) ---
 
