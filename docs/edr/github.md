@@ -11,44 +11,48 @@ exactly the entries that touch the changed object (tag purge = keyed delete)**. 
 `brunoborges/ghx` was read in full (see [History](#history)); it is **not vendored** — we borrow only
 its singleflight pattern (~40 LOC, `ghx src/internal/daemon/handler.go:203`).
 
-**Hard constraints (owner):** ≤ **1650 LOC prod** (raised 800→1300→1350→1540→1570→1650, Option A) for `plugins/github/**` excluding tests and
+**Hard constraints (owner):** ≤ **1810 LOC prod** (raised 800→1300→1350→1540→1570→1650→1810, Option A) for `plugins/github/**` excluding tests and
 `internal/fakegh` (per-package budget below); zero core diff; PAT-only; HMAC per hook; per-repo hook
 creation from `/user/repos` (F3); point-budget floor pause + rate-limit logging; CLI `--op/--var` +
 `schema <Type>` in `cmd/` only; fakegh httptest server + fake `gh` stub for `@local`.
 
 ---
 
-## LOC budget (prod, cap **1650** total; tests + `internal/fakegh` excluded)
-Cap raised 800→1300→1350→1540→1570→**1650** by owner (Option A, 2026-09-05;
-1570→1650 on 2026-09-07, canonical GraphQL refetch + hash-gated events). The
-1350→1540 ratchet paid for the typed cache-only reads + the PRD cross-plugin join
-([github-query EDR](./github-query.md)): `query.go` (typed `IssueNode`/`PRNode` +
-`mapIssue`/`mapPR` + exported `Issue`/`PullRequest`/`IssuesForRepo`/`CachedPRs`
-accessors), `store.go`'s `nodesByKind`, and `github.go`'s `current` accessor pointer
-(measured 1466). The 1540→1570 ratchet paid for the security-review fixes:
-`nodesByKind`'s LIKE-escaping + `IssuesForRepo`/`CachedPRs`/`Issue`/`PullRequest`
-owner/repo validation (`safeName`/`safeKey`, S1), the per-request join memo on
-`IssueNode`, and the `single.Ptr` alignment of `current`.
-New cap = measured **1486** + 5% rounded up to 10. Table shows **Actual** LOC (EDR
+## LOC budget (prod, cap **1810** total; tests + `internal/fakegh` excluded)
+Cap raised 800→1300→1350→1540→1570→1650→**1810** by owner (Option A, 2026-09-05;
+1570→1650 on 2026-09-07, canonical GraphQL refetch + hash-gated events;
+1650→1810 on 2026-09-09, **#26 PR sidebar-parity fields**). The #26 ratchet paid
+for `query.go`'s `draft`/`reviewDecision`/`statusCheckRollup`/`mergeStateStatus`
+projection (`nodeJSON` nested `commits`→flat `PRNode` pointers + `ptrIf`), `keys.go`'s
+`relatedKeys` check_run→pr invalidation fan-out, and `webhook.go`'s related-key purge
+loop; `pullRequestsForRepo` reuses the existing `CachedPRs` accessor and adds no
+guarded-package LOC (its resolver lives in `graph/`).
+New cap = measured **1715** + 5% rounded up to 10. Table shows **Actual** LOC (EDR
 strip formula), not aspirational budgets.
 | Package/file (`plugins/github/`) | Actual | Responsibility |
 |---|---:|---|
-| `github.go` | 151 | plugin wiring: `Register`/`New`/`Name`/`Migrate`/`Start`/`HTTPRoutes`/`CursorReporter`/config + `current` accessor pointer (github-query D2) |
-| `keys.go` | 185 | key grammar as a **data table** (`kindSpecs`): parse + object→key + event→key + REST path + typename + `safeName` (S1) |
+| `github.go` | 166 | plugin wiring: `Register`/`New`/`Name`/`Migrate`/`Start`/`HTTPRoutes`/`CursorReporter`/config + `current` accessor pointer (github-query D2) |
+| `keys.go` | 211 | key grammar as a **data table** (`kindSpecs`): parse + object→key + event→key + REST path + typename + `safeName` (S1) + `relatedKeys` check_run→pr fan-out (#26) |
 | `client.go` | 106 | shared GitHub HTTP + rate-limit layer: REST/GraphQL calls, auth, ratelog, floor-pause |
-| `store.go` | 236 | SQLite `github_nodes`+`github_tags`+`github_hooks`+`github_deliveries`: upsert, get, purge, tag index, hooks, deliveries prune, non-pinned scan, pin, `nodesByKind` + `escapeLike` LIKE-escaping (github-query, S1) |
-| `query.go` | 163 | typed cache-only reads (github-query D4/D5): `IssueNode`/`PRNode` (+ per-request join `issueMemo`) + `mapIssue`/`mapPR` + `safeKey` (S1) + exported `Issue`/`PullRequest`/`IssuesForRepo`/`CachedPRs` + `Assignee` + `assigneesOf` (dispatcher) |
-| `proxy.go` | 118 | read-through resolve: miss→fetch→store→serve; ETag/304; **singleflight (borrowed ~40)**; pin eval |
-| `webhook.go` | 63 | HMAC verify (1 MiB body cap, S2); event→key; purge; emit envelopes; delivery dedup |
+| `store.go` | 244 | SQLite `github_nodes`+`github_tags`+`github_hooks`+`github_deliveries`: upsert, get, purge, tag index, hooks, deliveries prune, non-pinned scan, pin, `nodesByKind` + `escapeLike` LIKE-escaping (github-query, S1) |
+| `query.go` | 193 | typed cache-only reads (github-query D4/D5): `IssueNode`/`PRNode` (+ per-request join `issueMemo` + #26 sidebar fields) + `mapIssue`/`mapPR` + `ptrIf` + `safeKey` (S1) + exported `Issue`/`PullRequest`/`IssuesForRepo`/`CachedPRs` + `Assignee` + `assigneesOf` (dispatcher) |
+| `proxy.go` | 190 | read-through resolve: miss→fetch→store→serve; ETag/304; **singleflight (borrowed ~40)**; pin eval |
+| `webhook.go` | 74 | HMAC verify (1 MiB body cap, S2); event→key; purge; emit envelopes; delivery dedup; #26 related-key purge fan-out |
 | `executor.go` | 255 | JSON-backed GraphQL executor + named-op loader + declared-key scoping (point/list) + list read path (U2) + body cap (S2) + parsed introspection allowlist (raw-query guard hardening) |
-| `ingest.go` | 116 | `gh webhook forward` supervisor (backoff) + redelivery + `/notifications` poll (flag) |
-| `reconcile.go` | 110 | discovery `/user/repos` + hook creation + since-cursor + revalidation (P1) + deliveries prune (S3) |
-| **Total** | **1555** | cap **1570** (headroom 15); CLI delta in `cmd/supergraph/` (~70) is counted separately, not in this budget |
-- **AC-GH-LOC / AC-GHQ-LOC** guard it: a CI step (`make loc-github`) runs `find plugins/github -name '*.go' ! -name '*_test.go' -not -path '*/fakegh/*' | xargs sed -E '/^[[:space:]]*\/\//d;/^[[:space:]]*$/d' | wc -l` and fails > 1570 (POSIX `[[:space:]]`, portable across GNU/BSD sed). The shared `internal/issuekey` package (28 LOC) has its own **`make loc-issuekey`** gate (cap 30), outside this budget.
+| `ingest.go` | 135 | `gh webhook forward` supervisor (backoff) + redelivery + `/notifications` poll (flag) |
+| `reconcile.go` | 141 | discovery `/user/repos` + hook creation + since-cursor + revalidation (P1) + deliveries prune (S3) |
+| **Total** | **1715** | cap **1810** (headroom 95); CLI delta in `cmd/supergraph/` (~70) is counted separately, not in this budget |
+- **AC-GH-LOC / AC-GHQ-LOC / AC-GHPR-LOC** guard it: a CI step (`make loc-github`) runs `find plugins/github -name '*.go' ! -name '*_test.go' -not -path '*/fakegh/*' | xargs sed -E '/^[[:space:]]*\/\//d;/^[[:space:]]*$/d' | wc -l` and fails > 1810 (POSIX `[[:space:]]`, portable across GNU/BSD sed). The shared `internal/issuekey` package (28 LOC) has its own **`make loc-issuekey`** gate (cap 30), outside this budget.
 - The `strOr`/`boolOr`/`intOr`/`toInt`/`readErrStatus` config helpers moved to `plugins/internal/pluginconfig` (−39 from the pre-migration 1350 baseline); the typed `Query.issue`/`pullRequest`/`issuesForRepo` reads plus the cross-plugin join accessors (`query.go`, `nodesByKind`, `current`) added the github-query surface (**1466 measured**, cap 1540); the security-review fixes (LIKE-escaping, owner/repo validation, join memo, `single.Ptr`) then landed at **1486 measured**; cap = 1486 × 1.05 rounded up to 10 = **1570** (owner rule). The dispatcher additions
 (2026-09-07 — `Issue.assignees` mapping + `issueUpdated` subscription) landed at **1555 measured**;
 **cap unchanged at 1570** (headroom 15, no ratchet). Subscription/resolver code lives in `graph/`,
 outside the budget.
+- **#26 (2026-09-09 — PR sidebar-parity fields):** `query.go`'s `draft`/`reviewDecision`/
+`statusCheckRollup`/`mergeStateStatus` projection (nested `commits`→flat `PRNode` pointers + `ptrIf`,
+statusCheckRollup read verbatim, never re-derived from check runs), `keys.go`'s `relatedKeys`
+check_run→pr invalidation fan-out, and `webhook.go`'s related-key purge loop landed at **1715 measured**;
+cap = 1715 × 1.05 rounded up to 10 = **1810** (owner rule). `pullRequestsForRepo` reuses `CachedPRs` and
+its resolver lives in `graph/`, so it adds zero guarded-package LOC.
 
 ## Cache key = object id (full grammar)
 Every cached node and every purge target is one canonical key. `@<hostId>` suffix is **optional**,

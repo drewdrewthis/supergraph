@@ -259,3 +259,39 @@ no PAT; `@live @pending` = needs a real PAT/GitHub.
 - ACs ready for ac-reviewer (see §AC draft above).
 - Implementation → coder (steps 2–4, 6 are mechanical → fast-coder; steps 5, 9 need judgment →
   coder), per ~/.knowledge/modules/shared/records/model-selection.md.
+
+## PR sidebar-parity fields (#26)
+
+Add-only surface exposing the four GitHub "PR sidebar" fields plus a repo-scoped PR
+list, so a dashboard renders draft/review/checks/mergeability from cache without a
+live GitHub round-trip.
+
+- **Schema (add-only):** `PullRequest` gains `draft: Boolean!`, `reviewDecision: String`,
+  `statusCheckRollup: String`, `mergeStateStatus: String`; `Query` gains
+  `pullRequestsForRepo(owner,repo): [PullRequest!]!` (the cache-only analogue of
+  `issuesForRepo`, served by the existing `CachedPRs` accessor — zero guarded-package LOC).
+
+- **Nested-upstream → flat-string projection.** `statusCheckRollup` is a **projection**,
+  not a re-derivation. Upstream GraphQL carries it deep:
+  `commits(last:1).nodes[0].commit.statusCheckRollup.state`. `mapPR` reads that one `state`
+  string **verbatim** onto `PRNode.StatusCheckRollup`. It is never computed from the cached
+  `checkRun` node list — a rollup of `FAILURE` is served as `FAILURE` even if every cached
+  check-run conclusion is `success` (**AC-GHPR-ROLLUP-RAW**). GitHub already reduced the
+  per-check states into the rollup; re-deriving would risk disagreeing with the sidebar the
+  field is meant to mirror.
+
+- **Nullability.** `reviewDecision` and `statusCheckRollup` are nullable and map through
+  `ptrIf`: an empty upstream string (no review yet, no rollup yet) becomes GraphQL **null**,
+  never `""` or a coerced default. A present-but-non-empty value is passed through unchanged —
+  `mergeStateStatus:"UNKNOWN"` stays `"UNKNOWN"` (**AC-GHPR-NULLS**). `draft` is non-null
+  (`Boolean!`), defaulting to `false`.
+
+- **check_run → pr invalidation fan-out.** A `check_run` webhook's primary key is
+  `checkRun:{owner}/{repo}/{id}`, which alone would never purge the PR, so the sidebar's
+  `statusCheckRollup` would stay stale until the next reconcile pass. `keys.go`'s `relatedKeys`
+  reads `check_run.pull_requests[].number` and returns a `pr:{owner}/{repo}#{number}` key per
+  named PR; `handleWebhook` purges each related key and emits one `github.node.purged` envelope
+  for it (deduped against the primary, and a related-key purge failure logs-and-continues rather
+  than failing the whole webhook, since the primary already succeeded). The next read then
+  refetches the fresh rollup (**AC-GHPR-CHECKRUN-EVENT**). `pull_request` / `pull_request_review`
+  webhooks already address the PR key directly, so they need no fan-out.

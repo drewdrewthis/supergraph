@@ -63,6 +63,12 @@ type PRNode struct {
 	HeadRefName string
 	BaseRefName *string
 	Body        string
+	// Sidebar-parity fields (#26). Draft is non-null; the three pointers are nil
+	// when upstream is empty so "no review/rollup yet" is GraphQL null, not "".
+	Draft             bool
+	ReviewDecision    *string
+	StatusCheckRollup *string
+	MergeStateStatus  *string
 }
 
 // nodeJSON is the subset of an octokit/GraphQL node body the typed reads map from.
@@ -74,7 +80,21 @@ type nodeJSON struct {
 	Body      string `json:"body"`
 	HeadRef   string `json:"headRefName"`
 	BaseRef   string `json:"baseRefName"`
-	Labels    struct {
+	IsDraft   bool   `json:"isDraft"`
+	ReviewDec string `json:"reviewDecision"`
+	MergeSt   string `json:"mergeStateStatus"`
+	// Commits mirrors commits(last:1){nodes{commit{statusCheckRollup{state}}}}: the
+	// rollup STATE is read verbatim, never derived from the check-run list (#26).
+	Commits struct {
+		Nodes []struct {
+			Commit struct {
+				StatusCheckRollup *struct {
+					State string `json:"state"`
+				} `json:"statusCheckRollup"`
+			} `json:"commit"`
+		} `json:"nodes"`
+	} `json:"commits"`
+	Labels struct {
 		Nodes []struct {
 			Name string `json:"name"`
 		} `json:"nodes"`
@@ -153,7 +173,24 @@ func mapPR(key string, raw []byte) *PRNode {
 	if j.BaseRef != "" {
 		n.BaseRefName = &j.BaseRef
 	}
+	n.Draft = j.IsDraft
+	n.ReviewDecision = ptrIf(j.ReviewDec)
+	n.MergeStateStatus = ptrIf(j.MergeSt)
+	if len(j.Commits.Nodes) > 0 {
+		if r := j.Commits.Nodes[0].Commit.StatusCheckRollup; r != nil {
+			n.StatusCheckRollup = ptrIf(r.State)
+		}
+	}
 	return n
+}
+
+// ptrIf returns &s, or nil when s is empty — so an absent upstream string (no
+// review decision, no rollup) projects to GraphQL null rather than "" (#26).
+func ptrIf(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
 }
 
 // Issue returns the cached issue at key, or nil on a miss (never an upstream hop —

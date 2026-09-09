@@ -22,6 +22,7 @@ type ghqState struct {
 	issueSet bool // an `issue` query ran (distinguishes null from "not queried")
 	issues   []map[string]any
 	pr       map[string]any
+	prs      []map[string]any // pullRequestsForRepo result (#26)
 	samples  []time.Duration
 }
 
@@ -176,6 +177,9 @@ func registerGithubQuerySteps(sc *godog.ScenarioContext, g *ghWorld) {
 		return nil
 	})
 
+	// ---------- PR sidebar-parity fields (#26) ----------
+	registerGithubPRFieldSteps(sc, g, st, re)
+
 	// ---------- AC-GHQ-LOC / AC-GHQ-ZEROCORE ----------
 	var locExit int
 	var diffOut string
@@ -188,7 +192,7 @@ func registerGithubQuerySteps(sc *godog.ScenarioContext, g *ghWorld) {
 	})
 	sc.Step(re(`^it exits zero against the cap raised to measured plus five percent$`), func() error {
 		if locExit != 0 {
-			return fmt.Errorf("make loc-github exited %d, want 0 (cap 1650)", locExit)
+			return fmt.Errorf("make loc-github exited %d, want 0 (cap 1810)", locExit)
 		}
 		return nil
 	})
@@ -288,7 +292,7 @@ func (g *ghWorld) ghqQueryIssue(st *ghqState, n int, sel string) error {
 
 func (g *ghWorld) ghqQueryPR(st *ghqState, n int) error {
 	g.fake.ResetLog()
-	q := fmt.Sprintf(`{ pullRequest(key: "pr:o/r#%d") { number headRefName state url } }`, n)
+	q := fmt.Sprintf(`{ pullRequest(key: "pr:o/r#%d") { number headRefName state url draft reviewDecision statusCheckRollup mergeStateStatus } }`, n)
 	_, data, err := g.sw.gql(q)
 	if err != nil {
 		return err
@@ -538,4 +542,409 @@ func jsonField(node map[string]any, field string) string {
 	}
 	b, _ := json.Marshal(node[field])
 	return string(b)
+}
+
+// ===================== PR sidebar-parity fields (#26) =====================
+
+// registerGithubPRFieldSteps wires the #26 scenarios (draft/reviewDecision/
+// statusCheckRollup/mergeStateStatus + pullRequestsForRepo + the check_run→pr
+// invalidation fan-out) onto the same ghWorld/ghqState the other github-query
+// steps use. re is the shared compiler passed in so the closure style matches.
+func registerGithubPRFieldSteps(sc *godog.ScenarioContext, g *ghWorld, st *ghqState, re func(string) *regexp.Regexp) {
+	// ---------- Given ----------
+	sc.Step(re(`^pull request \x60pr:o/r#(\d+)\x60 is warmed through the \x60pr\x60 op with draft (true|false), reviewDecision (null|"[^"]*"), statusCheckRollup (null|"[^"]*"), mergeStateStatus (null|"[^"]*")$`),
+		func(n, draft, rev, roll, merge string) error {
+			return g.ghqWarmPR(atoiMust(n), draft == "true", prFieldVal(rev), prFieldVal(roll), prFieldVal(merge))
+		})
+	sc.Step(re(`^pull request \x60pr:o/r#(\d+)\x60 is in the store with draft (true|false), reviewDecision (null|"[^"]*"), statusCheckRollup (null|"[^"]*"), mergeStateStatus (null|"[^"]*")$`),
+		func(n, draft, rev, roll, merge string) error {
+			return g.ghqSeedPRSidebar(atoiMust(n), draft == "true", prFieldVal(rev), prFieldVal(roll), prFieldVal(merge))
+		})
+	sc.Step(re(`^cached checkRun nodes for \x60pr:o/r#(\d+)\x60 all report success$`),
+		func(n string) error { return g.ghqSeedCheckRunsSuccess(atoiMust(n)) })
+	sc.Step(re(`^the \x60openPRs\x60 op has been warmed for \x60o/r\x60 with PRs #(\d+), #(\d+) carrying the four sidebar fields$`),
+		func(a, b string) error { return g.ghqWarmOpenPRs(atoiMust(a), atoiMust(b)) })
+	sc.Step(re(`^a websocket subscription to \x60checkRunUpdated\x60 is open$`),
+		func() error { return g.ghqOpenCheckRunSub() })
+	sc.Step(re(`^upstream \x60pr:o/r#(\d+)\x60 changes draft to (true|false)$`),
+		func(n, v string) error { return g.ghqMutatePRField(atoiMust(n), "draft", v) })
+	sc.Step(re(`^upstream \x60pr:o/r#(\d+)\x60 changes (reviewDecision|statusCheckRollup|mergeStateStatus) to "([^"]*)"$`),
+		func(n, field, v string) error { return g.ghqMutatePRField(atoiMust(n), field, v) })
+
+	// ---------- When ----------
+	sc.Step(re(`^\x60pullRequestsForRepo\x60 is queried for owner "([^"]*)" repo "([^"]*)"$`),
+		func(owner, repo string) error { return g.ghqQueryPRsForRepo(st, owner, repo) })
+	sc.Step(re(`^\x60pr:o/r#(\d+)\x60 is re-warmed and queried again$`),
+		func(n string) error { return g.ghqRewarmAndQueryPR(st, atoiMust(n)) })
+	sc.Step(re(`^a signed \x60check_run\x60 webhook naming pull request #(\d+) is received$`),
+		func(n string) error { return g.ghqCheckRunWebhook(atoiMust(n)) })
+	sc.Step(re(`^a signed \x60pull_request\x60 webhook naming PR #(\d+) is received$`),
+		func(n string) error { return g.ghqPRWebhook(atoiMust(n)) })
+	sc.Step(re(`^a signed \x60pull_request_review\x60 webhook naming PR #(\d+) is received$`),
+		func(n string) error { return g.ghqReviewWebhook(atoiMust(n)) })
+	sc.Step(re(`^the reconcile revalidate pass runs once$`), g.reconcileRunsOnce)
+
+	// ---------- Then ----------
+	sc.Step(re(`^the returned pull request's draft is (true|false)$`), func(want string) error {
+		if st.pr == nil {
+			return fmt.Errorf("pullRequest was null, want draft %s", want)
+		}
+		got, _ := st.pr["draft"].(bool)
+		if fmt.Sprintf("%t", got) != want {
+			return fmt.Errorf("draft = %t, want %s", got, want)
+		}
+		return nil
+	})
+	sc.Step(re(`^the returned pull request's (reviewDecision|statusCheckRollup|mergeStateStatus) is "([^"]*)"$`),
+		func(field, want string) error {
+			if st.pr == nil {
+				return fmt.Errorf("pullRequest was null, want %s %q", field, want)
+			}
+			got, ok := st.pr[field].(string)
+			if !ok {
+				return fmt.Errorf("%s = %v (null), want %q", field, st.pr[field], want)
+			}
+			if got != want {
+				return fmt.Errorf("%s = %q, want %q", field, got, want)
+			}
+			return nil
+		})
+	sc.Step(re(`^the returned pull request's (reviewDecision|statusCheckRollup|mergeStateStatus) is null$`),
+		func(field string) error {
+			if st.pr == nil {
+				return fmt.Errorf("pullRequest was null")
+			}
+			if v := st.pr[field]; v != nil {
+				return fmt.Errorf("%s = %v, want null", field, v)
+			}
+			return nil
+		})
+	sc.Step(re(`^exactly pull requests #(\d+), #(\d+) are returned$`), func(a, b string) error {
+		return assertPRNumbers(st.prs, atoiMust(a), atoiMust(b))
+	})
+	sc.Step(re(`^each returned pull request has draft, reviewDecision, statusCheckRollup and mergeStateStatus populated$`), func() error {
+		if len(st.prs) == 0 {
+			return fmt.Errorf("no pull requests returned")
+		}
+		for _, r := range st.prs {
+			if _, ok := r["draft"].(bool); !ok {
+				return fmt.Errorf("draft missing on %v", r)
+			}
+			for _, f := range []string{"reviewDecision", "statusCheckRollup", "mergeStateStatus"} {
+				if r[f] == nil {
+					return fmt.Errorf("%s null on %v", f, r)
+				}
+			}
+		}
+		return nil
+	})
+	sc.Step(re(`^an empty pull request list is returned$`), func() error {
+		if len(st.prs) != 0 {
+			return fmt.Errorf("pullRequestsForRepo returned %d, want 0", len(st.prs))
+		}
+		return nil
+	})
+	sc.Step(re(`^the pull request result is null$`), func() error {
+		if st.pr != nil {
+			return fmt.Errorf("pullRequest = %v, want null", st.pr)
+		}
+		return nil
+	})
+	sc.Step(re(`^exactly one envelope keyed \x60(pr:o/r#\d+)\x60 is pushed on the \x60checkRunUpdated\x60 subscription$`),
+		func(key string) error { return g.ghqAssertOnePush(key) })
+	sc.Step(re(`^\x60(pr:o/r#\d+)\x60 is purged from the cache$`), func(key string) error {
+		exists, err := g.nodeExists(key)
+		if err != nil {
+			return err
+		}
+		if exists {
+			return fmt.Errorf("%s still cached after webhook, want purged", key)
+		}
+		return nil
+	})
+
+	// ---------- AC-GHPR-ADDONLY ----------
+	var schemaDiff string
+	sc.Step(re(`^\x60git diff main -- plugins/github/schema/github\.graphqls\x60 is run$`), func() error {
+		cmd := exec.Command("git", "diff", "main", "--", "plugins/github/schema/github.graphqls")
+		cmd.Dir = repoRoot
+		out, _ := cmd.CombinedOutput()
+		schemaDiff = string(out)
+		return nil
+	})
+	sc.Step(re(`^the schema diff has no deleted or retyped lines$`), func() error {
+		for _, line := range strings.Split(schemaDiff, "\n") {
+			if strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "---") {
+				return fmt.Errorf("schema diff has a deletion line (not additions-only):\n%s", line)
+			}
+		}
+		return nil
+	})
+}
+
+// prFieldVal maps a feature cell to a stored value: `null` → "" (which projects to
+// GraphQL null / false), otherwise the unquoted string.
+func prFieldVal(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "null" {
+		return ""
+	}
+	return strings.Trim(s, `"`)
+}
+
+// prSidebarBody builds the nested GraphQL PR node shape the pr/openPRs ops return,
+// carrying the #26 sidebar fields. An empty reviewDecision/mergeState/rollup omits
+// that value so the projection yields GraphQL null.
+func prSidebarBody(n int, head string, draft bool, reviewDecision, rollup, mergeState string) map[string]any {
+	key := fmt.Sprintf("pr:o/r#%d", n)
+	body := map[string]any{
+		"number": n, "title": fmt.Sprintf("pr %d", n), "state": "OPEN", "id": key,
+		"url": "https://x/" + key, "headRefName": head, "baseRefName": "main", "body": "",
+		"isDraft": draft,
+	}
+	if reviewDecision != "" {
+		body["reviewDecision"] = reviewDecision
+	}
+	if mergeState != "" {
+		body["mergeStateStatus"] = mergeState
+	}
+	rollupNode := map[string]any{"commit": map[string]any{"statusCheckRollup": nil}}
+	if rollup != "" {
+		rollupNode = map[string]any{"commit": map[string]any{"statusCheckRollup": map[string]any{"state": rollup}}}
+	}
+	body["commits"] = map[string]any{"nodes": []any{rollupNode}}
+	return body
+}
+
+// ghqWarmPR seeds pr:o/r#N in the fake GitHub world then warms it through the real
+// pr point op, so the stored node is the canonical GraphQL projection.
+func (g *ghWorld) ghqWarmPR(n int, draft bool, reviewDecision, rollup, mergeState string) error {
+	g.fake.SetNode(fmt.Sprintf("pr:o/r#%d", n), "PullRequest", prSidebarBody(n, "feature/x", draft, reviewDecision, rollup, mergeState))
+	_, status, err := g.postOp("pr", map[string]any{"owner": "o", "repo": "r", "number": n})
+	if err != nil {
+		return err
+	}
+	if status != 200 {
+		return fmt.Errorf("warm pr status %d", status)
+	}
+	return nil
+}
+
+// ghqSeedPRSidebar writes a sidebar-shaped PR node straight into the cache (direct
+// db seed, same pattern as ghqSeedPR), bypassing the warm path.
+func (g *ghWorld) ghqSeedPRSidebar(n int, draft bool, reviewDecision, rollup, mergeState string) error {
+	now := time.Now()
+	return g.seedNode(fmt.Sprintf("pr:o/r#%d", n), "PullRequest",
+		prSidebarBody(n, "feature/x", draft, reviewDecision, rollup, mergeState), `W/"q"`, false, now, now)
+}
+
+// ghqSeedCheckRunsSuccess seeds two cached checkRun nodes whose conclusion is
+// success — the discriminating decoy for AC-GHPR-ROLLUP-RAW.
+func (g *ghWorld) ghqSeedCheckRunsSuccess(prNum int) error {
+	now := time.Now()
+	for i := 1; i <= 2; i++ {
+		id := fmt.Sprintf("%d%d", prNum, i)
+		body := map[string]any{"id": id, "name": fmt.Sprintf("ci-%d", i), "status": "completed", "conclusion": "success"}
+		if err := g.seedNode("checkRun:o/r/"+id, "CheckRun", body, `W/"c"`, false, now, now); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ghqWarmOpenPRs seeds N open PRs in the fake world then warms them via the openPRs
+// list op, so pullRequestsForRepo serves them cache-only.
+func (g *ghWorld) ghqWarmOpenPRs(nums ...int) error {
+	g.fake.AddRepo("o", "r")
+	for _, n := range nums {
+		g.fake.SetNode(fmt.Sprintf("pr:o/r#%d", n), "PullRequest",
+			prSidebarBody(n, "feature/x", n%2 == 0, "APPROVED", "SUCCESS", "CLEAN"))
+	}
+	_, status, err := g.postOp("openPRs", map[string]any{"owner": "o", "repo": "r"})
+	if err != nil {
+		return err
+	}
+	if status != 200 {
+		return fmt.Errorf("warm openPRs status %d", status)
+	}
+	return nil
+}
+
+// ghqQueryPRsForRepo fires pullRequestsForRepo through core /graphql, resetting the
+// fake log first so "zero requests during the query" measures only the read.
+func (g *ghWorld) ghqQueryPRsForRepo(st *ghqState, owner, repo string) error {
+	g.fake.ResetLog()
+	q := fmt.Sprintf(`{ pullRequestsForRepo(owner: %q, repo: %q) { number draft reviewDecision statusCheckRollup mergeStateStatus } }`, owner, repo)
+	_, data, err := g.sw.gql(q)
+	if err != nil {
+		return err
+	}
+	st.prs = nil
+	if arr, ok := data["pullRequestsForRepo"].([]any); ok {
+		for _, e := range arr {
+			if m, ok := e.(map[string]any); ok {
+				st.prs = append(st.prs, m)
+			}
+		}
+	}
+	return nil
+}
+
+// ghqRewarmAndQueryPR re-warms pr:o/r#N through the pr op (refetching upstream after
+// a purge) then reads it via the cache-only typed resolver.
+func (g *ghWorld) ghqRewarmAndQueryPR(st *ghqState, n int) error {
+	_, status, err := g.postOp("pr", map[string]any{"owner": "o", "repo": "r", "number": n})
+	if err != nil {
+		return err
+	}
+	if status != 200 {
+		return fmt.Errorf("re-warm pr status %d", status)
+	}
+	return g.ghqQueryPR(st, n)
+}
+
+// ghqMutatePRField changes one sidebar field on the upstream fake PR node so a
+// refetch after a webhook purge observes the new value.
+func (g *ghWorld) ghqMutatePRField(n int, field, val string) error {
+	key := fmt.Sprintf("pr:o/r#%d", n)
+	_, ok := g.fake.Mutate(key, func(b map[string]any) {
+		switch field {
+		case "draft":
+			b["isDraft"] = val == "true"
+		case "reviewDecision", "mergeStateStatus":
+			b[field] = val
+		case "statusCheckRollup":
+			b["commits"] = map[string]any{"nodes": []any{
+				map[string]any{"commit": map[string]any{"statusCheckRollup": map[string]any{"state": val}}},
+			}}
+		}
+	})
+	if !ok {
+		return fmt.Errorf("%s not found upstream", key)
+	}
+	return nil
+}
+
+func (g *ghWorld) ghqPostWebhook(event, action string, payload map[string]any) error {
+	status, err := g.postWebhook(g.webhookSecret, event, action, payload)
+	if err != nil {
+		return err
+	}
+	if status != 200 {
+		return fmt.Errorf("%s webhook status %d, want 200", event, status)
+	}
+	return nil
+}
+
+func (g *ghWorld) ghqCheckRunWebhook(prNum int) error {
+	return g.ghqPostWebhook("check_run", "completed", map[string]any{
+		"check_run":  map[string]any{"id": 9000 + prNum, "pull_requests": []any{map[string]any{"number": prNum}}},
+		"repository": map[string]any{"full_name": "o/r"},
+	})
+}
+
+func (g *ghWorld) ghqPRWebhook(prNum int) error {
+	return g.ghqPostWebhook("pull_request", "synchronize", map[string]any{
+		"pull_request": map[string]any{"number": prNum},
+		"repository":   map[string]any{"full_name": "o/r"},
+	})
+}
+
+func (g *ghWorld) ghqReviewWebhook(prNum int) error {
+	return g.ghqPostWebhook("pull_request_review", "submitted", map[string]any{
+		"pull_request": map[string]any{"number": prNum},
+		"review":       map[string]any{"id": 1, "state": "approved"},
+		"repository":   map[string]any{"full_name": "o/r"},
+	})
+}
+
+// ghqOpenCheckRunSub opens the checkRunUpdated subscription AND blocks until the
+// server has actually registered the subscriber on the bus. openSubscription
+// returns as soon as the subscribe frame is written, so an envelope emitted in
+// the gap before registration is dropped by the unbuffered fan-out bus — the
+// cause of a real intermittent failure on the #26 event scenarios. The probe is
+// one signed `label` webhook: a DIFFERENT key kind from the pr: key the
+// scenarios assert on, so ghqAssertOnePush's key filter ignores it entirely.
+// Seeing the probe's own envelope arrive is proof the subscriber is live.
+func (g *ghWorld) ghqOpenCheckRunSub() error {
+	if err := g.sw.openSubscription("checkRunUpdated"); err != nil {
+		return err
+	}
+	const probeKey = "label:o/r/ghq-sub-probe"
+	start := time.Now()
+	deadline := start.Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if err := g.ghqPostWebhook("label", "created", map[string]any{
+			"label":      map[string]any{"name": "ghq-sub-probe"},
+			"repository": map[string]any{"full_name": "o/r"},
+		}); err != nil {
+			return err
+		}
+		for {
+			p, err := g.sw.ws.nextPush(500 * time.Millisecond)
+			if err != nil {
+				break // no more frames within the short window; re-probe
+			}
+			if ghqPushKey(p) == probeKey {
+				return nil
+			}
+			// some other envelope (unrelated to this probe) — keep draining
+			// this window in case the probe's own push is still in flight.
+		}
+	}
+	return fmt.Errorf("subscriber readiness probe: no envelope keyed %s after %s", probeKey, time.Since(start))
+}
+
+// ghqAssertOnePush drains the checkRunUpdated subscription for a window and requires
+// exactly one pushed envelope whose inner key equals want (a check_run also pushes a
+// checkRun-keyed envelope, so this counts only the pr key).
+func (g *ghWorld) ghqAssertOnePush(want string) error {
+	if g.sw.ws == nil {
+		return fmt.Errorf("no subscription open")
+	}
+	count := 0
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		p, err := g.sw.ws.nextPush(time.Until(deadline))
+		if err != nil {
+			break
+		}
+		if ghqPushKey(p) == want {
+			count++
+		}
+	}
+	if count != 1 {
+		return fmt.Errorf("envelopes keyed %s = %d, want exactly 1", want, count)
+	}
+	return nil
+}
+
+// ghqPushKey extracts the envelope key from a checkRunUpdated push frame (its
+// payload string is the marshaled {"key":...} purge envelope).
+func ghqPushKey(push map[string]any) string {
+	data, _ := push["data"].(map[string]any)
+	ev, _ := data["checkRunUpdated"].(map[string]any)
+	ps, _ := ev["payload"].(string)
+	var m map[string]any
+	_ = json.Unmarshal([]byte(ps), &m)
+	k, _ := m["key"].(string)
+	return k
+}
+
+func assertPRNumbers(rows []map[string]any, want ...int) error {
+	got := map[int]bool{}
+	for _, r := range rows {
+		if f, ok := r["number"].(float64); ok {
+			got[int(f)] = true
+		}
+	}
+	if len(got) != len(want) {
+		return fmt.Errorf("pullRequestsForRepo returned %d distinct numbers, want %d (%v)", len(got), len(want), rows)
+	}
+	for _, w := range want {
+		if !got[w] {
+			return fmt.Errorf("pullRequestsForRepo missing #%d (got %v)", w, rows)
+		}
+	}
+	return nil
 }

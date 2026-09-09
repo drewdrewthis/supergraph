@@ -49,6 +49,11 @@ func (r *queryResolver) IssuesForRepo(ctx context.Context, owner string, repo st
 	return github.IssuesForRepo(ctx, owner, repo), nil
 }
 
+// PullRequestsForRepo is the resolver for the pullRequestsForRepo field: cache-only, [] cold.
+func (r *queryResolver) PullRequestsForRepo(ctx context.Context, owner string, repo string) ([]github.PRNode, error) {
+	return github.CachedPRs(ctx, owner, repo), nil
+}
+
 // CheckRunUpdated is the resolver for the checkRunUpdated field. Like the template
 // plugin's subscription it carries no business logic: it maps envelopes from the
 // injected Events hook (filtered server-side to Source "github" by core at

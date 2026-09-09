@@ -40,6 +40,9 @@ extend type Query {
   # repo returns []. Selecting the join fields here fans out N×(claude+tmux) (bounded
   # by first:100) — the p95 AC measures the single-issue join, not this list.
   issuesForRepo(owner: String!, repo: String!): [Issue!]!
+  # pullRequestsForRepo returns the cached open PRs warmed by the openPRs op; a cold
+  # repo returns []. Same cache-only contract as issuesForRepo (no upstream hop).
+  pullRequestsForRepo(owner: String!, repo: String!): [PullRequest!]!
 }
 
 type Issue {
@@ -71,6 +74,13 @@ type PullRequest {
   labels: [String!]!
   headRefName: String!
   baseRefName: String
+  # Sidebar-parity fields (#26). statusCheckRollup is the raw upstream rollup state
+  # (a projection of commits.statusCheckRollup.state), NOT re-derived from check runs;
+  # reviewDecision/statusCheckRollup are null when upstream has none yet.
+  draft: Boolean!
+  reviewDecision: String
+  statusCheckRollup: String
+  mergeStateStatus: String
   tmuxPanes: [TmuxPane!]!
   claudeSessions: [ClaudeSession!]!
 }

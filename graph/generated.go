@@ -116,34 +116,39 @@ type ComplexityRoot struct {
 	}
 
 	PullRequest struct {
-		BaseRefName    func(childComplexity int) int
-		ClaudeSessions func(childComplexity int) int
-		HeadRefName    func(childComplexity int) int
-		Labels         func(childComplexity int) int
-		Number         func(childComplexity int) int
-		State          func(childComplexity int) int
-		Title          func(childComplexity int) int
-		TmuxPanes      func(childComplexity int) int
-		URL            func(childComplexity int) int
-		UpdatedAt      func(childComplexity int) int
+		BaseRefName       func(childComplexity int) int
+		ClaudeSessions    func(childComplexity int) int
+		Draft             func(childComplexity int) int
+		HeadRefName       func(childComplexity int) int
+		Labels            func(childComplexity int) int
+		MergeStateStatus  func(childComplexity int) int
+		Number            func(childComplexity int) int
+		ReviewDecision    func(childComplexity int) int
+		State             func(childComplexity int) int
+		StatusCheckRollup func(childComplexity int) int
+		Title             func(childComplexity int) int
+		TmuxPanes         func(childComplexity int) int
+		URL               func(childComplexity int) int
+		UpdatedAt         func(childComplexity int) int
 	}
 
 	Query struct {
-		ClaudeInstances func(childComplexity int, hostID *string) int
-		ClaudeSession   func(childComplexity int, sessionID string) int
-		ClaudeSessions  func(childComplexity int, hostID *string, issueNumber *int) int
-		FreeSlots       func(childComplexity int, hostID *string) int
-		Health          func(childComplexity int) int
-		Issue           func(childComplexity int, key string) int
-		IssuesForRepo   func(childComplexity int, owner string, repo string) int
-		PaneForBranch   func(childComplexity int, branch string) int
-		Peers           func(childComplexity int) int
-		Ping            func(childComplexity int) int
-		PullRequest     func(childComplexity int, key string) int
-		Slots           func(childComplexity int, hostID *string) int
-		TemplatePing    func(childComplexity int) int
-		TmuxPanes       func(childComplexity int, hostID *string) int
-		TmuxSessions    func(childComplexity int, hostID *string) int
+		ClaudeInstances     func(childComplexity int, hostID *string) int
+		ClaudeSession       func(childComplexity int, sessionID string) int
+		ClaudeSessions      func(childComplexity int, hostID *string, issueNumber *int) int
+		FreeSlots           func(childComplexity int, hostID *string) int
+		Health              func(childComplexity int) int
+		Issue               func(childComplexity int, key string) int
+		IssuesForRepo       func(childComplexity int, owner string, repo string) int
+		PaneForBranch       func(childComplexity int, branch string) int
+		Peers               func(childComplexity int) int
+		Ping                func(childComplexity int) int
+		PullRequest         func(childComplexity int, key string) int
+		PullRequestsForRepo func(childComplexity int, owner string, repo string) int
+		Slots               func(childComplexity int, hostID *string) int
+		TemplatePing        func(childComplexity int) int
+		TmuxPanes           func(childComplexity int, hostID *string) int
+		TmuxSessions        func(childComplexity int, hostID *string) int
 	}
 
 	Slot struct {
@@ -224,6 +229,7 @@ type QueryResolver interface {
 	Issue(ctx context.Context, key string) (*github.IssueNode, error)
 	PullRequest(ctx context.Context, key string) (*github.PRNode, error)
 	IssuesForRepo(ctx context.Context, owner string, repo string) ([]github.IssueNode, error)
+	PullRequestsForRepo(ctx context.Context, owner string, repo string) ([]github.PRNode, error)
 	Peers(ctx context.Context) ([]model.Peer, error)
 	TemplatePing(ctx context.Context) (string, error)
 	TmuxSessions(ctx context.Context, hostID *string) ([]model.TmuxSession, error)
@@ -579,6 +585,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.PullRequest.ClaudeSessions(childComplexity), true
+	case "PullRequest.draft":
+		if e.ComplexityRoot.PullRequest.Draft == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PullRequest.Draft(childComplexity), true
 	case "PullRequest.headRefName":
 		if e.ComplexityRoot.PullRequest.HeadRefName == nil {
 			break
@@ -591,18 +603,36 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.PullRequest.Labels(childComplexity), true
+	case "PullRequest.mergeStateStatus":
+		if e.ComplexityRoot.PullRequest.MergeStateStatus == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PullRequest.MergeStateStatus(childComplexity), true
 	case "PullRequest.number":
 		if e.ComplexityRoot.PullRequest.Number == nil {
 			break
 		}
 
 		return e.ComplexityRoot.PullRequest.Number(childComplexity), true
+	case "PullRequest.reviewDecision":
+		if e.ComplexityRoot.PullRequest.ReviewDecision == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PullRequest.ReviewDecision(childComplexity), true
 	case "PullRequest.state":
 		if e.ComplexityRoot.PullRequest.State == nil {
 			break
 		}
 
 		return e.ComplexityRoot.PullRequest.State(childComplexity), true
+	case "PullRequest.statusCheckRollup":
+		if e.ComplexityRoot.PullRequest.StatusCheckRollup == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PullRequest.StatusCheckRollup(childComplexity), true
 	case "PullRequest.title":
 		if e.ComplexityRoot.PullRequest.Title == nil {
 			break
@@ -735,6 +765,17 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Query.PullRequest(childComplexity, args["key"].(string)), true
+	case "Query.pullRequestsForRepo":
+		if e.ComplexityRoot.Query.PullRequestsForRepo == nil {
+			break
+		}
+
+		args, err := ec.field_Query_pullRequestsForRepo_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Query.PullRequestsForRepo(childComplexity, args["owner"].(string), args["repo"].(string)), true
 	case "Query.slots":
 		if e.ComplexityRoot.Query.Slots == nil {
 			break
@@ -1238,6 +1279,9 @@ extend type Query {
   # repo returns []. Selecting the join fields here fans out N×(claude+tmux) (bounded
   # by first:100) — the p95 AC measures the single-issue join, not this list.
   issuesForRepo(owner: String!, repo: String!): [Issue!]!
+  # pullRequestsForRepo returns the cached open PRs warmed by the openPRs op; a cold
+  # repo returns []. Same cache-only contract as issuesForRepo (no upstream hop).
+  pullRequestsForRepo(owner: String!, repo: String!): [PullRequest!]!
 }
 
 type Issue {
@@ -1269,6 +1313,13 @@ type PullRequest {
   labels: [String!]!
   headRefName: String!
   baseRefName: String
+  # Sidebar-parity fields (#26). statusCheckRollup is the raw upstream rollup state
+  # (a projection of commits.statusCheckRollup.state), NOT re-derived from check runs;
+  # reviewDecision/statusCheckRollup are null when upstream has none yet.
+  draft: Boolean!
+  reviewDecision: String
+  statusCheckRollup: String
+  mergeStateStatus: String
   tmuxPanes: [TmuxPane!]!
   claudeSessions: [ClaudeSession!]!
 }
@@ -1545,6 +1596,14 @@ func (ec *executionContext) childFields_PullRequest(ctx context.Context, field g
 		return ec.fieldContext_PullRequest_headRefName(ctx, field)
 	case "baseRefName":
 		return ec.fieldContext_PullRequest_baseRefName(ctx, field)
+	case "draft":
+		return ec.fieldContext_PullRequest_draft(ctx, field)
+	case "reviewDecision":
+		return ec.fieldContext_PullRequest_reviewDecision(ctx, field)
+	case "statusCheckRollup":
+		return ec.fieldContext_PullRequest_statusCheckRollup(ctx, field)
+	case "mergeStateStatus":
+		return ec.fieldContext_PullRequest_mergeStateStatus(ctx, field)
 	case "tmuxPanes":
 		return ec.fieldContext_PullRequest_tmuxPanes(ctx, field)
 	case "claudeSessions":
@@ -1902,6 +1961,28 @@ func (ec *executionContext) field_Query_pullRequest_args(ctx context.Context, ra
 		return nil, err
 	}
 	args["key"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Query_pullRequestsForRepo_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "owner",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNString2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["owner"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "repo",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNString2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["repo"] = arg1
 	return args, nil
 }
 
@@ -3427,6 +3508,98 @@ func (ec *executionContext) fieldContext_PullRequest_baseRefName(_ context.Conte
 	return graphql.NewScalarFieldContext("PullRequest", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
+func (ec *executionContext) _PullRequest_draft(ctx context.Context, field graphql.CollectedField, obj *github.PRNode) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_PullRequest_draft(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Draft, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
+			return ec.marshalNBoolean2bool(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_PullRequest_draft(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("PullRequest", field, false, false, errors.New("field of type Boolean does not have child fields"))
+}
+
+func (ec *executionContext) _PullRequest_reviewDecision(ctx context.Context, field graphql.CollectedField, obj *github.PRNode) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_PullRequest_reviewDecision(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.ReviewDecision, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_PullRequest_reviewDecision(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("PullRequest", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _PullRequest_statusCheckRollup(ctx context.Context, field graphql.CollectedField, obj *github.PRNode) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_PullRequest_statusCheckRollup(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.StatusCheckRollup, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_PullRequest_statusCheckRollup(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("PullRequest", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _PullRequest_mergeStateStatus(ctx context.Context, field graphql.CollectedField, obj *github.PRNode) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_PullRequest_mergeStateStatus(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.MergeStateStatus, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_PullRequest_mergeStateStatus(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("PullRequest", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
 func (ec *executionContext) _PullRequest_tmuxPanes(ctx context.Context, field graphql.CollectedField, obj *github.PRNode) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -3804,6 +3977,50 @@ func (ec *executionContext) fieldContext_Query_issuesForRepo(ctx context.Context
 	}()
 	ctx = graphql.WithFieldContext(ctx, fc)
 	if fc.Args, err = ec.field_Query_issuesForRepo_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Query_pullRequestsForRepo(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Query_pullRequestsForRepo(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Query().PullRequestsForRepo(ctx, fc.Args["owner"].(string), fc.Args["repo"].(string))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []github.PRNode) graphql.Marshaler {
+			return ec.marshalNPullRequest2ᚕgithubᚗcomᚋdrewdrewthisᚋsupergraphᚋpluginsᚋgithubᚐPRNodeᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Query_pullRequestsForRepo(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_PullRequest(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Query_pullRequestsForRepo_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
 		ec.Error(ctx, err)
 		return fc, err
 	}
@@ -6824,6 +7041,26 @@ func (ec *executionContext) _PullRequest(ctx context.Context, sel ast.SelectionS
 			if out.Values[i] == graphql.RequiredNull {
 				atomic.AddUint32(&out.Invalids, 1)
 			}
+		case "draft":
+			out.Values[i] = ec._PullRequest_draft(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "reviewDecision":
+			out.Values[i] = ec._PullRequest_reviewDecision(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "statusCheckRollup":
+			out.Values[i] = ec._PullRequest_statusCheckRollup(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "mergeStateStatus":
+			out.Values[i] = ec._PullRequest_mergeStateStatus(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
 		case "tmuxPanes":
 			field := field
 
@@ -7105,6 +7342,28 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 					}
 				}()
 				res = ec._Query_issuesForRepo(ctx, field)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "pullRequestsForRepo":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_pullRequestsForRepo(ctx, field)
 				if res == graphql.Null {
 					atomic.AddUint32(&fs.Invalids, 1)
 				}
@@ -8245,6 +8504,26 @@ func (ec *executionContext) marshalNPeer2ᚕgithubᚗcomᚋdrewdrewthisᚋsuperg
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
 		return ec.marshalNPeer2githubᚗcomᚋdrewdrewthisᚋsupergraphᚋgraphᚋmodelᚐPeer(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNPullRequest2githubᚗcomᚋdrewdrewthisᚋsupergraphᚋpluginsᚋgithubᚐPRNode(ctx context.Context, sel ast.SelectionSet, v github.PRNode) graphql.Marshaler {
+	return ec._PullRequest(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNPullRequest2ᚕgithubᚗcomᚋdrewdrewthisᚋsupergraphᚋpluginsᚋgithubᚐPRNodeᚄ(ctx context.Context, sel ast.SelectionSet, v []github.PRNode) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNPullRequest2githubᚗcomᚋdrewdrewthisᚋsupergraphᚋpluginsᚋgithubᚐPRNode(ctx, sel, v[i])
 	})
 
 	for _, e := range ret {

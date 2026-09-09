@@ -165,6 +165,118 @@ Feature: GitHub typed Query + the PRD first cross-plugin join
     Then the p95 latency over the 20 paired samples is under 1s
     And evidence is captured: "p95 one-query PRD join < 1s over 20 warm samples, via paired timestamps"
 
+  # ---------- PR sidebar-parity fields (#26) ----------
+
+  @github @local @AC-GHPR-FIELDS
+  Scenario: A PR warmed through the pr op exposes the four sidebar fields verbatim
+    Given a supergraph server started with the github plugin and data dir <tmp>
+    And pull request `pr:o/r#8` is warmed through the `pr` op with draft true, reviewDecision "APPROVED", statusCheckRollup "SUCCESS", mergeStateStatus "CLEAN"
+    When `pullRequest` is queried for key `pr:o/r#8`
+    Then the returned pull request's draft is true
+    And the returned pull request's reviewDecision is "APPROVED"
+    And the returned pull request's statusCheckRollup is "SUCCESS"
+    And the returned pull request's mergeStateStatus is "CLEAN"
+    And the fake GitHub server records zero requests during the query
+
+  @github @local @AC-GHPR-NULLS
+  Scenario: Missing reviewDecision/statusCheckRollup are null; a seeded mergeStateStatus stays verbatim
+    Given a supergraph server started with the github plugin and data dir <tmp>
+    And pull request `pr:o/r#30` is in the store with draft false, reviewDecision null, statusCheckRollup null, mergeStateStatus null
+    And pull request `pr:o/r#31` is in the store with draft false, reviewDecision null, statusCheckRollup null, mergeStateStatus "UNKNOWN"
+    When `pullRequest` is queried for key `pr:o/r#30`
+    Then the returned pull request's draft is false
+    And the returned pull request's reviewDecision is null
+    And the returned pull request's statusCheckRollup is null
+    When `pullRequest` is queried for key `pr:o/r#31`
+    Then the returned pull request's mergeStateStatus is "UNKNOWN"
+    # mergeStateStatus="UNKNOWN" must survive verbatim — never coerced to null or "CLEAN".
+
+  @github @local @AC-GHPR-ROLLUP-RAW
+  Scenario: statusCheckRollup is the raw upstream rollup state, never derived from check runs
+    Given a supergraph server started with the github plugin and data dir <tmp>
+    And pull request `pr:o/r#40` is in the store with draft false, reviewDecision null, statusCheckRollup "FAILURE", mergeStateStatus null
+    And cached checkRun nodes for `pr:o/r#40` all report success
+    When `pullRequest` is queried for key `pr:o/r#40`
+    Then the returned pull request's statusCheckRollup is "FAILURE"
+    # The rollup state is "FAILURE" while every one of its cached checkRun nodes is
+    # seeded success, so a value derived from the check-run list would read "SUCCESS":
+    # "FAILURE" proves the field is the upstream rollup state read verbatim.
+
+  @github @local @AC-GHPR-LIST
+  Scenario: pullRequestsForRepo serves warmed open PRs with the four fields, empty for cold, null for a never-warmed key
+    Given a supergraph server started with the github plugin and data dir <tmp>
+    And the `openPRs` op has been warmed for `o/r` with PRs #8, #9 carrying the four sidebar fields
+    When `pullRequestsForRepo` is queried for owner "o" repo "r"
+    Then exactly pull requests #8, #9 are returned
+    And each returned pull request has draft, reviewDecision, statusCheckRollup and mergeStateStatus populated
+    And the fake GitHub server records zero requests during the query
+    When `pullRequestsForRepo` is queried for owner "o" repo "never-warmed"
+    Then an empty pull request list is returned
+    When `pullRequest` is queried for key `pr:o/r#999`
+    Then the pull request result is null
+    And the fake GitHub server records zero requests during the query
+
+  @github @local @AC-GHPR-CHECKRUN-EVENT
+  Scenario: A check_run webhook purges the PR and the next read serves the refetched rollup
+    Given a supergraph server started with the github plugin and data dir <tmp>
+    And pull request `pr:o/r#8` is warmed through the `pr` op with draft false, reviewDecision "APPROVED", statusCheckRollup "SUCCESS", mergeStateStatus "CLEAN"
+    And a websocket subscription to `checkRunUpdated` is open
+    And upstream `pr:o/r#8` changes statusCheckRollup to "FAILURE"
+    When a signed `check_run` webhook naming pull request #8 is received
+    Then exactly one envelope keyed `pr:o/r#8` is pushed on the `checkRunUpdated` subscription
+    And `pr:o/r#8` is purged from the cache
+    When `pr:o/r#8` is re-warmed and queried again
+    Then the returned pull request's statusCheckRollup is "FAILURE"
+
+  @github @local @AC-GHPR-PR-EVENT
+  Scenario: A pull_request webhook purges the PR and the next read serves the new draft and mergeStateStatus
+    Given a supergraph server started with the github plugin and data dir <tmp>
+    And pull request `pr:o/r#8` is warmed through the `pr` op with draft false, reviewDecision "APPROVED", statusCheckRollup "SUCCESS", mergeStateStatus "CLEAN"
+    And a websocket subscription to `checkRunUpdated` is open
+    And upstream `pr:o/r#8` changes draft to true
+    And upstream `pr:o/r#8` changes mergeStateStatus to "BLOCKED"
+    When a signed `pull_request` webhook naming PR #8 is received
+    Then exactly one envelope keyed `pr:o/r#8` is pushed on the `checkRunUpdated` subscription
+    And `pr:o/r#8` is purged from the cache
+    When `pr:o/r#8` is re-warmed and queried again
+    Then the returned pull request's draft is true
+    And the returned pull request's mergeStateStatus is "BLOCKED"
+
+  @github @local @AC-GHPR-REVIEW-EVENT
+  Scenario: A pull_request_review webhook purges the PR and the next read serves the new reviewDecision
+    Given a supergraph server started with the github plugin and data dir <tmp>
+    And pull request `pr:o/r#8` is warmed through the `pr` op with draft false, reviewDecision "REVIEW_REQUIRED", statusCheckRollup "SUCCESS", mergeStateStatus "CLEAN"
+    And a websocket subscription to `checkRunUpdated` is open
+    And upstream `pr:o/r#8` changes reviewDecision to "APPROVED"
+    When a signed `pull_request_review` webhook naming PR #8 is received
+    Then exactly one envelope keyed `pr:o/r#8` is pushed on the `checkRunUpdated` subscription
+    And `pr:o/r#8` is purged from the cache
+    When `pr:o/r#8` is re-warmed and queried again
+    Then the returned pull request's reviewDecision is "APPROVED"
+
+  @github @local @AC-GHPR-REVALIDATE
+  Scenario: A reconcile revalidate pass keeps the four sidebar fields verbatim
+    Given a supergraph server started with the github plugin and data dir <tmp>
+    And pull request `pr:o/r#8` is warmed through the `pr` op with draft true, reviewDecision "APPROVED", statusCheckRollup "SUCCESS", mergeStateStatus "CLEAN"
+    When the reconcile revalidate pass runs once
+    And `pullRequest` is queried for key `pr:o/r#8`
+    Then the returned pull request's draft is true
+    And the returned pull request's reviewDecision is "APPROVED"
+    And the returned pull request's statusCheckRollup is "SUCCESS"
+    And the returned pull request's mergeStateStatus is "CLEAN"
+
+  @github @local @AC-GHPR-ADDONLY
+  Scenario: The github schema change is additions-only
+    Given the github-query change is applied
+    When `git diff main -- plugins/github/schema/github.graphqls` is run
+    Then the schema diff has no deleted or retyped lines
+
+  @github @local @AC-GHPR-ZEROCORE
+  Scenario: The PR sidebar-parity fields add no core edit
+    Given the github-query change is applied
+    When `git diff --stat core/ server/` is run
+    Then the diffstat is empty
+
   # ---------- Guards ----------
 
   @github @local @AC-GHQ-ZEROCORE
