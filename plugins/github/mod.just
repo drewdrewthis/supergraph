@@ -173,6 +173,10 @@ q op *args:
     set -euo pipefail
     op="$1"
     shift
+    queries_dir="{{ source_directory() }}/queries"
+    case "$op" in
+        issue | pullRequest | issuesForRepo) queries_dir="{{ source_directory() }}/queries/typed" ;;
+    esac
     {{ sg }} query --op "$op" --plugin github \
-        --queries-dir "{{ source_directory() }}/queries" \
+        --queries-dir "$queries_dir" \
         "$@"
