@@ -23,6 +23,7 @@ mod? tmux "plugins/tmux/mod.just"
 mod? global '~/.claude/just/justfile'
 
 set fallback
+set positional-arguments
 
 # sg is overridable so CI/dev can point at a freshly-built binary instead of
 # whatever `supergraph` resolves to on PATH.
@@ -43,22 +44,31 @@ check:
     scripts/just-check.sh
 
 # --- git mutations ---
+#
+# [no-cd]: git mutations act on the CALLER's repo, not the justfile's own
+# directory. Once installed globally (`just -g`), the justfile's directory is
+# ~/.local/share/supergraph — not a git repo — so these three recipes must
+# run with the invocation-time cwd. Every query recipe above keeps the
+# default cd-to-justfile-dir behaviour; do not add [no-cd] there.
 
 # create a git worktree for a branch at a path
+[no-cd]
 worktree-create branch path:
     #!/usr/bin/env bash
     set -euo pipefail
-    git worktree add "{{ path }}" -b "{{ branch }}"
+    git worktree add "$2" -b "$1"
 
 # remove a git worktree
+[no-cd]
 worktree-remove path:
     #!/usr/bin/env bash
     set -euo pipefail
-    git worktree remove "{{ path }}"
+    git worktree remove "$1"
 
 # delete a local and remote branch
+[no-cd]
 branch-delete branch:
     #!/usr/bin/env bash
     set -euo pipefail
-    git branch -D "{{ branch }}"
-    git push origin --delete "{{ branch }}"
+    git branch -D "$1"
+    git push origin --delete "$1"

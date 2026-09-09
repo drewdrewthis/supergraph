@@ -32,6 +32,11 @@ for mod_just in "$repo_root"/plugins/*/mod.just; do
     ' "$mod_just")"
 
     while IFS= read -r line; do
+        # Skip comment lines outright — prose mentioning `--op X --plugin Y`
+        # (e.g. a NOTE about a shadowed recipe) is not a recipe body, and
+        # must never trip the hard-error below for a missing --queries-dir.
+        [[ "$line" =~ ^[[:space:]]*# ]] && continue
+
         # The generic `q` escape hatch passes a {{op}} placeholder, not a
         # literal name — nothing to resolve, so skip it.
         case "$line" in
@@ -41,10 +46,21 @@ for mod_just in "$repo_root"/plugins/*/mod.just; do
         [[ "$line" =~ --op[[:space:]]+([A-Za-z0-9_]+) ]] || continue
         op="${BASH_REMATCH[1]}"
 
-        [[ "$line" =~ --plugin[[:space:]]+([A-Za-z0-9_]+) ]] || continue
+        # Past this point an --op was found: a missing --plugin or
+        # --queries-dir alongside it is a malformed recipe, not "nothing to
+        # check here" — silently skipping it would let a recipe with a
+        # missing op file pass the gate uncaught (the bug this script exists
+        # to catch).
+        if [[ ! "$line" =~ --plugin[[:space:]]+([A-Za-z0-9_]+) ]]; then
+            echo "ERROR: $mod_just: recipe with --op $op has no --plugin flag" >&2
+            exit 1
+        fi
         plugin="${BASH_REMATCH[1]}"
 
-        [[ "$line" =~ --queries-dir[[:space:]]+\"([^\"]+)\" ]] || continue
+        if [[ ! "$line" =~ --queries-dir[[:space:]]+\"([^\"]+)\" ]]; then
+            echo "ERROR: $mod_just: recipe with --op $op --plugin $plugin has no --queries-dir flag" >&2
+            exit 1
+        fi
         dir="${BASH_REMATCH[1]}"
         # `just --fmt` normalizes interpolation spacing to "{{ expr }}", so
         # match loosely on the token rather than an exact literal.

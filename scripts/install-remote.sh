@@ -99,7 +99,7 @@ if [ -L "$global_justfile" ]; then
 	log "warning: $global_justfile is a symlink — a symlinked global justfile breaks mod resolution."
 	log "warning: replace it with a real file, then re-run this installer to register supergraph."
 elif [ -e "$global_justfile" ]; then
-	if ! grep -qF "$import_line" "$global_justfile"; then
+	if ! grep -qxF "$import_line" "$global_justfile"; then
 		printf '%s\n' "$import_line" >>"$global_justfile"
 	fi
 else

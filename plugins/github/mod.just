@@ -7,33 +7,42 @@
 # source_directory() (NOT justfile_directory(), which resolves to the ROOT
 # justfile's dir even inside a module) gives this module's own directory, so
 # --queries-dir stays anchored here regardless of caller cwd.
+#
+# set positional-arguments: recipe parameters are passed to the bash
+# shebang as $1, $2, ... instead of being interpolated as `{{ param }}` text
+# into the script — a param containing a double quote can't break out of
+# the shell quoting because it's never spliced into source text at all.
+# {{ source_directory() }} and {{ sg }} are just-level values, not recipe
+# parameters, so they stay as `{{ }}` interpolation.
+set positional-arguments
+
 sg := env_var_or_default("SUPERGRAPH_BIN", "supergraph")
 
 # github pr(owner/repo, number): PR status fields (body omitted — use `q pr` for the raw node)
 pr-status owner_repo number:
     #!/usr/bin/env bash
     set -euo pipefail
-    slug="{{ owner_repo }}"; owner="${slug%%/*}"; repo="${slug##*/}"
+    slug="$1"; owner="${slug%%/*}"; repo="${slug##*/}"
     {{ sg }} query --op pr --plugin github \
         --queries-dir "{{ source_directory() }}/queries" \
-        --var owner="$owner" --var repo="$repo" --var number={{ number }} \
+        --var owner="$owner" --var repo="$repo" --var number="$2" \
         | jq '.pr | {number, title, state, merged, url, headRefName, baseRefName, updatedAt, labels: [.labels.nodes[].name]}'
 
 # github checkRunsForPR: flattened list of check runs on a PR's head commit
 pr-checks owner_repo number:
     #!/usr/bin/env bash
     set -euo pipefail
-    slug="{{ owner_repo }}"; owner="${slug%%/*}"; repo="${slug##*/}"
+    slug="$1"; owner="${slug%%/*}"; repo="${slug##*/}"
     {{ sg }} query --op checkRunsForPR --plugin github \
         --queries-dir "{{ source_directory() }}/queries" \
-        --var owner="$owner" --var repo="$repo" --var number={{ number }} \
+        --var owner="$owner" --var repo="$repo" --var number="$2" \
         | jq '[.checkRunsForPR.repository.pullRequest.commits.nodes[0].commit.checkSuites.nodes[].checkRuns.nodes[]]'
 
 # github openPRs: open pull requests
 open-prs owner_repo:
     #!/usr/bin/env bash
     set -euo pipefail
-    slug="{{ owner_repo }}"; owner="${slug%%/*}"; repo="${slug##*/}"
+    slug="$1"; owner="${slug%%/*}"; repo="${slug##*/}"
     {{ sg }} query --op openPRs --plugin github \
         --queries-dir "{{ source_directory() }}/queries" \
         --var owner="$owner" --var repo="$repo" \
@@ -43,7 +52,7 @@ open-prs owner_repo:
 open-issues owner_repo:
     #!/usr/bin/env bash
     set -euo pipefail
-    slug="{{ owner_repo }}"; owner="${slug%%/*}"; repo="${slug##*/}"
+    slug="$1"; owner="${slug%%/*}"; repo="${slug##*/}"
     {{ sg }} query --op openIssues --plugin github \
         --queries-dir "{{ source_directory() }}/queries" \
         --var owner="$owner" --var repo="$repo" \
@@ -53,17 +62,17 @@ open-issues owner_repo:
 my-claimed owner_repo login:
     #!/usr/bin/env bash
     set -euo pipefail
-    slug="{{ owner_repo }}"; owner="${slug%%/*}"; repo="${slug##*/}"
+    slug="$1"; owner="${slug%%/*}"; repo="${slug##*/}"
     {{ sg }} query --op myClaimed --plugin github \
         --queries-dir "{{ source_directory() }}/queries" \
-        --var owner="$owner" --var repo="$repo" --var login="{{ login }}" \
+        --var owner="$owner" --var repo="$repo" --var login="$2" \
         | jq '.myClaimed.repository.issues.nodes'
 
 # github prsAwaitingReview: PRs waiting on review
 prs-awaiting-review owner_repo:
     #!/usr/bin/env bash
     set -euo pipefail
-    slug="{{ owner_repo }}"; owner="${slug%%/*}"; repo="${slug##*/}"
+    slug="$1"; owner="${slug%%/*}"; repo="${slug##*/}"
     {{ sg }} query --op prsAwaitingReview --plugin github \
         --queries-dir "{{ source_directory() }}/queries" \
         --var owner="$owner" --var repo="$repo" \
@@ -73,7 +82,7 @@ prs-awaiting-review owner_repo:
 repo-labels owner_repo:
     #!/usr/bin/env bash
     set -euo pipefail
-    slug="{{ owner_repo }}"; owner="${slug%%/*}"; repo="${slug##*/}"
+    slug="$1"; owner="${slug%%/*}"; repo="${slug##*/}"
     {{ sg }} query --op repoLabels --plugin github \
         --queries-dir "{{ source_directory() }}/queries" \
         --var owner="$owner" --var repo="$repo" \
@@ -83,20 +92,20 @@ repo-labels owner_repo:
 issue-comments owner_repo number:
     #!/usr/bin/env bash
     set -euo pipefail
-    slug="{{ owner_repo }}"; owner="${slug%%/*}"; repo="${slug##*/}"
+    slug="$1"; owner="${slug%%/*}"; repo="${slug##*/}"
     {{ sg }} query --op issueComments --plugin github \
         --queries-dir "{{ source_directory() }}/queries" \
-        --var owner="$owner" --var repo="$repo" --var number={{ number }} \
+        --var owner="$owner" --var repo="$repo" --var number="$2" \
         | jq '.issueComments.repository.issue.comments.nodes'
 
 # github paneForBranch(owner/repo, branch): ref target oid for a branch
 branch-ref owner_repo branch:
     #!/usr/bin/env bash
     set -euo pipefail
-    slug="{{ owner_repo }}"; owner="${slug%%/*}"; repo="${slug##*/}"
+    slug="$1"; owner="${slug%%/*}"; repo="${slug##*/}"
     {{ sg }} query --op paneForBranch --plugin github \
         --queries-dir "{{ source_directory() }}/queries" \
-        --var owner="$owner" --var repo="$repo" --var branch="{{ branch }}" \
+        --var owner="$owner" --var repo="$repo" --var branch="$2" \
         | jq '.paneForBranch.repository.ref'
 
 # NOTE: plugins/github/queries/issue.graphql (the executor variant) is
@@ -111,7 +120,7 @@ issue-cached owner_repo number:
     set -euo pipefail
     {{ sg }} query --op issue --plugin github \
         --queries-dir "{{ source_directory() }}/queries/typed" \
-        --var key="issue:{{ owner_repo }}#{{ number }}" \
+        --var key="issue:$1#$2" \
         | jq '.issue'
 
 # core-typed pullRequest(key=pr:owner/repo#n): cache-only, no upstream hop
@@ -120,14 +129,14 @@ pr-cached owner_repo number:
     set -euo pipefail
     {{ sg }} query --op pullRequest --plugin github \
         --queries-dir "{{ source_directory() }}/queries/typed" \
-        --var key="pr:{{ owner_repo }}#{{ number }}" \
+        --var key="pr:$1#$2" \
         | jq '.pullRequest'
 
 # core-typed issuesForRepo(owner, repo)
 issues-cached owner_repo:
     #!/usr/bin/env bash
     set -euo pipefail
-    slug="{{ owner_repo }}"; owner="${slug%%/*}"; repo="${slug##*/}"
+    slug="$1"; owner="${slug%%/*}"; repo="${slug##*/}"
     {{ sg }} query --op issuesForRepo --plugin github \
         --queries-dir "{{ source_directory() }}/queries/typed" \
         --var owner="$owner" --var repo="$repo" \
@@ -139,24 +148,26 @@ issues-cached owner_repo:
 pr-label owner_repo number labels:
     #!/usr/bin/env bash
     set -euo pipefail
-    gh issue edit "{{ number }}" --repo "{{ owner_repo }}" --add-label "{{ labels }}"
+    gh issue edit "$2" --repo "$1" --add-label "$3"
 
 # comment on a PR
 pr-comment owner_repo number body:
     #!/usr/bin/env bash
     set -euo pipefail
-    gh pr comment "{{ number }}" --repo "{{ owner_repo }}" --body "{{ body }}"
+    gh pr comment "$2" --repo "$1" --body "$3"
 
 # comment on an issue
 issue-comment owner_repo number body:
     #!/usr/bin/env bash
     set -euo pipefail
-    gh issue comment "{{ number }}" --repo "{{ owner_repo }}" --body "{{ body }}"
+    gh issue comment "$2" --repo "$1" --body "$3"
 
 # raw escape hatch for a github op without a recipe: no jq projection applied
 q op *args:
     #!/usr/bin/env bash
     set -euo pipefail
-    {{ sg }} query --op {{ op }} --plugin github \
+    op="$1"
+    shift
+    {{ sg }} query --op "$op" --plugin github \
         --queries-dir "{{ source_directory() }}/queries" \
-        {{ args }}
+        "$@"
