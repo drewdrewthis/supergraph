@@ -649,6 +649,18 @@ func (g *gitWorld) setupUpstreamPair() (origin, work string, err error) {
 	if _, err = runGit(origin, "init", "-q", "--bare"); err != nil {
 		return "", "", err
 	}
+	// A bare repo's HEAD is just a symref, and `init --bare` points it at
+	// whatever init.defaultBranch the runner has configured (main locally,
+	// master on CI). Pin it to "main" here, once, so every clone of this
+	// origin — the initial "work" clone below and any later clone such as
+	// "otherclone" in seedAheadBehind — resolves the same default branch
+	// regardless of the runner's git config. Each clone still checks out
+	// "main" explicitly rather than trusting clone-time HEAD resolution,
+	// since a later push to origin (e.g. creating refs/heads/main for the
+	// first time) does not itself move origin's HEAD.
+	if _, err = runGit(origin, "symbolic-ref", "HEAD", "refs/heads/main"); err != nil {
+		return "", "", err
+	}
 	work, err = g.newDir("work")
 	if err != nil {
 		return "", "", err
@@ -657,10 +669,6 @@ func (g *gitWorld) setupUpstreamPair() (origin, work string, err error) {
 	if _, err = runGit(g.dirs[0], "clone", "-q", origin, work); err != nil {
 		return "", "", err
 	}
-	// Cloning an empty bare repo checks out whatever the LOCAL init.defaultBranch
-	// config says (there is nothing to take from the remote yet), which may not be
-	// "main" — force the branch name so the later `push -u origin main` is
-	// deterministic regardless of the runner's git config.
 	if _, err = runGit(work, "checkout", "-q", "-B", "main"); err != nil {
 		return "", "", err
 	}
@@ -691,6 +699,11 @@ func (g *gitWorld) seedAheadBehind(aheadStr, behindStr string) error {
 		}
 		_ = os.RemoveAll(other)
 		if _, err := runGit(g.dirs[0], "clone", "-q", origin, other); err != nil {
+			return err
+		}
+		// Pin the branch explicitly rather than trusting clone-time HEAD
+		// resolution — see the comment in setupUpstreamPair.
+		if _, err := runGit(other, "checkout", "-q", "-B", "main", "origin/main"); err != nil {
 			return err
 		}
 		for i := 0; i < behind; i++ {
