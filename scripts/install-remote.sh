@@ -109,6 +109,7 @@ else
 	mkdir -p "$just_config_dir"
 	printf '%s\n' "$import_line" >"$global_justfile"
 fi
+# --- end register global justfile import ---
 
 # --- just presence check ---
 if command -v just >/dev/null 2>&1; then

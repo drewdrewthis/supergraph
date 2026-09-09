@@ -515,21 +515,9 @@ func (j *jw) makeGlobalJustfileNoNewline() error {
 }
 
 func (j *jw) appendImportLine() error {
-	importLine := "import \"/opt/sg/justfile\""
-
-	// Apply the fixed append logic from install-remote.sh
-	if !fileContainsLine(globalJustfilePath, importLine) {
-		if err := ensureTrailingNewline(globalJustfilePath); err != nil {
-			return err
-		}
-		f, err := os.OpenFile(globalJustfilePath, os.O_APPEND|os.O_WRONLY, 0o644)
-		if err != nil {
-			return err
-		}
-		defer f.Close()
-		if _, err := fmt.Fprintf(f, "%s\n", importLine); err != nil {
-			return err
-		}
+	_, stderr, err := runInstallGlobalJustfileBlock(j.tmpDir, globalJustfilePath, "/opt/sg")
+	if err != nil {
+		return fmt.Errorf("run install-remote.sh block: %w (stderr=%s)", err, stderr)
 	}
 	return nil
 }
@@ -583,8 +571,6 @@ func (j *jw) assertParseable() error {
 }
 
 func (j *jw) assertIdempotent() error {
-	importLine := "import \"/opt/sg/justfile\""
-
 	// Read the current state
 	data, err := os.ReadFile(globalJustfilePath)
 	if err != nil {
@@ -592,19 +578,10 @@ func (j *jw) assertIdempotent() error {
 	}
 	before := string(data)
 
-	// Apply the append logic again
-	if !fileContainsLine(globalJustfilePath, importLine) {
-		if err := ensureTrailingNewline(globalJustfilePath); err != nil {
-			return err
-		}
-		f, err := os.OpenFile(globalJustfilePath, os.O_APPEND|os.O_WRONLY, 0o644)
-		if err != nil {
-			return err
-		}
-		defer f.Close()
-		if _, err := fmt.Fprintf(f, "%s\n", importLine); err != nil {
-			return err
-		}
+	// Run the real install-remote.sh block again, against the same file.
+	_, stderr, err := runInstallGlobalJustfileBlock(j.tmpDir, globalJustfilePath, "/opt/sg")
+	if err != nil {
+		return fmt.Errorf("run install-remote.sh block: %w (stderr=%s)", err, stderr)
 	}
 
 	// Read again and compare
@@ -627,50 +604,128 @@ func (j *jw) assertIdempotent() error {
 	return nil
 }
 
-// fileContainsLine checks if a file contains a specific line using grep -F
-func fileContainsLine(path, line string) bool {
-	cmd := exec.Command("grep", "-qxF", line, path)
-	return cmd.Run() == nil
+// extractInstallScriptBlock reads scripts/install-remote.sh and returns the
+// shell source strictly between a line matching startSentinel and a line
+// matching endSentinel (exclusive of both sentinel lines). It errors loudly
+// if either sentinel is missing, or the script has been restructured such
+// that the end no longer follows the start — this is the whole point: a
+// broken/removed sentinel must fail this test, not silently return nothing,
+// so the test can never drift from the real script it is meant to exercise.
+func extractInstallScriptBlock(startSentinel, endSentinel string) (string, error) {
+	path := filepath.Join(repoRoot, "scripts", "install-remote.sh")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read %s: %w", path, err)
+	}
+	lines := strings.Split(string(data), "\n")
+
+	startIdx, endIdx := -1, -1
+	for i, line := range lines {
+		if strings.TrimSpace(line) == startSentinel {
+			startIdx = i
+		}
+		if strings.TrimSpace(line) == endSentinel && startIdx != -1 && endIdx == -1 {
+			endIdx = i
+		}
+	}
+	if startIdx == -1 {
+		return "", fmt.Errorf("%s: start sentinel not found: %q", path, startSentinel)
+	}
+	if endIdx == -1 {
+		return "", fmt.Errorf("%s: end sentinel not found: %q", path, endSentinel)
+	}
+	if endIdx <= startIdx {
+		return "", fmt.Errorf("%s: end sentinel %q appears at or before start sentinel %q", path, endSentinel, startSentinel)
+	}
+
+	block := lines[startIdx+1 : endIdx]
+	return strings.Join(block, "\n") + "\n", nil
 }
 
-// ensureTrailingNewline adds a newline to a file if it doesn't already end with one.
-// This mirrors the logic in the fixed install-remote.sh script.
-func ensureTrailingNewline(path string) error {
-	// Check if file exists and is not empty
-	info, err := os.Stat(path)
+// runInstallGlobalJustfileBlock extracts the real "register global justfile
+// import" block from scripts/install-remote.sh and executes it verbatim
+// under `sh`, so this test exercises the actual installer logic rather than
+// a Go reimplementation that could silently drift from it.
+//
+// The block derives `just_config_dir`/`global_justfile` itself from
+// $XDG_CONFIG_HOME (or $HOME/.config), so to make it land on the caller's
+// chosen globalJustfile path (a fixture file, not a real global justfile) we
+// point XDG_CONFIG_HOME at a scratch dir containing a `just/justfile` that we
+// pre-seed with the fixture's current content, then copy the result back.
+func runInstallGlobalJustfileBlock(dir, globalJustfile, dataDir string) (stdout, stderr string, err error) {
+	block, err := extractInstallScriptBlock(
+		"# --- register global justfile import ---",
+		"# --- end register global justfile import ---",
+	)
 	if err != nil {
-		return err
-	}
-	if info.Size() == 0 {
-		return nil // empty file, no need to add newline
+		return "", "", err
 	}
 
-	// Read the last byte
-	f, err := os.Open(path)
+	xdgConfigHome, err := os.MkdirTemp(dir, "xdg-config-*")
 	if err != nil {
-		return err
+		return "", "", fmt.Errorf("create scratch XDG_CONFIG_HOME: %w", err)
 	}
-
-	b := make([]byte, 1)
-	_, readErr := f.ReadAt(b, info.Size()-1)
-	f.Close()
-	if readErr != nil {
-		return readErr
+	justDir := filepath.Join(xdgConfigHome, "just")
+	if err := os.MkdirAll(justDir, 0o755); err != nil {
+		return "", "", err
 	}
+	scratchJustfile := filepath.Join(justDir, "justfile")
 
-	// If the last byte is not a newline, add one
-	if b[0] != '\n' {
-		appendF, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
-		if err != nil {
-			return err
+	if existing, statErr := os.Stat(globalJustfile); statErr == nil && !existing.IsDir() {
+		content, readErr := os.ReadFile(globalJustfile)
+		if readErr != nil {
+			return "", "", fmt.Errorf("read fixture %s: %w", globalJustfile, readErr)
 		}
-		defer appendF.Close()
-		if _, err := appendF.WriteString("\n"); err != nil {
-			return err
+		if err := os.WriteFile(scratchJustfile, content, 0o644); err != nil {
+			return "", "", err
 		}
 	}
 
-	return nil
+	var script strings.Builder
+	script.WriteString("set -eu\n")
+	script.WriteString("log() { printf '%s\\n' \"$*\" >&2; }\n")
+	fmt.Fprintf(&script, "data_dir=%s\n", shellQuote(dataDir))
+	script.WriteString(block)
+
+	scriptFile, err := os.CreateTemp(dir, "install-block-*.sh")
+	if err != nil {
+		return "", "", err
+	}
+	scriptPath := scriptFile.Name()
+	if _, err := scriptFile.WriteString(script.String()); err != nil {
+		scriptFile.Close()
+		return "", "", err
+	}
+	scriptFile.Close()
+
+	cmd := exec.Command("sh", scriptPath)
+	cmd.Env = append(os.Environ(), "XDG_CONFIG_HOME="+xdgConfigHome)
+	var so, se bytes.Buffer
+	cmd.Stdout = &so
+	cmd.Stderr = &se
+	runErr := cmd.Run()
+	stdout, stderr = so.String(), se.String()
+
+	if copied, statErr := os.Stat(scratchJustfile); statErr == nil && !copied.IsDir() {
+		content, readErr := os.ReadFile(scratchJustfile)
+		if readErr != nil {
+			return stdout, stderr, fmt.Errorf("read scratch result %s: %w", scratchJustfile, readErr)
+		}
+		if err := os.WriteFile(globalJustfile, content, 0o644); err != nil {
+			return stdout, stderr, err
+		}
+	}
+
+	if runErr != nil {
+		return stdout, stderr, fmt.Errorf("sh %s: %w", scriptPath, runErr)
+	}
+	return stdout, stderr, nil
+}
+
+// shellQuote wraps s in single quotes for safe embedding in a generated shell
+// script, escaping any single quotes it contains.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // ---------- generic file/dir copy helpers (AC-JUST-DRIFT fixture) ----------
