@@ -78,3 +78,48 @@ case ":$PATH:" in
 *":$install_dir:"*) ;;
 *) log "note: $install_dir is not on your PATH — add it, e.g. export PATH=\"$install_dir:\$PATH\"" ;;
 esac
+
+# --- install agent tooling (justfile + plugin recipes) ---
+# Version-locked to the binary: extracted from the same verified tarball,
+# overwriting any previous install's copies.
+data_dir="${SUPERGRAPH_DATA_DIR:-$HOME/.local/share/supergraph}"
+mkdir -p "$data_dir"
+tar -C "$work_dir" -xzf "$work_dir/$tarball" justfile plugins
+rm -rf "$data_dir/plugins"
+mv "$work_dir/justfile" "$data_dir/justfile"
+mv "$work_dir/plugins" "$data_dir/plugins"
+log "installed agent tooling to $data_dir"
+
+# --- register global justfile import ---
+just_config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/just"
+global_justfile="$just_config_dir/justfile"
+import_line="import \"$data_dir/justfile\""
+
+if [ -L "$global_justfile" ]; then
+	log "warning: $global_justfile is a symlink — a symlinked global justfile breaks mod resolution."
+	log "warning: replace it with a real file, then re-run this installer to register supergraph."
+elif [ -e "$global_justfile" ]; then
+	if ! grep -qxF "$import_line" "$global_justfile"; then
+		if [ -s "$global_justfile" ] && [ -n "$(tail -c 1 "$global_justfile")" ]; then
+			printf '\n' >>"$global_justfile"
+		fi
+		printf '%s\n' "$import_line" >>"$global_justfile"
+	fi
+else
+	mkdir -p "$just_config_dir"
+	printf '%s\n' "$import_line" >"$global_justfile"
+fi
+# --- end register global justfile import ---
+
+# --- just presence check ---
+if command -v just >/dev/null 2>&1; then
+	log ""
+	log "alias sg='just -g'"
+	log "usage: sg --list"
+	log "       sg github pr-status owner/repo 38"
+else
+	case "$os" in
+	darwin) log "note: 'just' not found — install it: brew install just" ;;
+	linux) log "note: 'just' not found — install it: apt install just (or your distro's equivalent)" ;;
+	esac
+fi
