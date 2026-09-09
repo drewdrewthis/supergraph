@@ -80,7 +80,9 @@ type cfgOpts struct {
 	templateInterval int
 	templatePanic    bool
 	claudePanic      bool
-	nonLoopback      bool // bind 0.0.0.0 + require a bearer token (AC-CLAUDE-HOOK-AUTH)
+	nonLoopback      bool   // bind 0.0.0.0 + require a bearer token (AC-CLAUDE-HOOK-AUTH)
+	claudeStateDir   string // when set, emit stateDir into [plugins.claude] (issue #28 state-file channel)
+	claudePaneTitles bool   // when true, emit paneTitles=true into [plugins.claude]
 }
 
 // world is one scenario's mutable state. A fresh world is created per scenario in
@@ -144,6 +146,9 @@ type world struct {
 	// claude plugin scenarios
 	claudeProjectsDir  string
 	claudeSettingsPath string
+	claudeStateDir     string   // state-file ingest dir (issue #28); passed to config only when a scenario opts in
+	claudeTmuxDir      string   // dir holding a stub `tmux`, prepended to the serve subprocess PATH (AC-CLAUDE-PANE-TITLE)
+	claudeHomeDir      string   // HOME override for the serve subprocess (AC-CLAUDE-STATEDIR-TILDE)
 	token              string   // bearer token for a non-loopback instance (AC-CLAUDE-HOOK-AUTH)
 	cfgListen          string   // server bind address (may be non-loopback); w.listen stays the client addr
 	claudeFrames       []string // raw subscription frames captured (AC-CLAUDE-PRIVACY)
@@ -176,7 +181,11 @@ func (w *world) init() error {
 	w.cfgListen = w.listen
 	w.claudeProjectsDir = filepath.Join(dir, "projects")
 	w.claudeSettingsPath = filepath.Join(dir, "settings.json")
+	w.claudeStateDir = filepath.Join(dir, "state")
 	if err := os.MkdirAll(w.claudeProjectsDir, 0o755); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(w.claudeStateDir, 0o755); err != nil {
 		return err
 	}
 	return nil
@@ -215,6 +224,18 @@ func freePort() string {
 	return l.Addr().String()
 }
 
+// replaceEnv returns env with key set to val, dropping any pre-existing entry for key
+// so the child process sees exactly one value for it.
+func replaceEnv(env []string, key, val string) []string {
+	out := env[:0:0]
+	for _, e := range env {
+		if !strings.HasPrefix(e, key+"=") {
+			out = append(out, e)
+		}
+	}
+	return append(out, key+"="+val)
+}
+
 func (w *world) writeConfig(o cfgOpts) error {
 	var b strings.Builder
 	if !o.omitHostID {
@@ -246,6 +267,15 @@ func (w *world) writeConfig(o cfgOpts) error {
 	fmt.Fprintf(&b, "projectsDir = %q\n", w.claudeProjectsDir)
 	fmt.Fprintf(&b, "settingsPath = %q\n", w.claudeSettingsPath)
 	b.WriteString("scanIntervalSeconds = 1\n")
+	// stateDir/paneTitles are emitted ONLY when a scenario opts in, so pre-existing
+	// scenarios keep the exact config they had (load-bearing for AC-CLAUDE-ADDONLY and
+	// for never reading the developer's real ~/.local/state/claude-sessions).
+	if o.claudeStateDir != "" {
+		fmt.Fprintf(&b, "stateDir = %q\n", o.claudeStateDir)
+	}
+	if o.claudePaneTitles {
+		b.WriteString("paneTitles = true\n")
+	}
 	if o.claudePanic {
 		b.WriteString("panic = true\n")
 	}
@@ -264,6 +294,19 @@ func (w *world) startServe() error {
 	cmd := exec.Command(binPath, "--config", w.cfgPath, "serve")
 	cmd.Stdout = sp.stdout
 	cmd.Stderr = sp.stderr
+	// A claude scenario may need a stub `tmux` on the subprocess PATH (AC-CLAUDE-PANE-TITLE)
+	// or a HOME override for ~-expansion (AC-CLAUDE-STATEDIR-TILDE). Rebuild PATH/HOME
+	// rather than appending a duplicate key so the child's getenv is unambiguous.
+	if w.claudeTmuxDir != "" || w.claudeHomeDir != "" {
+		env := os.Environ()
+		if w.claudeTmuxDir != "" {
+			env = replaceEnv(env, "PATH", w.claudeTmuxDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+		}
+		if w.claudeHomeDir != "" {
+			env = replaceEnv(env, "HOME", w.claudeHomeDir)
+		}
+		cmd.Env = env
+	}
 	if err := cmd.Start(); err != nil {
 		return err
 	}

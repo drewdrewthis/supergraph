@@ -85,6 +85,22 @@ type transcriptRecord struct {
 	} `json:"message"`
 }
 
+// stateFile is the whitelist projection of one Claude Code state file (statefile.go),
+// the plugin's only prompt-bearing channel. Unlike hookPayload/transcriptRecord it
+// DELIBERATELY carries first_prompt and last_response — but still as an explicit,
+// bounded field list, so message, last_prompt, transcript_path and any future field
+// are dropped by default. It is opt-in and its two prompt fields are truncated
+// (statefile.go) before they are stored (EDR §Privacy carve-out).
+type stateFile struct {
+	SID          string `json:"sid"`
+	Cwd          string `json:"cwd"`
+	Pid          int    `json:"pid"`
+	Pane         string `json:"pane"`
+	State        string `json:"state"`
+	FirstPrompt  string `json:"first_prompt"`
+	LastResponse string `json:"last_response"`
+}
+
 // projectRecord builds the enrichment and any PreToolUse folds for one transcript
 // record. It reads tool_use block NAMES only; content strings (prompts, responses)
 // and tool inputs are never touched.

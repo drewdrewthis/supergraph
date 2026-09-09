@@ -111,6 +111,22 @@ slotKind = "worker"      # Slot.kind stamped on tracked panes
 Omitting `[plugins.tmux]` entirely leaves the plugin dormant — it registers but
 never runs. See the `[plugins.github]` ingest config below for another example.
 
+The claude plugin (session state from Claude Code lifecycle hooks + a transcript
+tail) adds an optional third, **prompt-bearing** ingest channel:
+
+```toml
+[plugins.claude]
+stateDir   = ""     # scan <stateDir>/*.json for session state; "" (default) DISABLES it
+paneTitles = false  # resolve tmux pane titles via `tmux list-panes` (default off)
+```
+
+`stateDir` is **opt-in and off by default**. It is the only channel that stores prompt
+text: `first_prompt` becomes `mission` (truncated to 120 runes) and `last_response`
+becomes `lastResponse` (200 runes). Enabling it opts that box's truncated prompt text
+into peer-mesh replication (`docs/edr/claude.md` §Privacy), so leave it empty unless you
+want that. A leading `~/` in `stateDir` expands against `$HOME`. `paneTitles` never
+spawns `tmux` while false.
+
 ### Querying a cached issue
 
 The `issue(key: String!): Issue` field (github plugin, cache-only — no upstream

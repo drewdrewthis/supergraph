@@ -131,16 +131,18 @@ features-claude:
 	FEATURES_TAGS="@claude && ~@pending && ~@live" go test ./features/ -run TestFeatures -v
 
 # loc-claude guards the plugins/claude/** LOC budget (docs/edr/claude.md): prod code
-# only (no _test.go), comments/blank lines stripped, fails when the total exceeds 750
+# only (no _test.go), comments/blank lines stripped, fails when the total exceeds 900
 # (AC-CLAUDE-LOC; 790->750 after the config helpers moved to plugins/internal/pluginconfig,
-# measured 710 x1.05 rounded up to 10). Uses POSIX [[:space:]] (not \s, which BSD/macOS sed does not honor,
-# silently under-stripping indented comments) — the same formula as loc-github.
+# then 750->900 for issue #28's third ingest channel — statefile.go + the mission/
+# lastResponse/paneTitle columns — measured 850 x1.05 rounded up to 10). Uses POSIX
+# [[:space:]] (not \s, which BSD/macOS sed does not honor, silently under-stripping
+# indented comments) — the same formula as loc-github.
 loc-claude:
 	@files=$$(find plugins/claude -name '*.go' ! -name '*_test.go' 2>/dev/null); \
 	if [ -z "$$files" ]; then count=0; else count=$$(echo "$$files" | xargs sed -E '/^[[:space:]]*\/\//d;/^[[:space:]]*$$/d' | wc -l | tr -d ' '); fi; \
 	echo "plugins/claude prod LOC: $$count"; \
-	if [ "$$count" -gt 750 ]; then \
-		echo "loc-claude: $$count LOC exceeds the 750 budget" >&2; \
+	if [ "$$count" -gt 900 ]; then \
+		echo "loc-claude: $$count LOC exceeds the 900 budget" >&2; \
 		exit 1; \
 	fi
 

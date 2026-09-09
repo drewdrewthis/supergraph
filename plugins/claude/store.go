@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/drewdrewthis/supergraph/core"
@@ -19,9 +20,14 @@ type store struct{ core *core.Store }
 // Pane is non-empty (no second table). Empty/zero fields render as GraphQL null.
 type SessionRow struct {
 	HostID, SessionID, Cwd, GitBranch, Model, State, LastTool, Pane, PrURL string
-	IssueNumber, ToolCalls, Pid, PrNumber                                  int
-	StartedAt, LastEventAt                                                 time.Time
-	StaleSince                                                             *time.Time
+	// Mission, LastResponse and PaneTitle are set only by the state-file channel
+	// (statefile.go, issue #28); they are empty on rows built from the hook/transcript
+	// channels and render as GraphQL null. Mission/LastResponse are rune-truncated
+	// prompt text (the plugin's only stored content, opt-in via stateDir).
+	Mission, LastResponse, PaneTitle      string
+	IssueNumber, ToolCalls, Pid, PrNumber int
+	StartedAt, LastEventAt                time.Time
+	StaleSince                            *time.Time
 }
 
 const rfc = time.RFC3339Nano
@@ -55,6 +61,15 @@ CREATE TABLE IF NOT EXISTS claude_folds (
 func (s *store) migrate(ctx context.Context) error {
 	if _, err := s.core.DB().ExecContext(ctx, claudeSchema); err != nil {
 		return fmt.Errorf("claude: migrate: %w", err)
+	}
+	// mission/last_response/pane_title are add-only nullable columns for the state-file
+	// channel (issue #28). ADD COLUMN errors when the column already exists, which is
+	// the idempotent-success case on a re-migrated db — tolerated, never fatal.
+	for _, col := range []string{"mission", "last_response", "pane_title"} {
+		if _, err := s.core.DB().ExecContext(ctx, "ALTER TABLE claude_sessions ADD COLUMN "+col+" TEXT"); err != nil &&
+			!strings.Contains(err.Error(), "duplicate column name") {
+			return fmt.Errorf("claude: migrate add %s: %w", col, err)
+		}
 	}
 	return nil
 }
@@ -144,24 +159,101 @@ func (s *store) applyEnrichment(ctx context.Context, sid, host string, e enrichm
 	return nil
 }
 
+// stateFileInsert / stateFileUpdate write ONLY the state-file channel's columns. They
+// never name tool_calls, so a folded row's counters survive; the update never lowers
+// state for a folded session because applyStateFile keeps the stored state in that
+// case (a fold is authoritative over the file).
+// Every column is named explicitly with an empty/zero default. Omitting a column would
+// leave it SQL NULL, and scanRow scans git_branch/last_tool/pr_url into plain strings —
+// a NULL there makes the whole row unscannable and therefore invisible to every query.
+const stateFileInsert = `INSERT INTO claude_sessions
+	(sid,host_id,cwd,git_branch,issue_number,model,state,last_tool,tool_calls,pane,pid,pr_number,pr_url,started_at,last_event_at,stale_since,mission,last_response,pane_title)
+	VALUES (?,?,?,'',0,'',?,'',0,?,?,0,'',?,?,'',?,?,?)`
+const stateFileUpdate = `UPDATE claude_sessions
+	SET cwd=?, state=?, pane=?, pid=?, last_event_at=?, mission=?, last_response=?, pane_title=? WHERE sid=?`
+
+// applyStateFile reconciles one state file by sid. It COALESCEs the structural fields
+// (an empty file field never clears a stored value) and applies the file's `state`
+// ONLY for a session the fold path never touched (AC-CLAUDE-STATEFILE-RECONCILE): a
+// hook/transcript-folded row keeps its state and counters. mission/lastResponse/
+// paneTitle are set here and, because the fold SQL does not name those columns, a
+// later fold never clears them. It returns whether the row actually changed, so a
+// no-op re-scan emits nothing (AC-CLAUDE-STATEFILE-EMIT).
+func (s *store) applyStateFile(ctx context.Context, sf stateFile, paneTitle, host string, now time.Time) (bool, error) {
+	cur, err := s.get(ctx, sf.SID)
+	if err != nil {
+		return false, err
+	}
+	cwd, pane, state := "", "", string(stateIdle)
+	mission, lastResp, title, pid := "", "", "", 0
+	if cur != nil {
+		cwd, pane, state = cur.Cwd, cur.Pane, cur.State
+		mission, lastResp, title, pid = cur.Mission, cur.LastResponse, cur.PaneTitle, cur.Pid
+	}
+	setIf(&cwd, sf.Cwd)
+	setIf(&pane, sf.Pane)
+	setIf(&mission, truncRunes(sf.FirstPrompt, missionMaxRunes))
+	setIf(&lastResp, truncRunes(sf.LastResponse, lastResponseMaxRunes))
+	setIf(&title, paneTitle)
+	if sf.Pid != 0 {
+		pid = sf.Pid
+	}
+	if !s.hasFold(ctx, sf.SID) {
+		setIf(&state, sf.State)
+	}
+	if cur != nil && cwd == cur.Cwd && pane == cur.Pane && state == cur.State &&
+		mission == cur.Mission && lastResp == cur.LastResponse && title == cur.PaneTitle && pid == cur.Pid {
+		return false, nil
+	}
+	ts := now.Format(rfc)
+	if cur == nil {
+		_, err = s.db().ExecContext(ctx, stateFileInsert, sf.SID, host, cwd, state, pane, pid, ts, ts, mission, lastResp, title)
+	} else {
+		_, err = s.db().ExecContext(ctx, stateFileUpdate, cwd, state, pane, pid, ts, mission, lastResp, title, sf.SID)
+	}
+	if err != nil {
+		return false, fmt.Errorf("claude: statefile %s: %w", sf.SID, err)
+	}
+	return true, nil
+}
+
+// setIf overwrites *dst with v only when v is non-empty, the COALESCE rule the
+// state-file upsert shares with enrichSet.
+func setIf(dst *string, v string) {
+	if v != "" {
+		*dst = v
+	}
+}
+
+// hasFold reports whether the fold path (hook or transcript tool_use) has ever
+// recorded a transition for sid — the signal that the session's state is
+// hook-authoritative and the state file must not overwrite it.
+func (s *store) hasFold(ctx context.Context, sid string) bool {
+	var one int
+	_ = s.db().QueryRowContext(ctx, `SELECT 1 FROM claude_folds WHERE sid=? LIMIT 1`, sid).Scan(&one)
+	return one == 1
+}
+
 func (s *store) stateOf(ctx context.Context, sid string) State {
 	var st string
 	_ = s.db().QueryRowContext(ctx, `SELECT state FROM claude_sessions WHERE sid=?`, sid).Scan(&st)
 	return State(st)
 }
 
-const selectCols = `SELECT sid,host_id,cwd,git_branch,issue_number,model,state,last_tool,tool_calls,pane,pid,pr_number,pr_url,started_at,last_event_at,stale_since FROM claude_sessions`
+const selectCols = `SELECT sid,host_id,cwd,git_branch,issue_number,model,state,last_tool,tool_calls,pane,pid,pr_number,pr_url,started_at,last_event_at,stale_since,mission,last_response,pane_title FROM claude_sessions`
 
 func scanRow(sc interface{ Scan(...any) error }) (SessionRow, error) {
 	var (
-		r                 SessionRow
-		started, last, st string
+		r                            SessionRow
+		started, last, st            string
+		mission, lastResp, paneTitle sql.NullString // NULL on rows never touched by the state-file channel
 	)
 	if err := sc.Scan(&r.SessionID, &r.HostID, &r.Cwd, &r.GitBranch, &r.IssueNumber, &r.Model,
 		&r.State, &r.LastTool, &r.ToolCalls, &r.Pane, &r.Pid, &r.PrNumber, &r.PrURL,
-		&started, &last, &st); err != nil {
+		&started, &last, &st, &mission, &lastResp, &paneTitle); err != nil {
 		return r, err
 	}
+	r.Mission, r.LastResponse, r.PaneTitle = mission.String, lastResp.String, paneTitle.String
 	r.StartedAt, _ = time.Parse(rfc, started)
 	r.LastEventAt, _ = time.Parse(rfc, last)
 	if st != "" {

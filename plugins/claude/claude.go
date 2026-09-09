@@ -37,6 +37,8 @@ type Plugin struct {
 	hostID        string
 	projectsDir   string
 	settingsPath  string
+	stateDir      string // state-file ingest dir; "" disables the prompt-bearing channel (issue #28)
+	paneTitles    bool   // spawn tmux to resolve pane titles (default off)
 	scanInterval  time.Duration
 	retentionDays int
 	pidLiveness   bool
@@ -66,6 +68,9 @@ func New(cfg core.PluginConfig) (core.Plugin, error) {
 	raw := cfg.Raw
 	p.projectsDir = pluginconfig.Str(raw, "projectsDir", p.projectsDir)
 	p.settingsPath = pluginconfig.Str(raw, "settingsPath", p.settingsPath)
+	// stateDir defaults to "" — the prompt-bearing channel is opt-in (EDR §Privacy).
+	p.stateDir = expandTilde(pluginconfig.Str(raw, "stateDir", ""), home)
+	p.paneTitles = pluginconfig.Bool(raw, "paneTitles", false)
 	p.pidLiveness = pluginconfig.Bool(raw, "pidLiveness", p.pidLiveness)
 	p.retentionDays = pluginconfig.Int(raw, "retentionDays", p.retentionDays)
 	if n := pluginconfig.Int(raw, "scanIntervalSeconds", 0); n > 0 {

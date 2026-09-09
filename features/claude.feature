@@ -191,16 +191,141 @@ Feature: Claude plugin — session state from lifecycle hooks + transcript tail
     Then no duplicate `supergraph claude-hook` entry is added to any event array
 
   @claude @local @AC-CLAUDE-LOC
-  Scenario: Production LOC for the claude plugin stays within the 750-line budget
+  Scenario: Production LOC for the claude plugin stays within the 900-line budget
     Given the claude plugin source under `plugins/claude`
     When `make loc-claude` counts non-comment, non-blank prod lines excluding tests
-    Then the count is 750 or fewer
+    Then the count is 900 or fewer
 
   @claude @local @AC-CLAUDE-ZEROCORE
   Scenario: The claude plugin compiles in without touching core
     Given the claude plugin package and its blank import in graph/plugins_import.go
     When `git diff --stat core/` is run after the claude plugin compiles in
     Then it reports 0 core files changed
+
+  # ---------- State-file ingest channel (issue #28) ----------
+
+  # The third ingest channel: a poll-scan of stateDir/*.json on the tail ticker. It is
+  # the ONLY prompt-bearing path (mission/lastResponse) and is opt-in — dormant unless
+  # stateDir is set — because enabling it opts the box's truncated prompt text into
+  # peer-mesh replication (docs/edr/claude.md §Privacy carve-out).
+
+  @claude @local @AC-CLAUDE-INPUT-2S
+  Scenario: A permission notification reaches state input within 2 seconds over the subscription (regression guard)
+    Given a supergraph server started with the claude plugin and data dir <tmp>
+    And an open `claudeSessionUpdated` subscription capturing every claude envelope
+    When a `Notification` hook payload for `P1` with a permission message is POSTed
+    Then a `claude.session.updated` envelope for `P1` with state "input" is pushed within 2 seconds
+    And `claudeSession(sessionId: "P1")` has state "input"
+
+  @claude @local @AC-CLAUDE-STATEFILE-INGEST
+  Scenario: A hook-less session in a state file is ingested with its state, cwd, and instance
+    Given a supergraph server started with the claude plugin, a state dir, and data dir <tmp>
+    And a state file for session `M1` with pane "%7", a live pid, cwd "/w/x", and state "input"
+    When the state-file channel scans once
+    Then `claudeSession(sessionId: "M1")` has state "input" and cwd "/w/x"
+    And a `ClaudeInstance` exists with `pane` "%7" and a non-zero `pid` whose `session` is `M1`
+
+  @claude @local @AC-CLAUDE-STATEFILE-EMIT
+  Scenario: A state-file scan emits session.updated once, and nothing on an unchanged re-scan
+    Given a supergraph server started with the claude plugin, a state dir, and data dir <tmp>
+    And an open `claudeSessionUpdated` subscription capturing every claude envelope
+    And a state file for session `M3` with state "idle"
+    When the state-file channel scans once
+    Then a `claude.session.updated` envelope is pushed for `M3`
+    When the same unchanged state dir is scanned again
+    Then no further `claude.session.updated` envelope is pushed for `M3`
+
+  @claude @local @AC-CLAUDE-MISSION-TRUNC
+  Scenario: mission is the first 120 runes of first_prompt, valid UTF-8, or null when absent
+    Given a supergraph server started with the claude plugin, a state dir, and data dir <tmp>
+    And a state file for session `MT` whose `first_prompt` is a 500-rune multibyte string
+    When the state-file channel scans once
+    Then `claudeSession(sessionId: "MT")` `mission` is 120 runes, valid UTF-8, and a prefix of the first prompt
+    When a state file for session `MF` with an empty `first_prompt` is scanned
+    Then `claudeSession(sessionId: "MF")` `mission` is null
+
+  @claude @local @AC-CLAUDE-LASTRESPONSE
+  Scenario: lastResponse carries the response text, truncated to 200 runes, or null when absent
+    Given a supergraph server started with the claude plugin, a state dir, and data dir <tmp>
+    And a state file for session `LR` with `last_response` "R-BODY"
+    When the state-file channel scans once
+    Then `claudeSession(sessionId: "LR")` `lastResponse` is "R-BODY"
+    When a state file for session `LR2` with a 500-rune `last_response` is scanned
+    Then `claudeSession(sessionId: "LR2")` `lastResponse` is 200 runes
+
+  @claude @local @AC-CLAUDE-STATEFILE-RECONCILE
+  Scenario: A state file enriches a folded session but never clobbers its state or counters
+    Given a supergraph server started with the claude plugin, a state dir, and data dir <tmp>
+    And session `M2` folded from a `PreToolUse` hook to state "working" with toolCalls 2
+    And a state file for session `M2` with state "idle" and `first_prompt` "MISSION-TEXT"
+    When the state-file channel scans once
+    Then `claudeSession(sessionId: "M2")` has state "working", toolCalls 2, and mission "MISSION-TEXT"
+    When a state file creates session `M4` with state "idle" and `first_prompt` "MISSION-TEXT"
+    And a `UserPromptSubmit` hook payload for `M4` is POSTed
+    Then `claudeSession(sessionId: "M4")` has state "working" and mission "MISSION-TEXT"
+
+  @claude @local @AC-CLAUDE-STATEFILE-MALFORMED
+  Scenario: A malformed or invalid state file is skipped without aborting the scan
+    Given a supergraph server started with the claude plugin, a state dir, and data dir <tmp>
+    And the state dir contains a truncated invalid-JSON file and a valid state file for `V1`
+    When the state-file channel scans once
+    Then `claudeSession(sessionId: "V1")` exists
+    And a state file whose `sid` fails the session-id charset check stores nothing
+
+  @claude @local @AC-CLAUDE-PANE-TITLE
+  Scenario: pane titles come from tmux when enabled
+    Given a supergraph server started with the claude plugin, a state dir, pane titles enabled, and a stub tmux reporting pane "%7" title "issue28-worker"
+    And a state file for session `PT` with pane "%7"
+    When the state-file channel scans once
+    Then `claudeSession(sessionId: "PT")` `paneTitle` is "issue28-worker"
+    And the stub tmux was invoked
+
+  @claude @local @AC-CLAUDE-PANE-TITLE
+  Scenario: a tmux that exits non-zero leaves paneTitle null and surfaces no error
+    Given a supergraph server started with the claude plugin, a state dir, pane titles enabled, and a stub tmux that exits non-zero
+    And a state file for session `PT2` with pane "%7"
+    When the state-file channel scans once
+    Then `claudeSession(sessionId: "PT2")` exists
+    And `claudeSession(sessionId: "PT2")` `paneTitle` is null
+
+  @claude @local @AC-CLAUDE-PANE-TITLE
+  Scenario: with paneTitles disabled, tmux is never spawned and paneTitle stays null
+    Given a supergraph server started with the claude plugin, a state dir, pane titles disabled, and a stub tmux on PATH
+    And a state file for session `PT3` with pane "%7"
+    When the state-file channel scans once
+    Then `claudeSession(sessionId: "PT3")` `paneTitle` is null
+    And the stub tmux was not invoked
+
+  @claude @local @AC-CLAUDE-STATEDIR-TILDE
+  Scenario: a stateDir beginning ~/ resolves against the home directory
+    Given a supergraph server started with the claude plugin, a state dir configured as `~/state`, and data dir <tmp>
+    And a state file for session `TD` under the home-relative state dir
+    When the state-file channel scans once
+    Then `claudeSession(sessionId: "TD")` exists
+
+  @claude @local @AC-CLAUDE-PRIVACY-CARVEOUT
+  Scenario: with stateDir empty, prompt-bearing state files are never read, stored, emitted, or served
+    Given a supergraph server started with the claude plugin and data dir <tmp>
+    And an open `claudeSessionUpdated` subscription capturing every claude envelope
+    And a state file containing `first_prompt` "SECRET-MISSION-STRING" and `last_response` "SECRET-RESPONSE-STRING" is present while stateDir is empty
+    When the state-file channel scans once
+    Then a raw dump of `<tmp>/claude.db` contains neither secret
+    And every envelope pushed to the subscription contains neither secret
+    And the `claudeSessions` GraphQL result contains neither secret
+
+  @claude @local @AC-CLAUDE-PRIVACY-CARVEOUT
+  Scenario: with stateDir set, the secrets appear only in mission and lastResponse
+    Given a supergraph server started with the claude plugin, a state dir, and data dir <tmp>
+    And a state file for session `SEC` with `first_prompt` "SECRET-MISSION-STRING", `last_response` "SECRET-RESPONSE-STRING", and cwd "/w/sec"
+    When the state-file channel scans once
+    Then `claudeSession(sessionId: "SEC")` `mission` is "SECRET-MISSION-STRING" and `lastResponse` is "SECRET-RESPONSE-STRING"
+    And no other field of `SEC` carries either secret
+
+  @claude @local @AC-CLAUDE-ADDONLY
+  Scenario: mission, lastResponse and paneTitle are nullable additions, null on a hook-only session
+    Given a supergraph server started with the claude plugin and data dir <tmp>
+    When a `SessionStart` hook payload for `AO` is POSTed
+    Then `claudeSession(sessionId: "AO")` `mission`, `lastResponse`, and `paneTitle` are all null
 
   # ---------- Live proof (honest @pending) ----------
 
@@ -229,7 +354,19 @@ Feature: Claude plugin — session state from lifecycle hooks + transcript tail
   # AC-CLAUDE-STALE           → dead pid shows staleSince without a SessionEnd
   # AC-CLAUDE-PRIVACY         → prompt/response/tool_input bodies never persisted, emitted (WS), or served (GraphQL)
   # AC-CLAUDE-INSTALL-IDEMPOTENT → settings.json hook merge is additive + idempotent
-  # AC-CLAUDE-LOC             → prod LOC <= 750 (measured 710 + 5% headroom; helpers moved to plugins/internal/pluginconfig)
+  # AC-CLAUDE-LOC             → prod LOC <= 900 (measured 850 + 5% headroom; issue #28 added the state-file channel)
   # AC-CLAUDE-ZEROCORE        → git diff --stat core/ = 0
+  # --- issue #28: state-file ingest channel + mission/lastResponse/paneTitle ---
+  # AC-CLAUDE-INPUT-2S            → permission notification → state input pushed within 2s (regression guard)
+  # AC-CLAUDE-STATEFILE-INGEST    → a hook-less state file is ingested with state/cwd + a ClaudeInstance
+  # AC-CLAUDE-STATEFILE-EMIT      → a changing scan emits session.updated once; an unchanged re-scan emits nothing
+  # AC-CLAUDE-MISSION-TRUNC       → mission = first 120 runes of first_prompt, valid UTF-8, prefix; absent → null
+  # AC-CLAUDE-LASTRESPONSE        → lastResponse = last_response truncated to 200 runes; absent → null
+  # AC-CLAUDE-STATEFILE-RECONCILE → state file enriches a folded row but never clobbers its state/counters (both orderings)
+  # AC-CLAUDE-STATEFILE-MALFORMED → invalid-JSON / invalid-sid files are skipped, the scan continues
+  # AC-CLAUDE-PANE-TITLE          → tmux titles when enabled; null (no error) on tmux failure; tmux never spawned when disabled
+  # AC-CLAUDE-STATEDIR-TILDE      → a stateDir beginning ~/ resolves against $HOME (empty stateDir → no read, see PRIVACY-CARVEOUT)
+  # AC-CLAUDE-PRIVACY-CARVEOUT    → stateDir empty → secrets never read/stored/emitted/served; set → secrets only in mission/lastResponse
+  # AC-CLAUDE-ADDONLY             → mission/lastResponse/paneTitle are nullable additions, null on a hook-only session
 
   # <!-- ACs ready for ac-reviewer -->
