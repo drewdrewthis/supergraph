@@ -77,6 +77,54 @@ Print the build version:
 supergraph --version
 ```
 
+## Agent tooling (justfile)
+
+The repo-root `justfile` is the agent entry point for a live `supergraph
+serve`: `make` is build/test/CI gates, `just` is agent runtime queries and
+mutations against the running server. Recipes are grouped by plugin module
+(`plugins/<plugin>/mod.just`); list what's available with:
+
+```
+just --list
+just --list github   # a single module's recipes
+```
+
+Query example (jq-projected to the shape an agent wants):
+
+```
+just github pr-status drewdrewthis/supergraph 32
+```
+
+Mutation example:
+
+```
+just github pr-label drewdrewthis/supergraph 32 needs-review
+```
+
+Every query recipe anchors `--queries-dir` to its own module's directory (via
+`source_directory()`), so recipes work from any cwd:
+
+```
+just --justfile /path/to/supergraph/justfile github open-prs drewdrewthis/supergraph
+```
+
+`SUPERGRAPH_BIN` overrides the `supergraph` binary a recipe runs (default:
+whatever `supergraph` resolves to on `PATH`).
+
+### Global install
+
+`scripts/install-remote.sh` installs the recipe tree to
+`~/.local/share/supergraph/` and registers a one-line `import` in
+`~/.config/just/justfile`, so recipes work from any cwd with no checkout:
+
+```
+just -g --list
+just -g github pr-status drewdrewthis/supergraph 32
+```
+
+Suggested alias: `alias sg='just -g'`. `SUPERGRAPH_DATA_DIR` overrides the
+install location.
+
 ## Test
 
 ```

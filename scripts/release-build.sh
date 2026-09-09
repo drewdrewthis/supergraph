@@ -25,6 +25,11 @@ sha256_file() {
 
 targets="linux/amd64 linux/arm64 darwin/arm64"
 
+# Agent tooling layer (issue #37): recipes are version-locked to the binary,
+# so they ship in the same tarball rather than a separate release asset.
+# Plugin list is hardcoded to match the root justfile's `mod?` lines.
+plugins="github claude tmux"
+
 rm -rf "$outdir"
 mkdir -p "$outdir"
 
@@ -48,9 +53,17 @@ for target in $targets; do
 		-o "$bin" ./cmd/supergraph
 
 	cp LICENSE README.md "$stage/"
+	cp justfile "$stage/"
+	for plugin in $plugins; do
+		mkdir -p "$stage/plugins/$plugin"
+		cp "plugins/$plugin/mod.just" "$stage/plugins/$plugin/"
+		if [ -d "plugins/$plugin/queries" ]; then
+			cp -R "plugins/$plugin/queries" "$stage/plugins/$plugin/"
+		fi
+	done
 
 	tarball="supergraph_${version}_${os}_${arch}.tar.gz"
-	tar -C "$stage" -czf "$outdir/$tarball" supergraph LICENSE README.md
+	tar -C "$stage" -czf "$outdir/$tarball" supergraph LICENSE README.md justfile plugins
 
 	(cd "$outdir" && sha256_file "$tarball") >> "$sums_file"
 done
