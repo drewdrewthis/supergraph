@@ -132,6 +132,20 @@ func TestBuildSubscription_NoArgFieldCheckRunUpdated(t *testing.T) {
 	}
 }
 
+func TestBuildSubscription_NoArgFieldWorktreeUpdated(t *testing.T) {
+	q, vars, err := buildSubscription("worktreeUpdated", map[string]any{})
+	if err != nil {
+		t.Fatalf("buildSubscription() error: %v", err)
+	}
+	want := "subscription { worktreeUpdated { ts type v key payload } }"
+	if q != want {
+		t.Fatalf("query = %q, want %q", q, want)
+	}
+	if len(vars) != 0 {
+		t.Fatalf("variables = %v, want empty", vars)
+	}
+}
+
 func TestBuildSubscription_NoArgFieldRejectsUnknownVar(t *testing.T) {
 	if _, _, err := buildSubscription("tmuxEvents", map[string]any{"owner": "acme"}); err == nil {
 		t.Fatal("expected error: tmuxEvents takes no arguments")

@@ -134,13 +134,23 @@ func (p *Plugin) Cursor(ctx context.Context) string {
 	return fmt.Sprintf("worktrees=%d", p.wtCount)
 }
 
-// expandRoot expands a leading "~/" to the user's home dir and cleans the path, so a
-// configured "~/work/x" keys the same as the porcelain-reported absolute path.
+// expandRoot expands a leading "~/" to the user's home dir, cleans the path, and
+// resolves symlinks. `git worktree list --porcelain` always reports fully resolved
+// paths, so an unresolved root (e.g. "/tmp/x" on macOS, where /tmp is itself a
+// symlink into /private/tmp) would disagree with its own worktrees' paths and break
+// the Worktree.tmuxSession path-based join. EvalSymlinks errors when the path
+// doesn't exist yet (an unconfigured/typo'd root); the cleaned path is still
+// reported as configured in that case, and reconcile already skips roots whose git
+// invocation fails.
 func expandRoot(r string) string {
 	if strings.HasPrefix(r, "~/") {
 		if home, err := os.UserHomeDir(); err == nil {
 			r = filepath.Join(home, r[2:])
 		}
 	}
-	return filepath.Clean(r)
+	cleaned := filepath.Clean(r)
+	if resolved, err := filepath.EvalSymlinks(cleaned); err == nil {
+		return resolved
+	}
+	return cleaned
 }
