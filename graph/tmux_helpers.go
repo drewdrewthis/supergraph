@@ -64,3 +64,16 @@ func windowsToModel(rows []tmux.WindowRow) []model.TmuxWindow {
 	}
 	return out
 }
+
+// sessionToModel is the single TmuxSession mapper. Both the tmuxSessions query and
+// the git plugin's Worktree.tmuxSession join go through it so a new TmuxSession
+// field cannot be populated on one path and silently zero-valued on the other
+// (#27 + #29: windows is non-nullable, so a nil slice is a query-time error, and a
+// zero-valued attached is a wrong answer that looks right).
+func sessionToModel(s tmux.SessionRow, windows []tmux.WindowRow) model.TmuxSession {
+	return model.TmuxSession{
+		HostID: s.HostID, Name: s.Name, Worktree: optStr(s.Worktree), Branch: optStr(s.Branch),
+		Attached: s.Attached, CreatedAt: s.CreatedAt, Windows: windowsToModel(windows),
+		LastSeenAt: s.LastSeenAt, StaleSince: s.StaleSince,
+	}
+}

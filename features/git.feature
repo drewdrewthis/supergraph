@@ -62,6 +62,23 @@ Feature: git plugin — local repo/worktree read model
     Then the "attended" worktree's tmuxSession is not null
     And the "unattended" worktree's tmuxSession is null
 
+  # Regression for the #27+#29 drift: the git join's mapper once built a
+  # TmuxSession by hand and left `windows`/`attached` unpopulated (a nil slice on
+  # a non-nullable field, and a permanently-false attached) while the top-level
+  # `tmuxSessions` query, going through a different mapper, was fine. Both paths
+  # now share one mapper (sessionToModel). This asserts real values against the
+  # live tmux server, not mere non-null, and that the two paths agree.
+  @git @local @tmux @AC-TMUX-GIT-JOIN-FIELDS
+  Scenario: The git join's tmuxSession carries the same real, populated fields as the top-level tmuxSessions query
+    Given a repo root with a worktree whose path hosts a tmux session with two windows of panes
+    And a supergraph server watches both that repo and that tmux socket
+    When a real terminal client attaches to that session
+    And `repos` is queried for that repo and `tmuxSessions` is queried directly
+    Then the worktree's tmuxSession windows and panes match the real tmux server's structure
+    And the worktree's tmuxSession reads attached
+    And the worktree's tmuxSession's createdAt is non-null and non-zero
+    And the worktree's tmuxSession equals the session returned by the top-level tmuxSessions query
+
   # ---------- Cross-plugin join: issue / PR ----------
 
   # The matching rule (graph/git.resolvers.go + graph/git_map.go): a worktree's

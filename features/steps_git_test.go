@@ -7,7 +7,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -68,6 +71,15 @@ func registerGitSteps(sc *godog.ScenarioContext) {
 	sc.Step(lit("a supergraph server watches both that repo and that tmux socket"), g.startWithGitAndTmux)
 	sc.Step(lit(`the "attended" worktree's tmuxSession is not null`), g.assertAttendedTmuxSessionNotNull)
 	sc.Step(lit(`the "unattended" worktree's tmuxSession is null`), g.assertUnattendedTmuxSessionNull)
+
+	// ---------- AC-TMUX-GIT-JOIN-FIELDS ----------
+	sc.Step(lit("a repo root with a worktree whose path hosts a tmux session with two windows of panes"), g.seedWorktreeWithTmuxWindows)
+	sc.Step(lit("a real terminal client attaches to that session"), g.attachRealClientToJoinSession)
+	sc.Step(lit("`repos` is queried for that repo and `tmuxSessions` is queried directly"), g.queryJoinAndTopLevelUntilAttached)
+	sc.Step(lit("the worktree's tmuxSession windows and panes match the real tmux server's structure"), g.assertJoinWindowsMatchReal)
+	sc.Step(lit("the worktree's tmuxSession reads attached"), g.assertJoinAttached)
+	sc.Step(lit("the worktree's tmuxSession's createdAt is non-null and non-zero"), g.assertJoinCreatedAtNonZero)
+	sc.Step(lit("the worktree's tmuxSession equals the session returned by the top-level tmuxSessions query"), g.assertJoinEqualsTopLevel)
 
 	// ---------- AC-GIT-ISSUE-JOIN / AC-GIT-PR-JOIN ----------
 	sc.Step(regexp.MustCompile("^a repo root whose origin is `([^`]+)`, with a worktree on branch \"([^\"]*)\"$"), g.seedJoinWorktree)
@@ -148,6 +160,13 @@ type gitWorld struct {
 	// AC-GIT-ISSUE-JOIN / AC-GIT-PR-JOIN
 	githubEnabled bool
 	ghFake        *fakegh.Server
+
+	// AC-TMUX-GIT-JOIN-FIELDS
+	joinWorktreePath string
+	joinSessionName  string
+	attachCmd        *exec.Cmd
+	tmuxJoinWorktree *joinWorktreeDetail
+	joinTopLevel     *joinTmuxDetail
 }
 
 func (g *gitWorld) init() error {
@@ -166,6 +185,13 @@ func (g *gitWorld) init() error {
 func (g *gitWorld) sw() *world { return g.sw_ }
 
 func (g *gitWorld) cleanup() {
+	// Reap the AC-TMUX-GIT-JOIN-FIELDS real attach client first, mirroring
+	// tmuxWorld.cleanup: killTmuxServer's pgrep sweep would eventually catch an
+	// orphaned attach process too, but killing it explicitly here avoids leaving a
+	// `script`-wrapped process hanging on a pty this scenario is done with.
+	if g.attachCmd != nil && g.attachCmd.Process != nil {
+		_ = g.attachCmd.Process.Kill()
+	}
 	if g.sw_ != nil {
 		g.sw_.stopSubscribeBG()
 		g.sw_.cleanup()
@@ -943,6 +969,273 @@ func (g *gitWorld) assertUnattendedTmuxSessionNull() error {
 	}
 	if wt.TmuxSess != nil {
 		return fmt.Errorf("unattended worktree's tmuxSession is non-null, want null")
+	}
+	return nil
+}
+
+// ==================== AC-TMUX-GIT-JOIN-FIELDS ====================
+//
+// Regression for the #27+#29 drift: graph/git_map.go's tmuxSessionForWorktree and
+// graph/tmux.resolvers.go's tmuxSessions both now build their TmuxSession through
+// the single graph/tmux_helpers.go sessionToModel mapper. Before that fix, the git
+// join built its own TmuxSession by hand and left `windows`/`attached` zero-valued
+// — windows nil on a non-nullable field (a query-time error) and attached always
+// false (a wrong answer that looks right, since false is a valid non-null value).
+// This queries THROUGH the git join with a real tmux session that has real
+// structure and a real attached client, and asserts real values — not mere
+// non-null — against both the live tmux server and the top-level `tmuxSessions`
+// query, which is the one direct proof that both paths agree.
+
+// joinPaneDetail/joinWindowDetail/joinTmuxDetail are the minimal wire shape this
+// scenario needs from TmuxSession, shared by both the git-join query (nested under
+// Worktree.tmuxSession) and the top-level tmuxSessions query, so the two JSON
+// payloads can be compared directly.
+type joinPaneDetail struct {
+	PaneID string `json:"paneId"`
+}
+
+type joinWindowDetail struct {
+	Index int              `json:"index"`
+	Panes []joinPaneDetail `json:"panes"`
+}
+
+type joinTmuxDetail struct {
+	Name      string             `json:"name"`
+	Attached  bool               `json:"attached"`
+	CreatedAt *string            `json:"createdAt"`
+	Windows   []joinWindowDetail `json:"windows"`
+}
+
+type joinWorktreeDetail struct {
+	Path        string          `json:"path"`
+	TmuxSession *joinTmuxDetail `json:"tmuxSession"`
+}
+
+func (g *gitWorld) seedWorktreeWithTmuxWindows() error {
+	root, err := g.newDir("tmuxjoinfields")
+	if err != nil {
+		return err
+	}
+	if err := initRepoWithCommit(root); err != nil {
+		return err
+	}
+	wt, err := g.newDir("joinwt")
+	if err != nil {
+		return err
+	}
+	_ = os.RemoveAll(wt)
+	if err := gitWorktreeAddBranch(root, wt, "joinwt"); err != nil {
+		return err
+	}
+	g.roots = []string{root}
+	g.joinWorktreePath = wt
+
+	socket := fmt.Sprintf("sg-test-git-joinfields-%d-%d", os.Getpid(), time.Now().UnixNano())
+	sessionName := "join"
+	if out, err := exec.Command("tmux", "-f", "/dev/null", "-L", socket, "new-session", "-d", "-s", sessionName, "-c", wt).CombinedOutput(); err != nil {
+		return fmt.Errorf("tmux new-session: %s", out)
+	}
+	// window 0: 1 pane (created above). window 1: 2 panes (new-window + a split).
+	if out, err := exec.Command("tmux", "-L", socket, "new-window", "-t", sessionName).CombinedOutput(); err != nil {
+		return fmt.Errorf("tmux new-window: %s", out)
+	}
+	if out, err := exec.Command("tmux", "-L", socket, "split-window", "-t", sessionName+":1").CombinedOutput(); err != nil {
+		return fmt.Errorf("tmux split-window: %s", out)
+	}
+	g.tmuxSocket = socket
+	g.joinSessionName = sessionName
+	return nil
+}
+
+// attachRealClientToJoinSession starts exactly one real (non-control-mode) attach
+// via the shared scriptAttachCmd/`script`-pty helper (features/tmux_helpers_test.go)
+// — reused, not reimplemented, and started only once: repeated pty attach cycles
+// exhaust a finite system-wide pool (see AC-TMUX-ATTACHED-LIVE's doc comment).
+// Whether the real tmux server has actually registered the client, and whether the
+// join reflects it, is confirmed later by queryJoinAndTopLevelUntilAttached
+// polling the live GraphQL query — not assumed here.
+func (g *gitWorld) attachRealClientToJoinSession() error {
+	cmd, ok := scriptAttachCmd(g.tmuxSocket, g.joinSessionName)
+	if !ok {
+		return godog.ErrPending
+	}
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("start real attach via script: %w", err)
+	}
+	g.attachCmd = cmd
+	return nil
+}
+
+func (g *gitWorld) queryJoinTmuxDetail() (*joinWorktreeDetail, error) {
+	gql := `{ repos { worktrees { path tmuxSession { name attached createdAt windows { index panes { paneId } } } } } }`
+	g.sw_.runCLI("query", gql)
+	if g.sw_.lastExit != 0 {
+		return nil, fmt.Errorf("query exit %d: %s", g.sw_.lastExit, g.sw_.lastStderr)
+	}
+	var d struct {
+		Repos []struct {
+			Worktrees []joinWorktreeDetail `json:"worktrees"`
+		} `json:"repos"`
+	}
+	if err := json.Unmarshal([]byte(g.sw_.lastStdout), &d); err != nil {
+		return nil, fmt.Errorf("parse %q: %w", g.sw_.lastStdout, err)
+	}
+	for _, r := range d.Repos {
+		for i := range r.Worktrees {
+			if r.Worktrees[i].Path == g.joinWorktreePath {
+				return &r.Worktrees[i], nil
+			}
+		}
+	}
+	return nil, fmt.Errorf("no worktree row for path %q", g.joinWorktreePath)
+}
+
+func (g *gitWorld) queryTopLevelTmuxDetail() (*joinTmuxDetail, error) {
+	gql := `{ tmuxSessions { name attached createdAt windows { index panes { paneId } } } }`
+	g.sw_.runCLI("query", gql)
+	if g.sw_.lastExit != 0 {
+		return nil, fmt.Errorf("query exit %d: %s", g.sw_.lastExit, g.sw_.lastStderr)
+	}
+	var d struct {
+		TmuxSessions []joinTmuxDetail `json:"tmuxSessions"`
+	}
+	if err := json.Unmarshal([]byte(g.sw_.lastStdout), &d); err != nil {
+		return nil, fmt.Errorf("parse %q: %w", g.sw_.lastStdout, err)
+	}
+	for i := range d.TmuxSessions {
+		if d.TmuxSessions[i].Name == g.joinSessionName {
+			return &d.TmuxSessions[i], nil
+		}
+	}
+	return nil, fmt.Errorf("no top-level tmuxSessions row named %q", g.joinSessionName)
+}
+
+// queryJoinAndTopLevelUntilAttached polls both the git-join query and the
+// top-level tmuxSessions query (the git plugin's tmux config runs eventSource
+// "poll", so attached only flips on the next reconcile) until the join's
+// tmuxSession reads attached — the state the AC needs, since a permanently-false
+// attached must be asserted as a failure, not sidestepped. Once true, both
+// payloads are stashed for the Then steps.
+func (g *gitWorld) queryJoinAndTopLevelUntilAttached() error {
+	return eventually(g.within(), func() error {
+		wt, err := g.queryJoinTmuxDetail()
+		if err != nil {
+			return err
+		}
+		if wt.TmuxSession == nil {
+			return fmt.Errorf("worktree's tmuxSession is null")
+		}
+		if !wt.TmuxSession.Attached {
+			return fmt.Errorf("worktree's tmuxSession not attached yet")
+		}
+		top, err := g.queryTopLevelTmuxDetail()
+		if err != nil {
+			return err
+		}
+		g.tmuxJoinWorktree = wt
+		g.joinTopLevel = top
+		return nil
+	})
+}
+
+func sortWindows(ws []joinWindowDetail) []joinWindowDetail {
+	out := make([]joinWindowDetail, len(ws))
+	copy(out, ws)
+	sort.Slice(out, func(i, j int) bool { return out[i].Index < out[j].Index })
+	for i := range out {
+		panes := make([]joinPaneDetail, len(out[i].Panes))
+		copy(panes, out[i].Panes)
+		sort.Slice(panes, func(a, b int) bool { return panes[a].PaneID < panes[b].PaneID })
+		out[i].Panes = panes
+	}
+	return out
+}
+
+func (g *gitWorld) assertJoinWindowsMatchReal() error {
+	if g.tmuxJoinWorktree == nil || g.tmuxJoinWorktree.TmuxSession == nil {
+		return fmt.Errorf("no queried tmuxSession to check")
+	}
+	wOut, err := exec.Command("tmux", "-L", g.tmuxSocket, "list-windows", "-t", g.joinSessionName, "-F", "#{window_index}").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("list-windows: %s", wOut)
+	}
+	real := map[int][]string{}
+	for _, line := range strings.Split(strings.TrimSpace(string(wOut)), "\n") {
+		idx, perr := strconv.Atoi(strings.TrimSpace(line))
+		if perr != nil {
+			continue
+		}
+		pOut, err := exec.Command("tmux", "-L", g.tmuxSocket, "list-panes", "-t", fmt.Sprintf("%s:%d", g.joinSessionName, idx), "-F", "#{pane_id}").CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("list-panes window %d: %s", idx, pOut)
+		}
+		var ids []string
+		for _, id := range strings.Split(strings.TrimSpace(string(pOut)), "\n") {
+			if id != "" {
+				ids = append(ids, id)
+			}
+		}
+		sort.Strings(ids)
+		real[idx] = ids
+	}
+
+	got := map[int][]string{}
+	for _, w := range g.tmuxJoinWorktree.TmuxSession.Windows {
+		var ids []string
+		for _, p := range w.Panes {
+			ids = append(ids, p.PaneID)
+		}
+		sort.Strings(ids)
+		got[w.Index] = ids
+	}
+
+	if !reflect.DeepEqual(real, got) {
+		return fmt.Errorf("join tmuxSession windows/panes = %v, real tmux server = %v", got, real)
+	}
+	return nil
+}
+
+func (g *gitWorld) assertJoinAttached() error {
+	if g.tmuxJoinWorktree == nil || g.tmuxJoinWorktree.TmuxSession == nil {
+		return fmt.Errorf("no queried tmuxSession to check")
+	}
+	if !g.tmuxJoinWorktree.TmuxSession.Attached {
+		return fmt.Errorf("worktree's tmuxSession.attached = false, want true (a real client is attached)")
+	}
+	return nil
+}
+
+func (g *gitWorld) assertJoinCreatedAtNonZero() error {
+	if g.tmuxJoinWorktree == nil || g.tmuxJoinWorktree.TmuxSession == nil {
+		return fmt.Errorf("no queried tmuxSession to check")
+	}
+	raw := g.tmuxJoinWorktree.TmuxSession.CreatedAt
+	if raw == nil {
+		return fmt.Errorf("worktree's tmuxSession.createdAt is null, want non-null")
+	}
+	ts, err := time.Parse(time.RFC3339Nano, *raw)
+	if err != nil {
+		return fmt.Errorf("createdAt %q does not parse as a timestamp: %w", *raw, err)
+	}
+	if ts.IsZero() || ts.Year() < 2000 {
+		return fmt.Errorf("createdAt %q is the zero time, want a real session creation time", *raw)
+	}
+	return nil
+}
+
+func (g *gitWorld) assertJoinEqualsTopLevel() error {
+	if g.tmuxJoinWorktree == nil || g.tmuxJoinWorktree.TmuxSession == nil {
+		return fmt.Errorf("no queried join tmuxSession to compare")
+	}
+	if g.joinTopLevel == nil {
+		return fmt.Errorf("no queried top-level tmuxSessions row to compare")
+	}
+	join := *g.tmuxJoinWorktree.TmuxSession
+	join.Windows = sortWindows(join.Windows)
+	top := *g.joinTopLevel
+	top.Windows = sortWindows(top.Windows)
+	if !reflect.DeepEqual(join, top) {
+		return fmt.Errorf("git join's tmuxSession %+v does not equal the top-level tmuxSessions row %+v", join, top)
 	}
 	return nil
 }
