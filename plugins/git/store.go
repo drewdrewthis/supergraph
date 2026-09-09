@@ -29,14 +29,17 @@ type RepoNode struct {
 // gqlgen-bound Go type for GraphQL `Worktree`. Ahead/Behind are *int on purpose:
 // nil (no upstream / detached) must stay distinct from a genuine 0 "level with
 // upstream" (AC-GIT-AHEAD-BEHIND), so they are stored as SQL NULL, never coerced.
+// Branch is *string for the same reason: a detached HEAD has no branch, and the
+// schema's nullable `branch` must render GraphQL null there, never "" (AC-GIT-WORKTREES).
 // RepoSlug is denormalised via a JOIN on scan so the resolver can build github
 // cache keys without a second lookup. The tmuxSession/issue/pullRequest join edges
 // are absent so gqlgen stubs them in graph/ (D2).
 type WorktreeNode struct {
-	Key, HostID, RepoKey, RepoSlug, Path, Branch, Head string
-	Detached                                           bool
-	Ahead, Behind                                      *int
-	StaleSince                                         *time.Time
+	Key, HostID, RepoKey, RepoSlug, Path, Head string
+	Branch                                     *string
+	Detached                                   bool
+	Ahead, Behind                              *int
+	StaleSince                                 *time.Time
 }
 
 const schema = `
@@ -87,7 +90,8 @@ func (s *store) upsertRepo(ctx context.Context, r RepoNode, now time.Time) error
 }
 
 // upsertWorktree writes one worktree, clearing stale_since. Ahead/Behind bind
-// through nullInt so a nil pointer persists as SQL NULL, not 0 (AC-GIT-AHEAD-BEHIND).
+// through nullInt, and Branch through nullStr, so a nil pointer persists as SQL
+// NULL, not 0/"" (AC-GIT-AHEAD-BEHIND, AC-GIT-WORKTREES).
 func (s *store) upsertWorktree(ctx context.Context, r WorktreeNode, now time.Time) error {
 	_, err := s.db().ExecContext(ctx,
 		`INSERT INTO git_worktrees (key, host_id, repo_key, path, branch, head, detached, ahead, behind, last_seen_at, stale_since)
@@ -95,7 +99,7 @@ func (s *store) upsertWorktree(ctx context.Context, r WorktreeNode, now time.Tim
 		 ON CONFLICT(key) DO UPDATE SET host_id=excluded.host_id, repo_key=excluded.repo_key,
 		   path=excluded.path, branch=excluded.branch, head=excluded.head, detached=excluded.detached,
 		   ahead=excluded.ahead, behind=excluded.behind, last_seen_at=excluded.last_seen_at, stale_since=NULL`,
-		r.Key, r.HostID, r.RepoKey, r.Path, r.Branch, r.Head, b2i(r.Detached),
+		r.Key, r.HostID, r.RepoKey, r.Path, nullStr(r.Branch), r.Head, b2i(r.Detached),
 		nullInt(r.Ahead), nullInt(r.Behind), now.UTC().Format(rfc))
 	if err != nil {
 		return fmt.Errorf("git: upsert worktree: %w", err)
@@ -187,14 +191,16 @@ func (s *store) scanWorktrees(ctx context.Context, repoKey string) ([]WorktreeNo
 	for rows.Next() {
 		var (
 			r             WorktreeNode
+			branch        sql.NullString
 			detached      int
 			ahead, behind sql.NullInt64
 			stale         sql.NullString
 		)
-		if err := rows.Scan(&r.Key, &r.HostID, &r.RepoKey, &r.RepoSlug, &r.Path, &r.Branch, &r.Head,
+		if err := rows.Scan(&r.Key, &r.HostID, &r.RepoKey, &r.RepoSlug, &r.Path, &branch, &r.Head,
 			&detached, &ahead, &behind, &stale); err != nil {
 			return nil, err
 		}
+		r.Branch = nsStr(branch)
 		r.Detached = detached == 1
 		r.Ahead, r.Behind = niInt(ahead), niInt(behind)
 		r.StaleSince = nsTime(stale)
@@ -226,6 +232,25 @@ func niInt(n sql.NullInt64) *int {
 		return nil
 	}
 	v := int(n.Int64)
+	return &v
+}
+
+// nullStr binds a *string as SQL NULL when nil, so a detached HEAD's absent
+// branch never persists as "" (AC-GIT-WORKTREES).
+func nullStr(p *string) any {
+	if p == nil {
+		return nil
+	}
+	return *p
+}
+
+// nsStr reads a nullable text column back into *string, preserving the nil/""
+// distinction on the way back out.
+func nsStr(n sql.NullString) *string {
+	if !n.Valid {
+		return nil
+	}
+	v := n.String
 	return &v
 }
 

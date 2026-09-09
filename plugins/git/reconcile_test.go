@@ -57,6 +57,10 @@ func wt(path, head, branch string) string {
 	return "worktree " + path + "\nHEAD " + head + "\nbranch refs/heads/" + branch + "\n\n"
 }
 
+func wtDetached(path, head string) string {
+	return "worktree " + path + "\nHEAD " + head + "\ndetached\n\n"
+}
+
 func countType(es []core.Envelope, typ string) int {
 	n := 0
 	for _, e := range es {
@@ -160,5 +164,30 @@ func TestReconcileEmitHashGated(t *testing.T) {
 	_ = p.reconcile(ctx)
 	if got := countType(emitted, "git.worktree.updated"); got != 1 {
 		t.Fatalf("changed reconcile: want 1 updated, got %d", got)
+	}
+}
+
+// TestReconcileDetachedBranchNil: a detached-HEAD worktree must produce a nil
+// Branch, never "" (AC-GIT-WORKTREES) — the empty-string/null conflation this
+// plugin already avoids for ahead/behind.
+func TestReconcileDetachedBranchNil(t *testing.T) {
+	ctx := context.Background()
+	p, fg := newPlugin(t, []string{"/repo/a"})
+
+	fg.list["/repo/a"] = wtDetached("/repo/a", "aaa")
+	if err := p.reconcile(ctx); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	got := worktreesByKey(t, p.store, "h:/repo/a")
+	row, ok := got["h:/repo/a"]
+	if !ok {
+		t.Fatal("detached worktree not stored")
+	}
+	if !row.Detached {
+		t.Fatal("detached flag not set")
+	}
+	if row.Branch != nil {
+		t.Fatalf("detached worktree branch should be nil, got %q", *row.Branch)
 	}
 }

@@ -85,10 +85,11 @@ func (r *worktreeResolver) TmuxSession(ctx context.Context, obj *git.WorktreeNod
 // branch derives to via the shared issuekey join, scoped by obj.RepoSlug. A cold
 // cache, an unparseable branch, or a malformed RepoSlug all legitimately yield nil.
 func (r *worktreeResolver) Issue(ctx context.Context, obj *git.WorktreeNode) (*github.IssueNode, error) {
-	if obj.Branch == "" {
+	if obj.Branch == nil {
 		return nil, nil
 	}
-	n, ok := issuekey.FromBranch(obj.Branch)
+	branch := *obj.Branch
+	n, ok := issuekey.FromBranch(branch)
 	if !ok {
 		return nil, nil
 	}
@@ -104,19 +105,20 @@ func (r *worktreeResolver) Issue(ctx context.Context, obj *git.WorktreeNode) (*g
 // hit checked against HeadRefName, then a fallback scan of cached PRs) — state is
 // never filtered, so a closed/merged PR on the branch is still returned.
 func (r *worktreeResolver) PullRequest(ctx context.Context, obj *git.WorktreeNode) (*github.PRNode, error) {
-	if obj.Branch == "" {
+	if obj.Branch == nil {
 		return nil, nil
 	}
+	branch := *obj.Branch
 	owner, repo, ok := splitRepoSlug(obj.RepoSlug)
 	if !ok {
 		return nil, nil
 	}
 	var direct *github.PRNode
-	if n, ok := issuekey.FromBranch(obj.Branch); ok {
+	if n, ok := issuekey.FromBranch(branch); ok {
 		direct = github.PullRequest(ctx, fmt.Sprintf("pr:%s/%s#%d", owner, repo, n))
 	}
 	cached := github.CachedPRs(ctx, owner, repo)
-	return pullRequestForWorktree(direct, cached, obj.Branch), nil
+	return pullRequestForWorktree(direct, cached, branch), nil
 }
 
 // Repo returns RepoResolver implementation.

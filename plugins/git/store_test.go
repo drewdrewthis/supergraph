@@ -26,6 +26,8 @@ func newStore(t *testing.T) *store {
 
 func intp(v int) *int { return &v }
 
+func strp(v string) *string { return &v }
+
 // TestUpsertScanRoundTrip covers the repo/worktree round-trip and the load-bearing
 // ahead/behind nil-vs-0 distinction (AC-GIT-AHEAD-BEHIND): a nil pointer must read
 // back nil, and a genuine 0 must read back 0 — never coerced into each other.
@@ -39,18 +41,23 @@ func TestUpsertScanRoundTrip(t *testing.T) {
 		t.Fatalf("upsertRepo: %v", err)
 	}
 	// Worktree with a known upstream position: ahead 0, behind 3.
-	wtLevel := WorktreeNode{Key: "h:/repo/a", HostID: "h", RepoKey: repoKey, Path: "/repo/a", Branch: "main", Head: "abc", Ahead: intp(0), Behind: intp(3)}
+	wtLevel := WorktreeNode{Key: "h:/repo/a", HostID: "h", RepoKey: repoKey, Path: "/repo/a", Branch: strp("main"), Head: "abc", Ahead: intp(0), Behind: intp(3)}
 	// Worktree with no upstream: both nil.
-	wtNoUp := WorktreeNode{Key: "h:/repo/a/wt", HostID: "h", RepoKey: repoKey, Path: "/repo/a/wt", Branch: "feature", Head: "def"}
+	wtNoUp := WorktreeNode{Key: "h:/repo/a/wt", HostID: "h", RepoKey: repoKey, Path: "/repo/a/wt", Branch: strp("feature"), Head: "def"}
+	// Detached HEAD worktree: no branch at all — must round-trip as nil, not "".
+	wtDetached := WorktreeNode{Key: "h:/repo/a/detached", HostID: "h", RepoKey: repoKey, Path: "/repo/a/detached", Head: "ghi", Detached: true}
 	if err := s.upsertWorktree(ctx, wtLevel, now); err != nil {
 		t.Fatalf("upsertWorktree level: %v", err)
 	}
 	if err := s.upsertWorktree(ctx, wtNoUp, now); err != nil {
 		t.Fatalf("upsertWorktree noup: %v", err)
 	}
+	if err := s.upsertWorktree(ctx, wtDetached, now); err != nil {
+		t.Fatalf("upsertWorktree detached: %v", err)
+	}
 
 	got, err := s.scanWorktrees(ctx, repoKey)
-	if err != nil || len(got) != 2 {
+	if err != nil || len(got) != 3 {
 		t.Fatalf("scanWorktrees got %d %v", len(got), err)
 	}
 	byKey := map[string]WorktreeNode{}
@@ -72,6 +79,15 @@ func TestUpsertScanRoundTrip(t *testing.T) {
 	noup := byKey["h:/repo/a/wt"]
 	if noup.Ahead != nil || noup.Behind != nil {
 		t.Fatalf("nil ahead/behind did not round-trip as nil: %v %v", noup.Ahead, noup.Behind)
+	}
+
+	// AC-GIT-WORKTREES: a nil branch must round-trip as nil, never coerced to "".
+	detached := byKey["h:/repo/a/detached"]
+	if detached.Branch != nil {
+		t.Fatalf("nil branch did not round-trip as nil: %v", *detached.Branch)
+	}
+	if lvl.Branch == nil || *lvl.Branch != "main" {
+		t.Fatalf("set branch did not round-trip: %v", lvl.Branch)
 	}
 }
 

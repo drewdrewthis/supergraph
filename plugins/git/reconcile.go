@@ -92,7 +92,7 @@ func (p *Plugin) worktreeNode(ctx context.Context, repoKey, slug string, wt Work
 		RepoKey:  repoKey,
 		RepoSlug: slug,
 		Path:     wt.Path,
-		Branch:   wt.Branch,
+		Branch:   branchPtr(wt.Branch),
 		Head:     wt.Head,
 		Detached: wt.Detached,
 	}
@@ -100,6 +100,15 @@ func (p *Plugin) worktreeNode(ctx context.Context, repoKey, slug string, wt Work
 		node.Ahead, node.Behind = parseAheadBehind(out)
 	}
 	return node
+}
+
+// branchPtr turns worktree.go's "" (Detached or Bare, by parseWorktreeList's own
+// contract) into nil, so a detached HEAD stores/renders as null, not "" (AC-GIT-WORKTREES).
+func branchPtr(branch string) *string {
+	if branch == "" {
+		return nil
+	}
+	return &branch
 }
 
 // emitIfChanged emits git.worktree.updated only when the worktree is new or its
@@ -126,11 +135,13 @@ func (p *Plugin) forget(key string) {
 }
 
 // worktreeHash is a stable digest of the fields a subscriber keys on: branch, head,
-// detached, ahead/behind, and staleness. ptrStr renders a nil count as "" so the
-// nil/0 distinction survives into the gate, never collapsing to the same hash.
+// detached, ahead/behind, and staleness. ptrStr/ptrStrBranch render a nil as a
+// sentinel distinct from any real value, so a nil branch never hash-collides with a
+// branch literally named "\x00" — and never with a genuine "" either, matching the
+// nil/0 discipline ahead/behind already gets.
 func worktreeHash(n WorktreeNode) string {
 	return fmt.Sprintf("%s|%s|%v|%s|%s|%v",
-		n.Branch, n.Head, n.Detached, ptrStr(n.Ahead), ptrStr(n.Behind), n.StaleSince != nil)
+		ptrStrBranch(n.Branch), n.Head, n.Detached, ptrStr(n.Ahead), ptrStr(n.Behind), n.StaleSince != nil)
 }
 
 func ptrStr(p *int) string {
@@ -138,6 +149,15 @@ func ptrStr(p *int) string {
 		return ""
 	}
 	return fmt.Sprintf("%d", *p)
+}
+
+// ptrStrBranch renders a nil branch as a NUL-prefixed sentinel that no real branch
+// name can contain, so nil never hash-collides with a genuine "" (AC-GIT-WORKTREES).
+func ptrStrBranch(p *string) string {
+	if p == nil {
+		return "\x00nil"
+	}
+	return *p
 }
 
 // worktreePayload is the event body carrying the worktree's fields. Ahead/Behind
