@@ -36,10 +36,43 @@ func TestParsePaneKeyRejectsMalformed(t *testing.T) {
 	}
 }
 
+func TestWindowKeyRoundTrips(t *testing.T) {
+	key := windowKey("main", 2, "drudru-lan")
+	if key != "window:main:2@drudru-lan" {
+		t.Fatalf("format got %q", key)
+	}
+	sess, idx, host, err := parseWindowKey(key)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if sess != "main" || idx != 2 || host != "drudru-lan" {
+		t.Fatalf("round-trip got %q %d %q", sess, idx, host)
+	}
+}
+
+func TestParseWindowKeyRejectsMalformed(t *testing.T) {
+	bad := []string{
+		"window:main:1",     // missing @hostId
+		"window:main:1@",    // empty hostId
+		"session:main@h",    // wrong kind
+		"bogus:main:1@h",    // unknown kind
+		"window:main@h",     // missing index
+		"window:main:@h",    // empty index
+		"window:main:x@h",   // non-int index
+		"window:main:1.0@h", // trailing separator (pane grammar, not window)
+	}
+	for _, k := range bad {
+		if _, _, _, err := parseWindowKey(k); err == nil {
+			t.Errorf("expected error for %q, got none", k)
+		}
+	}
+}
+
 func TestTypename(t *testing.T) {
 	cases := map[string]string{
 		"pane:main:1.0@h": "TmuxPane",
 		"session:main@h":  "TmuxSession",
+		"window:main:1@h": "TmuxWindow",
 		"tmuxServer:h@h":  "TmuxServer",
 		"bogus:x@h":       "",
 	}

@@ -1,11 +1,24 @@
-# sessions — cached sessions with their worktree/branch join fields.
+# sessions — cached sessions with their worktree/branch join fields plus the #27
+# attach/createdAt read model and the window→pane nesting the sidebar reads.
 query sessions($hostId: String) {
   tmuxSessions(hostId: $hostId) {
     hostId
     name
     worktree
     branch
+    attached
+    createdAt
     lastSeenAt
     staleSince
+    windows {
+      key
+      index
+      name
+      active
+      panes {
+        key
+        paneId
+      }
+    }
   }
 }

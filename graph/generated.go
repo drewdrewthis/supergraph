@@ -215,6 +215,7 @@ type ComplexityRoot struct {
 		HostID     func(childComplexity int) int
 		Key        func(childComplexity int) int
 		Pane       func(childComplexity int) int
+		PaneID     func(childComplexity int) int
 		Path       func(childComplexity int) int
 		Pid        func(childComplexity int) int
 		Session    func(childComplexity int) int
@@ -223,12 +224,25 @@ type ComplexityRoot struct {
 	}
 
 	TmuxSession struct {
+		Attached   func(childComplexity int) int
 		Branch     func(childComplexity int) int
+		CreatedAt  func(childComplexity int) int
 		HostID     func(childComplexity int) int
 		LastSeenAt func(childComplexity int) int
 		Name       func(childComplexity int) int
 		StaleSince func(childComplexity int) int
+		Windows    func(childComplexity int) int
 		Worktree   func(childComplexity int) int
+	}
+
+	TmuxWindow struct {
+		Active  func(childComplexity int) int
+		HostID  func(childComplexity int) int
+		Index   func(childComplexity int) int
+		Key     func(childComplexity int) int
+		Name    func(childComplexity int) int
+		Panes   func(childComplexity int) int
+		Session func(childComplexity int) int
 	}
 
 	Worktree struct {
@@ -1143,6 +1157,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.TmuxPane.Pane(childComplexity), true
+	case "TmuxPane.paneId":
+		if e.ComplexityRoot.TmuxPane.PaneID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TmuxPane.PaneID(childComplexity), true
 	case "TmuxPane.path":
 		if e.ComplexityRoot.TmuxPane.Path == nil {
 			break
@@ -1174,12 +1194,24 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.TmuxPane.Window(childComplexity), true
 
+	case "TmuxSession.attached":
+		if e.ComplexityRoot.TmuxSession.Attached == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TmuxSession.Attached(childComplexity), true
 	case "TmuxSession.branch":
 		if e.ComplexityRoot.TmuxSession.Branch == nil {
 			break
 		}
 
 		return e.ComplexityRoot.TmuxSession.Branch(childComplexity), true
+	case "TmuxSession.createdAt":
+		if e.ComplexityRoot.TmuxSession.CreatedAt == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TmuxSession.CreatedAt(childComplexity), true
 	case "TmuxSession.hostId":
 		if e.ComplexityRoot.TmuxSession.HostID == nil {
 			break
@@ -1204,12 +1236,61 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.TmuxSession.StaleSince(childComplexity), true
+	case "TmuxSession.windows":
+		if e.ComplexityRoot.TmuxSession.Windows == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TmuxSession.Windows(childComplexity), true
 	case "TmuxSession.worktree":
 		if e.ComplexityRoot.TmuxSession.Worktree == nil {
 			break
 		}
 
 		return e.ComplexityRoot.TmuxSession.Worktree(childComplexity), true
+
+	case "TmuxWindow.active":
+		if e.ComplexityRoot.TmuxWindow.Active == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TmuxWindow.Active(childComplexity), true
+	case "TmuxWindow.hostId":
+		if e.ComplexityRoot.TmuxWindow.HostID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TmuxWindow.HostID(childComplexity), true
+	case "TmuxWindow.index":
+		if e.ComplexityRoot.TmuxWindow.Index == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TmuxWindow.Index(childComplexity), true
+	case "TmuxWindow.key":
+		if e.ComplexityRoot.TmuxWindow.Key == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TmuxWindow.Key(childComplexity), true
+	case "TmuxWindow.name":
+		if e.ComplexityRoot.TmuxWindow.Name == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TmuxWindow.Name(childComplexity), true
+	case "TmuxWindow.panes":
+		if e.ComplexityRoot.TmuxWindow.Panes == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TmuxWindow.Panes(childComplexity), true
+	case "TmuxWindow.session":
+		if e.ComplexityRoot.TmuxWindow.Session == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TmuxWindow.Session(childComplexity), true
 
 	case "Worktree.ahead":
 		if e.ComplexityRoot.Worktree.Ahead == nil {
@@ -1647,14 +1728,20 @@ type TemplateEvent {
 `, BuiltIn: false},
 	{Name: "../plugins/tmux/schema/tmux.graphqls", Input: `# tmux plugin's GraphQL contribution (S5 zero-core-edit seam): read model of the
 # local tmux server served over the gqlgen extend-type glob seam (D6) — no webhook,
-# no HTTPRoutes. Types are flattened to scalars so no per-field resolver is needed
-# (the nested-object PRD sketch is not exercised by any AC and would only add
-# resolver LOC). Non-GitHub types keep the Tmux* prefix (PRD §6).
+# no HTTPRoutes. The window nesting (issue #27, epic #30) REVERSES the original
+# flattened-to-scalars decision: the sidebar now reads windows { panes { paneId } },
+# so TmuxWindow is nested here and populated eagerly by the TmuxSessions resolver
+# (no per-field resolver). Non-GitHub types keep the Tmux* prefix (PRD §6).
 type TmuxSession {
   hostId: String!
   name: String!
   worktree: String
   branch: String
+  # attached is derived from list-clients (control-mode clients excluded), NOT from
+  # #{session_attached} — the plugin's own control client poisons that field (#27 §3).
+  attached: Boolean!
+  createdAt: Time
+  windows: [TmuxWindow!]!
   lastSeenAt: Time
   staleSince: Time
 }
@@ -1670,7 +1757,22 @@ type TmuxPane {
   path: String
   active: Boolean!
   free: Boolean!
+  # paneId is tmux's native #{pane_id} (e.g. "%3"); key is supergraph's composite.
+  paneId: String!
   staleSince: Time
+}
+
+# TmuxWindow is a projection over tmux_panes grouped by (session, window) — no stored
+# table (the EDR's YAGNI call on tmux_windows holds). A window with zero live panes is
+# not emitted.
+type TmuxWindow {
+  hostId: String!
+  key: String!
+  session: String!
+  index: Int!
+  name: String
+  active: Boolean!
+  panes: [TmuxPane!]!
 }
 
 type Slot {
@@ -1998,6 +2100,8 @@ func (ec *executionContext) childFields_TmuxPane(ctx context.Context, field grap
 		return ec.fieldContext_TmuxPane_active(ctx, field)
 	case "free":
 		return ec.fieldContext_TmuxPane_free(ctx, field)
+	case "paneId":
+		return ec.fieldContext_TmuxPane_paneId(ctx, field)
 	case "staleSince":
 		return ec.fieldContext_TmuxPane_staleSince(ctx, field)
 	}
@@ -2014,12 +2118,38 @@ func (ec *executionContext) childFields_TmuxSession(ctx context.Context, field g
 		return ec.fieldContext_TmuxSession_worktree(ctx, field)
 	case "branch":
 		return ec.fieldContext_TmuxSession_branch(ctx, field)
+	case "attached":
+		return ec.fieldContext_TmuxSession_attached(ctx, field)
+	case "createdAt":
+		return ec.fieldContext_TmuxSession_createdAt(ctx, field)
+	case "windows":
+		return ec.fieldContext_TmuxSession_windows(ctx, field)
 	case "lastSeenAt":
 		return ec.fieldContext_TmuxSession_lastSeenAt(ctx, field)
 	case "staleSince":
 		return ec.fieldContext_TmuxSession_staleSince(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type TmuxSession", field.Name)
+}
+
+func (ec *executionContext) childFields_TmuxWindow(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "hostId":
+		return ec.fieldContext_TmuxWindow_hostId(ctx, field)
+	case "key":
+		return ec.fieldContext_TmuxWindow_key(ctx, field)
+	case "session":
+		return ec.fieldContext_TmuxWindow_session(ctx, field)
+	case "index":
+		return ec.fieldContext_TmuxWindow_index(ctx, field)
+	case "name":
+		return ec.fieldContext_TmuxWindow_name(ctx, field)
+	case "active":
+		return ec.fieldContext_TmuxWindow_active(ctx, field)
+	case "panes":
+		return ec.fieldContext_TmuxWindow_panes(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type TmuxWindow", field.Name)
 }
 
 func (ec *executionContext) childFields_Worktree(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -5925,6 +6055,29 @@ func (ec *executionContext) fieldContext_TmuxPane_free(_ context.Context, field 
 	return graphql.NewScalarFieldContext("TmuxPane", field, false, false, errors.New("field of type Boolean does not have child fields"))
 }
 
+func (ec *executionContext) _TmuxPane_paneId(ctx context.Context, field graphql.CollectedField, obj *model.TmuxPane) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_TmuxPane_paneId(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.PaneID, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_TmuxPane_paneId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("TmuxPane", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
 func (ec *executionContext) _TmuxPane_staleSince(ctx context.Context, field graphql.CollectedField, obj *model.TmuxPane) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -6040,6 +6193,84 @@ func (ec *executionContext) fieldContext_TmuxSession_branch(_ context.Context, f
 	return graphql.NewScalarFieldContext("TmuxSession", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
+func (ec *executionContext) _TmuxSession_attached(ctx context.Context, field graphql.CollectedField, obj *model.TmuxSession) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_TmuxSession_attached(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Attached, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
+			return ec.marshalNBoolean2bool(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_TmuxSession_attached(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("TmuxSession", field, false, false, errors.New("field of type Boolean does not have child fields"))
+}
+
+func (ec *executionContext) _TmuxSession_createdAt(ctx context.Context, field graphql.CollectedField, obj *model.TmuxSession) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_TmuxSession_createdAt(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.CreatedAt, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *time.Time) graphql.Marshaler {
+			return ec.marshalOTime2ᚖtimeᚐTime(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_TmuxSession_createdAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("TmuxSession", field, false, false, errors.New("field of type Time does not have child fields"))
+}
+
+func (ec *executionContext) _TmuxSession_windows(ctx context.Context, field graphql.CollectedField, obj *model.TmuxSession) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_TmuxSession_windows(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Windows, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []model.TmuxWindow) graphql.Marshaler {
+			return ec.marshalNTmuxWindow2ᚕgithubᚗcomᚋdrewdrewthisᚋsupergraphᚋgraphᚋmodelᚐTmuxWindowᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_TmuxSession_windows(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "TmuxSession",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_TmuxWindow(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _TmuxSession_lastSeenAt(ctx context.Context, field graphql.CollectedField, obj *model.TmuxSession) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -6084,6 +6315,176 @@ func (ec *executionContext) _TmuxSession_staleSince(ctx context.Context, field g
 }
 func (ec *executionContext) fieldContext_TmuxSession_staleSince(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("TmuxSession", field, false, false, errors.New("field of type Time does not have child fields"))
+}
+
+func (ec *executionContext) _TmuxWindow_hostId(ctx context.Context, field graphql.CollectedField, obj *model.TmuxWindow) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_TmuxWindow_hostId(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.HostID, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_TmuxWindow_hostId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("TmuxWindow", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _TmuxWindow_key(ctx context.Context, field graphql.CollectedField, obj *model.TmuxWindow) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_TmuxWindow_key(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Key, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_TmuxWindow_key(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("TmuxWindow", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _TmuxWindow_session(ctx context.Context, field graphql.CollectedField, obj *model.TmuxWindow) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_TmuxWindow_session(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Session, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_TmuxWindow_session(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("TmuxWindow", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _TmuxWindow_index(ctx context.Context, field graphql.CollectedField, obj *model.TmuxWindow) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_TmuxWindow_index(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Index, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_TmuxWindow_index(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("TmuxWindow", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _TmuxWindow_name(ctx context.Context, field graphql.CollectedField, obj *model.TmuxWindow) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_TmuxWindow_name(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Name, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_TmuxWindow_name(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("TmuxWindow", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _TmuxWindow_active(ctx context.Context, field graphql.CollectedField, obj *model.TmuxWindow) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_TmuxWindow_active(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Active, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
+			return ec.marshalNBoolean2bool(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_TmuxWindow_active(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("TmuxWindow", field, false, false, errors.New("field of type Boolean does not have child fields"))
+}
+
+func (ec *executionContext) _TmuxWindow_panes(ctx context.Context, field graphql.CollectedField, obj *model.TmuxWindow) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_TmuxWindow_panes(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Panes, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []model.TmuxPane) graphql.Marshaler {
+			return ec.marshalNTmuxPane2ᚕgithubᚗcomᚋdrewdrewthisᚋsupergraphᚋgraphᚋmodelᚐTmuxPaneᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_TmuxWindow_panes(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "TmuxWindow",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_TmuxPane(ctx, field)
+		},
+	}
+	return fc, nil
 }
 
 func (ec *executionContext) _Worktree_hostId(ctx context.Context, field graphql.CollectedField, obj *git.WorktreeNode) (ret graphql.Marshaler) {
@@ -9066,6 +9467,11 @@ func (ec *executionContext) _TmuxPane(ctx context.Context, sel ast.SelectionSet,
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "paneId":
+			out.Values[i] = ec._TmuxPane_paneId(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		case "staleSince":
 			out.Values[i] = ec._TmuxPane_staleSince(ctx, field, obj)
 			if out.Values[i] == graphql.RequiredNull {
@@ -9124,6 +9530,21 @@ func (ec *executionContext) _TmuxSession(ctx context.Context, sel ast.SelectionS
 			if out.Values[i] == graphql.RequiredNull {
 				out.Invalids++
 			}
+		case "attached":
+			out.Values[i] = ec._TmuxSession_attached(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "createdAt":
+			out.Values[i] = ec._TmuxSession_createdAt(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "windows":
+			out.Values[i] = ec._TmuxSession_windows(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		case "lastSeenAt":
 			out.Values[i] = ec._TmuxSession_lastSeenAt(ctx, field, obj)
 			if out.Values[i] == graphql.RequiredNull {
@@ -9132,6 +9553,74 @@ func (ec *executionContext) _TmuxSession(ctx context.Context, sel ast.SelectionS
 		case "staleSince":
 			out.Values[i] = ec._TmuxSession_staleSince(ctx, field, obj)
 			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
+var tmuxWindowImplementors = []string{"TmuxWindow"}
+
+func (ec *executionContext) _TmuxWindow(ctx context.Context, sel ast.SelectionSet, obj *model.TmuxWindow) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, tmuxWindowImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("TmuxWindow")
+		case "hostId":
+			out.Values[i] = ec._TmuxWindow_hostId(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "key":
+			out.Values[i] = ec._TmuxWindow_key(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "session":
+			out.Values[i] = ec._TmuxWindow_session(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "index":
+			out.Values[i] = ec._TmuxWindow_index(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "name":
+			out.Values[i] = ec._TmuxWindow_name(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "active":
+			out.Values[i] = ec._TmuxWindow_active(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "panes":
+			out.Values[i] = ec._TmuxWindow_panes(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
 		default:
@@ -10104,6 +10593,26 @@ func (ec *executionContext) marshalNTmuxSession2ᚕgithubᚗcomᚋdrewdrewthis�
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
 		return ec.marshalNTmuxSession2githubᚗcomᚋdrewdrewthisᚋsupergraphᚋgraphᚋmodelᚐTmuxSession(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNTmuxWindow2githubᚗcomᚋdrewdrewthisᚋsupergraphᚋgraphᚋmodelᚐTmuxWindow(ctx context.Context, sel ast.SelectionSet, v model.TmuxWindow) graphql.Marshaler {
+	return ec._TmuxWindow(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNTmuxWindow2ᚕgithubᚗcomᚋdrewdrewthisᚋsupergraphᚋgraphᚋmodelᚐTmuxWindowᚄ(ctx context.Context, sel ast.SelectionSet, v []model.TmuxWindow) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNTmuxWindow2githubᚗcomᚋdrewdrewthisᚋsupergraphᚋgraphᚋmodelᚐTmuxWindow(ctx, sel, v[i])
 	})
 
 	for _, e := range ret {

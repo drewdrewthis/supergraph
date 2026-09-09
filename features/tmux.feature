@@ -104,6 +104,63 @@ Feature: tmux plugin — server-wide control-mode watcher over local SQLite
     # Malformed-key rejection (embedded `:`/`.`, unknown kind, empty index, missing @hostId) is
     # exercised through the compiled parser in plugins/tmux/keys_test.go (TestParsePaneKeyRejectsMalformed).
 
+  # ---------- Window nesting, attach, createdAt (#27) ----------
+
+  @tmux @local @AC-TMUX-WINDOW-NESTING
+  Scenario: A session's windows nest its panes and match the real server
+    Given a supergraph server watching a private tmux socket with a session having two windows of two panes each
+    When `tmuxSessions` is queried with windows and panes
+    Then each window's index, name, active flag, and pane paneId values match the real tmux server
+
+  @tmux @local @AC-TMUX-NESTING-STALE
+  Scenario: A window with zero live panes drops out while a sibling window survives
+    Given a supergraph server watching a private tmux socket with a session having two windows of two panes each
+    When every pane in one window is killed
+    Then within T that window is absent from `tmuxSessions` windows and the other window is still present with two panes
+    When one pane of the surviving two-pane window is killed
+    Then within T the surviving window is still present with one pane
+
+  @tmux @local @AC-TMUX-CREATEDAT
+  Scenario: A live session's createdAt matches the server's session_created
+    Given a supergraph server watching a private tmux socket with a tracked session
+    When `tmuxSessions` is queried
+    Then `createdAt` is non-null, not the zero time, and within a few seconds of `tmux display-message`'s `#{session_created}`
+
+  @tmux @local @AC-TMUX-SESSION-CREATE-LIVE
+  Scenario: A newly created session becomes queryable with attach, createdAt, and windows populated
+    Given a supergraph server watching a private tmux socket
+    When a new session is created on that socket
+    Then within T the new session is queryable with `attached`, `createdAt`, and `windows` populated
+
+  @tmux @local @AC-TMUX-WINDOW-KEY-GRAMMAR
+  Scenario: A live window key round-trips through the running binary
+    Given a supergraph server watching a private tmux socket with a tracked session
+    When `tmuxSessions` is queried with windows
+    Then the window key matches `window:<session>:<index>@<hostId>` and re-parses to those parts
+
+  @tmux @local @AC-TMUX-ATTACHED-NOT-SELF
+  Scenario: The plugin's own control-mode client never counts as attached
+    Given a supergraph server watching a private tmux socket with a tracked session
+    When `tmuxSessions` is queried
+    Then every session reads `attached: false` while only the plugin's control client is connected
+
+  @tmux @local @AC-TMUX-ATTACHED-LIVE
+  Scenario: A real client attach and detach flip attached via tmuxEvents within 1s
+    # One real sample, not this suite's usual 20-sample p95 (AC-TMUX-EVENTS-CONTROL /
+    # FREESLOTS-WARM): those sample `new-window`, a cheap in-process tmux op; this
+    # allocates a REAL pty against `kern.tty.ptmx_max`, a finite pool shared by every
+    # session on the box. Repeating that 20x back-to-back is a resource-exhaustion
+    # stress test, not a latency test: measured, 5 of 6 20-cycle runs failed from
+    # exactly that contention (twice killing the real tmux server outright), while
+    # every single-cycle run passed. The margin here is not marginal — measured
+    # attach/detach latency is single-digit-to-low-double-digit ms against 1s, ~50-100x
+    # — so one decisive real sample beats a 20-sample version that fails for reasons
+    # unrelated to the code under test.
+    Given a supergraph server watching a private tmux socket with a tracked session
+    When a real terminal client attaches to and detaches from that session, each half timed from the client's real appearance or disappearance to the matching `tmuxEvents` envelope
+    Then the attach-to-attached latency is under 1s
+    And the detach-to-detached latency is under 1s
+
   # ---------- Isolation, cursor, zero-core, budget ----------
 
   @tmux @local @AC-TMUX-ISOLATION
@@ -130,7 +187,7 @@ Feature: tmux plugin — server-wide control-mode watcher over local SQLite
   Scenario: The tmux plugin stays within its LOC budget
     Given the tmux plugin source under `plugins/tmux/`
     When `make loc-tmux` counts non-comment non-blank lines of the non-test Go files
-    Then the count is at most 820
+    Then the count is at most 1030
 
   # ---------- Cross-box (needs the peer plugin + a second box) ----------
 
@@ -153,8 +210,15 @@ Feature: tmux plugin — server-wide control-mode watcher over local SQLite
   # AC-TMUX-POLL-ERROR:     "Errored/timed-out reconcile emits no snapshot -> health stale (owner T1)" -> Scenario: A reconcile that errors emits no snapshot and health crosses to stale
   # AC-TMUX-PANE-FOR-BRANCH:"issue<->branch join pane" -> Scenario: paneForBranch returns the pane whose worktree is on that branch
   # AC-TMUX-KEY-GRAMMAR:    "Key round-trip via binary; malformed rejection unit-tested" -> Scenario: A live pane key round-trips through the running binary
+  # AC-TMUX-WINDOW-NESTING: "Windows nest live panes, shape matches real server (#27)" -> Scenario: A session's windows nest its panes and match the real server
+  # AC-TMUX-NESTING-STALE:  "Zero-live-pane window drops out, sibling windows survive (#27)" -> Scenario: A window with zero live panes drops out while a sibling window survives
+  # AC-TMUX-CREATEDAT:      "createdAt non-null, matches session_created (#27)" -> Scenario: A live session's createdAt matches the server's session_created
+  # AC-TMUX-SESSION-CREATE-LIVE: "New session queryable with attach/createdAt/windows (#27)" -> Scenario: A newly created session becomes queryable with attach, createdAt, and windows populated
+  # AC-TMUX-WINDOW-KEY-GRAMMAR: "Window key grammar round-trip via binary (#27)" -> Scenario: A live window key round-trips through the running binary
+  # AC-TMUX-ATTACHED-NOT-SELF: "Negative control — own control client never reads attached (#27 §3)" -> Scenario: The plugin's own control-mode client never counts as attached
+  # AC-TMUX-ATTACHED-LIVE:  "Real attach/detach flips attached within 1s via tmuxEvents (#27)" -> Scenario: A real client attach and detach flip attached via tmuxEvents within 1s
   # AC-TMUX-ISOLATION:      "F5 tmux half — keeps answering when sibling panics" -> Scenario: tmux keeps answering when a sibling plugin panics
   # AC-TMUX-CURSOR:         "Cursor persists across restart" -> Scenario: The reconcile cursor persists across a restart
   # AC-TMUX-ZEROCORE:       "S5 — zero core edit" -> Scenario: Adding the tmux plugin touches zero files under core/
-  # AC-TMUX-LOC:            "LOC budget <= 820" -> Scenario: The tmux plugin stays within its LOC budget
+  # AC-TMUX-LOC:            "LOC budget <= 1030" -> Scenario: The tmux plugin stays within its LOC budget
   # AC-TMUX-STALE-PEER:     "Stale peer (cross-box, @pending, was F8; F8 stays peer-owned in prd.feature)" -> Scenario: A stopped box shows its tmux data as stale on its peers within 30 seconds

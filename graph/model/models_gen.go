@@ -112,14 +112,28 @@ type TmuxPane struct {
 	Path       *string    `json:"path,omitempty"`
 	Active     bool       `json:"active"`
 	Free       bool       `json:"free"`
+	PaneID     string     `json:"paneId"`
 	StaleSince *time.Time `json:"staleSince,omitempty"`
 }
 
 type TmuxSession struct {
-	HostID     string     `json:"hostId"`
-	Name       string     `json:"name"`
-	Worktree   *string    `json:"worktree,omitempty"`
-	Branch     *string    `json:"branch,omitempty"`
-	LastSeenAt *time.Time `json:"lastSeenAt,omitempty"`
-	StaleSince *time.Time `json:"staleSince,omitempty"`
+	HostID     string       `json:"hostId"`
+	Name       string       `json:"name"`
+	Worktree   *string      `json:"worktree,omitempty"`
+	Branch     *string      `json:"branch,omitempty"`
+	Attached   bool         `json:"attached"`
+	CreatedAt  *time.Time   `json:"createdAt,omitempty"`
+	Windows    []TmuxWindow `json:"windows"`
+	LastSeenAt *time.Time   `json:"lastSeenAt,omitempty"`
+	StaleSince *time.Time   `json:"staleSince,omitempty"`
+}
+
+type TmuxWindow struct {
+	HostID  string     `json:"hostId"`
+	Key     string     `json:"key"`
+	Session string     `json:"session"`
+	Index   int        `json:"index"`
+	Name    *string    `json:"name,omitempty"`
+	Active  bool       `json:"active"`
+	Panes   []TmuxPane `json:"panes"`
 }

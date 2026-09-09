@@ -15,10 +15,14 @@ import (
 // %pane-exited — pane death arrives as %window-pane-changed + %layout-change whose
 // layout string no longer lists the dead pane (EDR §Measurements) — so any of these
 // triggers a fresh list-panes rather than parsing each delta.
+// %client-detached and %client-session-changed carry attach/detach (#27, measured):
+// they are the events that make TmuxSession.attached flip within 1 s instead of
+// waiting for the backstop poll.
 var baseStructural = []string{
 	"%window-add", "%window-close", "%unlinked-window-add", "%unlinked-window-close",
 	"%window-pane-changed", "%layout-change", "%sessions-changed",
 	"%session-changed", "%session-window-changed",
+	"%client-detached", "%client-session-changed",
 }
 
 // supportsPaneExited reports whether this tmux emits the dedicated %pane-exited

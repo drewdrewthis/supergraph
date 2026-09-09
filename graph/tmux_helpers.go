@@ -44,7 +44,22 @@ func panesToModel(rows []tmux.PaneRow) []model.TmuxPane {
 	for _, p := range rows {
 		out = append(out, model.TmuxPane{
 			HostID: p.HostID, Key: p.Key, Session: p.Session, Window: p.Window, Pane: p.Pane,
-			Pid: p.Pid, Cmd: p.Cmd, Path: optStr(p.Path), Active: p.Active, Free: p.Free, StaleSince: p.StaleSince,
+			Pid: p.Pid, Cmd: p.Cmd, Path: optStr(p.Path), Active: p.Active, Free: p.Free,
+			PaneID: p.PaneID, StaleSince: p.StaleSince,
+		})
+	}
+	return out
+}
+
+// windowsToModel maps already-grouped window rows to the generated model — a pure
+// mapping, no ctx/store access, so TmuxSessions can scan the pane table once for
+// every session instead of once per session (#27 N+1).
+func windowsToModel(rows []tmux.WindowRow) []model.TmuxWindow {
+	out := make([]model.TmuxWindow, 0, len(rows))
+	for _, w := range rows {
+		out = append(out, model.TmuxWindow{
+			HostID: w.HostID, Key: w.Key, Session: w.Session, Index: w.Index,
+			Name: optStr(w.Name), Active: w.Active, Panes: panesToModel(w.Panes),
 		})
 	}
 	return out

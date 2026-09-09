@@ -13,6 +13,7 @@ import (
 //
 //	server  := "tmuxServer:" <hostId>                       "@" <hostId>
 //	session := "session:"    <session>                      "@" <hostId>
+//	window  := "window:"     <session>":"<index>            "@" <hostId>
 //	pane    := "pane:"       <session>":"<window>"."<pane>   "@" <hostId>
 //
 // Each kind is one row in kindSpecs: adding a kind is a new row, not new code.
@@ -24,6 +25,7 @@ type kindSpec struct {
 var kindSpecs = []kindSpec{
 	{kind: "tmuxServer", typename: "TmuxServer"},
 	{kind: "session", typename: "TmuxSession"},
+	{kind: "window", typename: "TmuxWindow"},
 	{kind: "pane", typename: "TmuxPane"},
 }
 
@@ -39,6 +41,10 @@ var specByKind = func() map[string]kindSpec {
 func serverKey(host string) string { return "tmuxServer:" + host + "@" + host }
 
 func sessionKey(session, host string) string { return "session:" + session + "@" + host }
+
+func windowKey(session string, index int, host string) string {
+	return fmt.Sprintf("window:%s:%d@%s", session, index, host)
+}
 
 func paneKey(session string, window, pane int, host string) string {
 	return fmt.Sprintf("pane:%s:%d.%d@%s", session, window, pane, host)
@@ -95,6 +101,34 @@ func parsePaneKey(key string) (session string, window, pane int, host string, er
 		return "", 0, 0, "", fmt.Errorf("tmux: pane key %q bad pane index: %w", key, err)
 	}
 	return sess, window, pane, host, nil
+}
+
+// parseWindowKey is the round-trip inverse of windowKey. Like parsePaneKey it
+// rejects a malformed key rather than returning a partial one: an unknown kind, a
+// missing @hostId, an embedded ':'/'.' beyond the grammar, an empty or non-integer
+// index.
+func parseWindowKey(key string) (session string, index int, host string, err error) {
+	body, host, err := splitHost(key)
+	if err != nil {
+		return "", 0, "", err
+	}
+	kind, scope, ok := strings.Cut(body, ":")
+	if !ok || kind != "window" {
+		return "", 0, "", fmt.Errorf("tmux: key %q is not a window key", key)
+	}
+	// scope := <session>":"<index> — exactly one ':', no '.'.
+	sess, idxStr, ok := strings.Cut(scope, ":")
+	if !ok || sess == "" {
+		return "", 0, "", fmt.Errorf("tmux: window key %q malformed scope", key)
+	}
+	if strings.ContainsAny(idxStr, ":.") {
+		return "", 0, "", fmt.Errorf("tmux: window key %q has trailing separators", key)
+	}
+	index, err = strconv.Atoi(idxStr)
+	if err != nil {
+		return "", 0, "", fmt.Errorf("tmux: window key %q bad index: %w", key, err)
+	}
+	return sess, index, host, nil
 }
 
 // isIdle reports whether a pane running cmd is a free slot: its current command is

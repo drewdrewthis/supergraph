@@ -16,10 +16,10 @@ credentials or hardware. Its reason to exist in the spike is the **local warm fr
 plugin's**, so this feature owns only `AC-TMUX-FREESLOTS-WARM`, not S2) and the
 **issue ↔ branch/worktree** join the github plugin already reserves as `paneForBranch @pending`.
 
-**Hard constraints (owner / PRD):** ≤ **820 LOC prod** for `plugins/tmux/**` excluding tests
+**Hard constraints (owner / PRD):** ≤ **1030 LOC prod** for `plugins/tmux/**` excluding tests
 (600 sketch → 800 for the control client + poll + read model → 860 for the user-test bug fixes
-B1/B2 and review Shoulds → **820** after the config helpers moved to `plugins/internal/pluginconfig`;
-measured actual **776**, see §LOC budget);
+B1/B2 and review Shoulds → **820** after the config helpers moved to `plugins/internal/pluginconfig`
+→ **1030** for issue #27 window→pane nesting; measured actual **1002**, see §LOC budget);
 **zero core diff** (S5); Linux + macOS from one binary; single tmux server per box (v1); no
 mutation of the user's tmux config (see D2); freshness is event-driven with a reconcile floor
 (honest-staleness, mirrors github's AC-GH-STALE).
@@ -37,6 +37,7 @@ mutation of the user's tmux config (see D2); freshness is event-driven with a re
 | **D5** | **Free/busy = idle-shell classification** | A pane is **free** when `pane_current_command ∈ idleShells` (default `["zsh","bash","sh","fish"]`), else **busy**. `Slot` is a projection over panes, not a stored table. | Storing an explicit slot table (derivable, would drift); claude-awareness in tmux (belongs to the claude plugin — see Owner Q2). |
 | **D6** | **Serve via gqlgen glob seam** | `plugins/tmux/schema/tmux.graphqls` uses `extend type Query`/`Subscription`; resolvers delegate through `core.Registry` — same seam the template plugin proves (AC-CORE-10b). No `cmd/` delta. | github's `HTTPRoutes` path — tmux has no webhook receiver, so the glob seam is the right (and simpler) one. |
 | **D7** | **Probe-gated backoff reconnect** | Each cycle **probes liveness with a read-only `list-sessions` BEFORE attaching** — a bare `tmux -C attach` on a dead socket makes tmux fork a *new* server (busy-spin + leaked clients), so a non-zero probe means down and the client never attaches (B2). On an up→down transition the client marks all local entities `staleSince` and emits `tmux.server.down` **exactly once**, then stays silent while down so `/health` lag crosses the stale threshold honestly (B1); it **exponential-backoffs to `reconnectBackoffMaxSeconds` (30 s cap)** and re-attaches when the server returns. An attach that falls out in **< 2 s** (`minStableAttach`) is a failed/immediate exit and does **not** reset the backoff. | Exit the plugin (drops the source permanently); attach-first (auto-spawns a server on a dead socket — B2); re-emitting `server.down` every reconnect (core records each emit as liveness, so `/health` never goes stale — B1). |
+| **D8** | **`attached` derived from `list-clients`, not `#{session_attached}`** (#27, epic #30) | Count clients whose `#{client_control_mode} != "1"` — a session is attached iff ≥1 **human** client. Any `list-clients` failure (a zero-client server errors on some versions) reads as **zero clients**, never a reconcile abort. | Reading `#{session_attached}`: the plugin's OWN `tmux -C attach` control client lands on a session and makes it read `attached=1` with zero human clients (measured, §3) — a permanent false positive on the exact field the sidebar highlight keys on. |
 
 ## Measurements (this machine — `tmux 3.6a`, `/opt/homebrew/bin/tmux`, darwin)
 
@@ -67,9 +68,12 @@ them), so the scope is unambiguous without escaping.
 key      := <kind>":"<scope>"@"<hostId>
 server   := "tmuxServer:" <hostId> "@" <hostId>          # scope == hostId
 session  := "session:"    <session>            "@" <hostId>
+window   := "window:"     <session>":"<index>  "@" <hostId>   # #27, epic #30
 pane     := "pane:"       <session>":"<window>"."<pane> "@" <hostId>
 ```
-`<window>`/`<pane>` are tmux indices (ints). Example: `pane:main:1.0@drudru-lan`.
+`<window>`/`<pane>`/`<index>` are tmux indices (ints). Example: `pane:main:1.0@drudru-lan`,
+`window:main:1@drudru-lan`. `parseWindowKey` rejects a malformed window key (unknown kind,
+missing `@hostId`, empty/non-numeric index, embedded `.`) exactly as `parsePaneKey` does.
 - **Slot** has no key of its own — it is a **projection** over `pane` keys where the pane is free.
 - The parse/format lives in `keys.go` as a **data table** (`kindSpecs`), mirroring
   `github/keys.go`: `parse(key) → (kind,scope,hostId)`, `paneKey(session,window,pane,host)`,
@@ -77,9 +81,9 @@ pane     := "pane:"       <session>":"<window>"."<pane> "@" <hostId>
 
 ## Envelopes emitted (`{TS, Source:"tmux", Type, V:1, Key, Payload}`)
 
-`/health` `lastEventAt` derives from these. **These four are the only envelopes emitted** — the
-session/window envelopes the sketch imagined are **not implemented** (sessions are upserted but
-carry no per-entity event; the read model is pane-centric):
+`/health` `lastEventAt` derives from these. **Five envelopes are emitted** (the fifth,
+`tmux.session.updated`, was added by issue #27 / epic #30 — before it, sessions were upserted but
+carried no per-entity event):
 - **`tmux.pane.updated`** — `Payload={key,session,window,pane,pid,cmd,path,active,free}` — pane
   **new** or **changed** vs the stored row (`free`/`busy`, `cmd`, or `path` moved) on a reconcile
   diff. An unchanged pane on a later poll does **not** re-emit (no event flood — S-A).
@@ -89,6 +93,14 @@ carry no per-entity event; the read model is pane-centric):
 - **`tmux.server.down`** — `Payload={hostId}`, key `tmuxServer:<host>@<host>` — emitted **once per
   up→down transition** (B1), never on repeated failed reconnects; marks every local session/pane
   `staleSince` (the local shape of F8's stale-peer, before the peer plugin).
+- **`tmux.session.updated`** — `Payload={key,name,attached,createdAt,worktree,branch}`, key
+  `session:<name>@<host>` — a session **new or changed** vs the stored row on a reconcile diff
+  (`attached`/`createdAt`/`worktree`/`branch` moved). This is the attach/detach the `tmuxEvents`
+  subscriber sees within 1 s (the control-mode `%client-session-changed`/`%client-detached` trigger
+  a fresh reconcile). **`attached` is NOT read from `#{session_attached}`**: the plugin's own
+  `tmux -C attach` control client makes its session read `attached=1` with zero human clients
+  (measured, #27 §3), so `attached` is derived from `list-clients`, counting only clients whose
+  `#{client_control_mode} != "1"`.
 
 Cross-plugin join: the claude plugin's `ClaudeInstance` keys on `pane:…@host` + `pid`; the github
 join is issue-number ↔ `session.branch`/`worktree` via `paneForBranch`.
@@ -113,21 +125,27 @@ The five ops ship as `plugins/tmux/queries/*.graphql`, posted as query text to c
 `supergraph query --plugin tmux --op NAME [--var hostId=box]` (core CLI; no `cmd/` delta):
 - **`freeSlots`** — `freeSlots(hostId){ hostId kind free paneKey staleSince }` (server-side
   `free:true`, non-stale) — the local warm-read half of **S2**.
-- **`sessions`** — `tmuxSessions(hostId){ hostId name worktree branch lastSeenAt staleSince }`.
-- **`panes`** — `tmuxPanes(hostId){ hostId key session window pane pid cmd path active free staleSince }`.
+- **`sessions`** — `tmuxSessions(hostId){ hostId name worktree branch attached createdAt lastSeenAt
+  staleSince windows { key index name active panes { key paneId } } }` (the window→pane nesting is #27).
+- **`panes`** — `tmuxPanes(hostId){ hostId key session window pane pid cmd path active free paneId staleSince }`.
 - **`paneForBranch`** — `paneForBranch(branch){ … }` — the github/claude join (issue ↔ branch).
 - **`slotsForHost`** — full `slots(hostId)` (free + busy) for dashboards.
 
 ## Schema (`plugins/tmux/schema/tmux.graphqls`, `extend type` only)
 
-Non-GitHub types keep the `Tmux*` prefix (PRD §6). **Shipped schema — flattened to scalars**
-(the PRD sketch's nested `TmuxServer`/`TmuxWindow` objects and `Slot.pane`/`TmuxPane.window`
-object references were **dropped**: no AC exercises them and each would add a per-field resolver
-for no read the CLI ops make. `Slot` points at its pane by `paneKey` scalar; `tmuxEvents` is a
-flat `TmuxEvent` envelope, not a live `TmuxPane`):
+Non-GitHub types keep the `Tmux*` prefix (PRD §6). **The nested-objects decision is REVERSED by
+issue #27 (epic #30).** The shipped schema was originally flattened to scalars — the PRD sketch's
+nested `TmuxServer`/`TmuxWindow` objects were dropped because "no AC exercises them" — but epic #30
+is the AC that now exercises them: the sidebar reads `windows { panes { paneId } }`. So `TmuxWindow`
+is reintroduced as a nested object (a projection over `tmux_panes`, no stored table), and
+`TmuxSession` gains `attached`/`createdAt`/`windows`, `TmuxPane` gains `paneId` (tmux's native
+`#{pane_id}`). These are populated **eagerly** by the `TmuxSessions` resolver from the same store
+read — no per-field resolver — so the graph seam stays plumbing-free (#27 §6). `Slot`/`TmuxEvent`
+stay flat (still no AC exercises `Slot.pane`, and `tmuxEvents` remains a flat envelope):
 ```graphql
-type TmuxSession { hostId: String!  name: String!  worktree: String  branch: String  lastSeenAt: Time  staleSince: Time }
-type TmuxPane    { hostId: String!  key: String!  session: String!  window: Int!  pane: Int!  pid: Int!  cmd: String!  path: String  active: Boolean!  free: Boolean!  staleSince: Time }
+type TmuxSession { hostId: String!  name: String!  worktree: String  branch: String  attached: Boolean!  createdAt: Time  windows: [TmuxWindow!]!  lastSeenAt: Time  staleSince: Time }
+type TmuxPane    { hostId: String!  key: String!  session: String!  window: Int!  pane: Int!  pid: Int!  cmd: String!  path: String  active: Boolean!  free: Boolean!  paneId: String!  staleSince: Time }
+type TmuxWindow  { hostId: String!  key: String!  session: String!  index: Int!  name: String  active: Boolean!  panes: [TmuxPane!]! }
 type Slot        { hostId: String!  kind: String!  free: Boolean!  paneKey: String  staleSince: Time }
 type TmuxEvent   { ts: Time!  type: String!  v: Int!  key: String!  payload: String! }
 extend type Query {
@@ -155,18 +173,23 @@ extend type Subscription { tmuxEvents: TmuxEvent! }
 
 ## SQLite state (add-only, `IF NOT EXISTS`; cursors in core's `cursors` table)
 
-- `tmux_sessions(key TEXT PK, name, worktree, branch, last_seen_at, stale_since)`
-- `tmux_panes(key TEXT PK, session, window INT, pane INT, pid INT, cmd, path, active INT, free INT, last_seen_at, stale_since)`
-- **No `tmux_windows` table** — the sketch's third table was dropped as YAGNI (the read model is
-  pane-centric; `session`/`window`/`pane` are denormalized onto `tmux_panes` for query-simple scans
-  and the branch join, so no key parsing happens in SQL).
+- `tmux_sessions(key TEXT PK, name, worktree, branch, attached INT, created_at TEXT, last_seen_at, stale_since)`
+- `tmux_panes(key TEXT PK, session, window INT, pane INT, pid INT, cmd, path, active INT, free INT, pane_id TEXT, window_name TEXT, window_active INT, last_seen_at, stale_since)`
+- **#27 columns are additive (`ALTER TABLE … ADD COLUMN`)** — `attached`/`created_at` on sessions,
+  `pane_id`/`window_name`/`window_active` on panes. A DB written by the pre-#27 plugin upgrades in
+  place; the `duplicate column name` error on a second start is tolerated (no-op), not fatal
+  (AC-TMUX-MIGRATE-INPLACE).
+- **No `tmux_windows` table** — even with the nested `TmuxWindow` type, windows stay a **projection**
+  over `tmux_panes` grouped by `(session, window)` (the YAGNI call holds); `session`/`window`/`pane`
+  plus `window_name`/`window_active` are denormalized onto `tmux_panes`, so no key parsing in SQL and
+  a window with zero live panes is simply never emitted.
 - `hostId` is parsed from the key, not stored as a column (github convention).
 - Cursor: `snapshot:lastAt` (last successful reconcile time) in core's `cursors` table; `Cursor()` reports it.
 
-## LOC budget (prod, cap **820**; tests excluded) — measured actuals
+## LOC budget (prod, cap **1030**; tests excluded) — measured actuals
 
 Strip formula (portable GNU/BSD sed), run by `make loc-tmux`:
-`find plugins/tmux -name '*.go' ! -name '*_test.go' | xargs sed -E '/^[[:space:]]*\/\//d;/^[[:space:]]*$/d' | wc -l` — fails > 820.
+`find plugins/tmux -name '*.go' ! -name '*_test.go' | xargs sed -E '/^[[:space:]]*\/\//d;/^[[:space:]]*$/d' | wc -l` — fails > 1030.
 
 **Cap 600 → 800 → 860 → 820:** the control-mode client + reconcile poll + SQLite read model + flattened
 resolver seam landed at **770** (600 sketch overrun, owner-ratified 800). The user-test bug fixes
@@ -176,27 +199,34 @@ the review Shoulds (S-A change-detected `pane.updated`, S-B scan-error/reply-fra
 (−37 in `tmux.go`), dropping the measure to **776**; per the owner rule the cap is set to **measured + 5%
 rounded up to a multiple of 10 = 820**. No compression for the number.
 
-`active`/`getCurrent` (already `atomic.Pointer[Plugin]`, not the RWMutex the post-tier §A doc
-described) was moved to `plugins/internal/single.Ptr[Plugin]` — LOC-neutral, measured holds at
-**776**, cap stays 820.
+**Cap 820 → 1030 (issue #27, epic #30):** the window→pane nesting projection + `WindowsBySession`/`groupWindows`
+N+1 fix (`resolver.go`), the `tmux.session.updated` envelope + `list-clients` attached probe + session diff +
+`createdAt` parse (`snapshot.go`), the five additive migration columns + `liveSessionRows`/`scanSession`
+(`store.go`), and the `window` key grammar (`keys.go`) took the measure from **779** to **1002**. Per
+the owner rule (measured + 5% rounded up to a multiple of 10) the formula gives 1060, but the cap is
+**deliberately held at 1030** — a tightening from 1060 rather than a loosening, reserving 2.8% headroom
+instead of the standard 5%.
 
 | File (`plugins/tmux/`) | Actual | Responsibility |
 |---|---:|---|
-| `tmux.go` | 127 | wiring: `init`/`New`/`Name`/`Migrate`/`Start` (dormant when unconfigured) + `Cursor` + config parse/defaults (coercion via `plugins/internal/pluginconfig`) + `attach`/`serverAlive`/clock/exec seams + `single.Ptr` singleton |
-| `keys.go` | 79 | key grammar data table: parse + object→key + typename + host split + free/busy classifier |
-| `control.go` | 144 | control-mode client: probe-gated `tmux -C attach`, hold stdin, `refresh-client -f no-output`, structural-notification → reconcile trigger, `%begin/%end/%error` skip + scan-error log, once-per-transition `server.down`, `minStableAttach` + backoff reconnect |
-| `snapshot.go` | 158 | `list-panes -a`/`list-sessions` parse → upsert; reconcile diff → new/changed `pane.updated` + `pane.closed`/`staleSince`; `tmux.snapshot` emit (only on success — owner T1); git-branch resolve; free/busy recompute |
-| `store.go` | 218 | SQLite: migrate tables, upsert session/pane, scan, markStale/markAllStale, `livePaneRows`/`livePaneKeys`, scan-free, paneForBranch join |
-| `resolver.go` | 50 | exported read funcs for sessions/panes/slots/freeSlots/paneForBranch via the package-singleton seam (no `core.Registry` instance accessor exists; server injects only Health/Lag/Events) |
-| **Total** | **776** | cap **820**; no `cmd/` delta (serves via gqlgen glob seam, D6) |
+| `tmux.go` | 130 | wiring: `init`/`New`/`Name`/`Migrate`/`Start` (dormant when unconfigured) + `Cursor` + config parse/defaults (coercion via `plugins/internal/pluginconfig`) + `attach`/`serverAlive`/clock/exec seams + `single.Ptr` singleton |
+| `keys.go` | 105 | key grammar data table: parse + object→key (incl. `window`) + typename + host split + free/busy classifier |
+| `control.go` | 145 | control-mode client: probe-gated `tmux -C attach`, hold stdin, `refresh-client -f no-output`, structural-notification (incl. `%client-detached`/`%client-session-changed`) → reconcile trigger, `%begin/%end/%error` skip + scan-error log, once-per-transition `server.down`, `minStableAttach` + backoff reconnect |
+| `snapshot.go` | 228 | `list-panes -a`/`list-sessions`/`list-clients` parse → upsert; reconcile diff → `pane.updated`/`pane.closed`/`session.updated`; `attachedSessions` probe (control-mode excluded); `createdAt` parse; `tmux.snapshot` emit (only on success — owner T1); git-branch + free/busy |
+| `store.go` | 281 | SQLite: migrate tables + additive #27 columns, upsert session/pane, scan, markStale/markAllStale, `livePaneRows`/`liveSessionRows`/`livePaneKeys`, scan-free, paneForBranch join |
+| `resolver.go` | 113 | exported read funcs for sessions/panes/slots/freeSlots/paneForBranch + `Windows` (non-stale panes grouped by window) + `WindowsBySession`/`groupWindows` N+1 fix for one pane scan per session via the package-singleton seam |
+| **Total** | **1002** | cap **1030**; no `cmd/` delta (serves via gqlgen glob seam, D6) |
 
 **Deviations from the sketch, attributed (every real one):**
-- **Schema flattened to scalars** — the sketch's nested `TmuxServer`/`TmuxWindow` object types and
-  `Slot.pane`/`TmuxPane.window` references were dropped; `Slot` points by `paneKey` scalar. **Added**
-  `freeSlots(hostId)` query and a flat `TmuxEvent` envelope type; `tmuxEvents` returns `TmuxEvent!`,
-  not a live `TmuxPane`. No AC exercises the nested objects and each would only add resolver LOC.
-- **Session/window envelopes not implemented** — only `tmux.pane.updated`/`.closed`/`tmux.snapshot`/
-  `tmux.server.down` are emitted; the read model is pane-centric (sessions are upserted, not evented).
+- **Schema was flattened, then RE-NESTED by #27 (epic #30)** — the sketch's `TmuxWindow` object was
+  first dropped ("no AC exercises it"), then reintroduced as a nested projection once epic #30's
+  sidebar exercised `windows { panes { paneId } }`. `Slot.pane`/`TmuxPane.window` object references
+  stay dropped (still no AC); `Slot` points by `paneKey` scalar; `tmuxEvents` returns a flat
+  `TmuxEvent!`, not a live `TmuxPane`. The nested `TmuxWindow`/`windows`/`paneId` are populated
+  eagerly by the `TmuxSessions` resolver, so no per-field resolver LOC.
+- **Session envelope added by #27** — `tmux.session.updated` is the fifth envelope (attach/detach,
+  `createdAt`, worktree/branch diff); before #27 only `tmux.pane.updated`/`.closed`/`tmux.snapshot`/
+  `tmux.server.down` were emitted and the read model was pane-centric.
 - **`tmux_windows` table dropped (YAGNI)**; `session`/`window`/`pane` denormalized onto `tmux_panes`
   (`store.go` heavier: query-simple scans + the branch join, no key parsing in SQL).
 - **Package-singleton seam** — `atomic.Pointer[Plugin]` (`active`) mirrors the peer/claude convention;
@@ -286,8 +316,50 @@ running binary + real tmux this turn**. `T` = `reconcileIntervalSeconds` (test u
 - **AC-TMUX-ZEROCORE (S5).** After adding `plugins/tmux/**` + the `graph/plugins_import.go` blank
   import + regenerated `graph/`, `git diff --stat core/` reports **0 files changed** and `/health`
   serves a `tmux` entry. **Evidence:** empty `git diff --stat core/` + `/health` showing `tmux`.
-- **AC-TMUX-LOC.** The strip-formula count for `plugins/tmux/**` (excluding `*_test.go`) is **≤ 820**
-  (measured **776**). **Evidence:** `make loc-tmux` output ≤ 820.
+- **AC-TMUX-LOC.** The strip-formula count for `plugins/tmux/**` (excluding `*_test.go`) is **≤ 1030**
+  (measured **1002** after #27). **Evidence:** `make loc-tmux` output ≤ 1030.
+
+### Issue #27 (epic #30) ACs — session nesting, attach/detach, createdAt
+
+- **AC-TMUX-ATTACHED-LIVE.** With the reconcile interval far beyond the observation window, a real
+  client attaching to a tracked session flips `TmuxSession.attached` `false→true` (and detach
+  `true→false`) **within 1 s** of the `tmux attach`/`detach-client` returning, observed as a
+  `tmux.session.updated` envelope on an open `tmuxEvents` subscription and confirmed by a follow-up
+  `tmuxSessions` query. Driven by control-mode `%client-session-changed`/`%client-detached`, not the
+  backstop poll. **Evidence:** paired command-return/envelope-arrival timestamps + the two payloads + the two query results.
+- **AC-TMUX-ATTACHED-NOT-SELF.** On a server with **zero human clients** where only the plugin's own
+  control-mode client is attached, **every** session reads `attached: false`. **Evidence:**
+  `list-clients -F '#{client_tty} #{client_control_mode}'` (only the control client) beside the
+  `tmuxSessions` result showing `attached:false` throughout.
+- **AC-TMUX-CLIENTS-PROBE-FAILSAFE.** A non-zero `list-clients` exit does not abort the reconcile: all
+  sessions read `attached:false` and every other field (`createdAt`, panes, windows, free/busy) is
+  populated unchanged, none crossed to stale. **Evidence:** the zero-client `tmuxSessions` result beside the captured non-zero exit.
+- **AC-TMUX-SESSION-CREATE-LIVE.** With the reconcile interval far beyond the window, a **new** session
+  produces a `tmux.session.updated` envelope carrying its `name`/`attached`/`createdAt` within 1 s of
+  `new-session` returning, queryable immediately after. **Evidence:** paired timestamps + payload + query result.
+- **AC-TMUX-CREATEDAT.** `TmuxSession.createdAt` matches `#{session_created}` within 1 s for every
+  tracked session and survives a plugin restart. Fails on null, zero time, or >1 s drift. **Evidence:**
+  `list-sessions -F '#{session_name} #{session_created}'` beside the query, before and after restart.
+- **AC-TMUX-WINDOW-NESTING.** For a session with **≥2 windows, one holding ≥2 panes**,
+  `tmuxSessions { windows { index name active panes { key paneId } } }` returns exactly the real window
+  set with exactly the real pane keys per window — no pane under the wrong window, none dropped, no
+  zero-live-pane window emitted; every `panes.key` is one `tmuxPanes` returns and every `panes.paneId`
+  equals `#{pane_id}`. **Evidence:** raw `list-panes -a` beside the nested query result.
+- **AC-TMUX-WINDOW-KEY-GRAMMAR.** A live `TmuxWindow.key` round-trips `window:<session>:<index>@<hostId>`
+  through the compiled parser, which **rejects** malformed keys (unknown kind, missing `@hostId`, empty
+  index, non-numeric index, embedded `:`/`.` beyond the grammar). **Evidence:** the live key + the parser
+  invoked on each malformed key with its actual error string quoted (`plugins/tmux/keys_test.go`).
+- **AC-TMUX-NESTING-STALE.** With the reconcile interval far beyond the window, killing the last pane of
+  a window drops it from `TmuxSession.windows` within 1 s (control-mode driven), and killing a session
+  removes all its panes from every window's nesting within 1 s; a window still holding ≥1 live pane is
+  unaffected. **Evidence:** the `kill-pane`/`kill-session` timestamp + nested query before and after.
+- **AC-TMUX-MIGRATE-INPLACE.** Starting the new plugin against a DB written by the pre-#27 plugin (rows
+  present) adds the five columns with no row dropped or altered, and a second start over the migrated DB
+  is a no-op (duplicate-column tolerated). **Evidence:** row counts + a sample row from the old DB, then
+  the same after first and after second start.
+- **AC-TMUX-ADDONLY-ZEROCORE.** `git diff --stat core/` reports **0 files changed**, every pre-existing
+  tmux scenario passes, and `tmuxSessions`/`tmuxPanes`/`slots`/`freeSlots`/`paneForBranch` return
+  unchanged shapes for their existing fields. **Evidence:** empty `git diff --stat core/` + green `make features-tmux`.
 - **AC-TMUX-STALE-PEER (cross-box, @pending; peer-owned).** After the peer plugin exists, a stopped box
   shows its tmux data as `stale since T` on a peer **< 30 s**, with no peer-of-peer rows. **@pending** —
   needs the peer plugin + a second box. Tagged `@AC-TMUX-STALE-PEER` (a tmux-scoped cross-reference; F8

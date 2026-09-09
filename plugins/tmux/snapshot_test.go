@@ -37,6 +37,75 @@ func TestParseSessionsResolvesBranch(t *testing.T) {
 	}
 }
 
+func TestParseSessionsCreatedAt(t *testing.T) {
+	nob := func(context.Context, string) string { return "" }
+	rows := parseSessions("h", []byte("s1\t/tmp\t1788915774\n"), nob)
+	if len(rows) != 1 || rows[0].CreatedAt == nil {
+		t.Fatalf("createdAt not parsed: %+v", rows)
+	}
+	if got := rows[0].CreatedAt.Unix(); got != 1788915774 {
+		t.Fatalf("createdAt epoch got %d", got)
+	}
+	// A line without #{session_created} (shorter fixture) leaves CreatedAt nil, not zero.
+	if r := parseSessions("h", []byte("s1\t/tmp\n"), nob); r[0].CreatedAt != nil {
+		t.Fatalf("missing created field must be nil, got %v", r[0].CreatedAt)
+	}
+}
+
+// newProbePlugin builds a minimal Plugin wired only to a fake tmux exec (no store),
+// enough to exercise the list-clients-based attached probe.
+func newProbePlugin(run func(context.Context, ...string) ([]byte, error)) *Plugin {
+	return &Plugin{cfg: config{}, hostID: "h", run: run}
+}
+
+func TestAttachedSessionsIgnoresControlModeClients(t *testing.T) {
+	// s1 has only the plugin's own control-mode client (control=1) → NOT attached;
+	// s2 has a human client (control=0) → attached.
+	run := func(context.Context, ...string) ([]byte, error) {
+		return []byte("s1\t1\ns2\t0\n"), nil
+	}
+	got := newProbePlugin(run).attachedSessions(context.Background())
+	if got["s1"] {
+		t.Error("control-mode-only session must not read attached (own client, #27 §3)")
+	}
+	if !got["s2"] {
+		t.Error("session with a human client must read attached")
+	}
+}
+
+func TestAttachedSessionsEmptyOnError(t *testing.T) {
+	run := func(context.Context, ...string) ([]byte, error) {
+		return nil, errors.New("no server running / zero clients")
+	}
+	got := newProbePlugin(run).attachedSessions(context.Background())
+	if len(got) != 0 {
+		t.Fatalf("a failed clients probe must yield an empty map, got %v", got)
+	}
+}
+
+func TestSessionChanged(t *testing.T) {
+	t0 := time.Unix(1788915774, 0).UTC()
+	base := SessionRow{Name: "s", Attached: false, CreatedAt: &t0, Worktree: "/w", Branch: "b"}
+	if sessionChanged(base, base) {
+		t.Error("identical session must not be flagged changed")
+	}
+	att := base
+	att.Attached = true
+	if !sessionChanged(base, att) {
+		t.Error("attach flip must be a change")
+	}
+	nilc := base
+	nilc.CreatedAt = nil
+	if !sessionChanged(base, nilc) {
+		t.Error("createdAt set→nil must be a change")
+	}
+	wt := base
+	wt.Worktree = "/other"
+	if !sessionChanged(base, wt) {
+		t.Error("worktree move must be a change")
+	}
+}
+
 // newReconcilePlugin builds a Plugin wired to a fake tmux exec and a real store.
 func newReconcilePlugin(t *testing.T, run func(context.Context, ...string) ([]byte, error)) (*Plugin, *[]core.Envelope) {
 	t.Helper()

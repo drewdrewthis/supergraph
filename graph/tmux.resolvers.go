@@ -22,10 +22,16 @@ func (r *queryResolver) TmuxSessions(ctx context.Context, hostID *string) ([]mod
 	if err != nil {
 		return nil, err
 	}
+	bySession, err := tmux.WindowsBySession(ctx, hostArg(hostID))
+	if err != nil {
+		return nil, err
+	}
 	out := make([]model.TmuxSession, 0, len(rows))
 	for _, s := range rows {
+		windows := windowsToModel(bySession[s.Name])
 		out = append(out, model.TmuxSession{
 			HostID: s.HostID, Name: s.Name, Worktree: optStr(s.Worktree), Branch: optStr(s.Branch),
+			Attached: s.Attached, CreatedAt: s.CreatedAt, Windows: windows,
 			LastSeenAt: s.LastSeenAt, StaleSince: s.StaleSince,
 		})
 	}

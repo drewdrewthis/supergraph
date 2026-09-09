@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -39,11 +40,25 @@ type tmuxWorld struct {
 	firstCursor string
 	hooksBefore string
 
-	lastFree    map[string]bool
-	branchDir   string
-	mainDir     string
-	branchPanes []paneJSON
-	locOut      string
+	lastFree     map[string]bool
+	branchDir    string
+	mainDir      string
+	branchPanes  []paneJSON
+	locOut       string
+	lastSessions []sessionJSON
+
+	// attachCmd/attachDone track the real (#27 AC-TMUX-ATTACHED-LIVE) `script`-wrapped
+	// tmux attach client, so cleanup can reap it if the scenario fails before its own
+	// detach step runs.
+	attachCmd  *exec.Cmd
+	attachDone chan struct{}
+
+	// attachLatencies/detachLatencies hold per-cycle client-appeared/vanished-to-
+	// subscription-envelope latencies (AC-TMUX-ATTACHED-LIVE), t0 taken from the real
+	// tmux server's own list-clients output — never from cmd.Start(), which returns
+	// long before tmux has actually attached and would flatter the number.
+	attachLatencies []time.Duration
+	detachLatencies []time.Duration
 }
 
 func (g *tmuxWorld) init() error {
@@ -66,6 +81,15 @@ func (g *tmuxWorld) cleanup() {
 	// Stop serve first so the plugin's control-mode `tmux -C attach` child is killed
 	// with its context before the server is torn down (avoids orphaned clients
 	// accumulating across the suite's many scenarios).
+	if g.attachCmd != nil && g.attachCmd.Process != nil {
+		_ = g.attachCmd.Process.Kill()
+	}
+	if g.attachDone != nil {
+		select {
+		case <-g.attachDone:
+		case <-time.After(2 * time.Second):
+		}
+	}
 	if g.sw != nil {
 		g.sw.stopServe()
 	}
@@ -171,6 +195,25 @@ type paneJSON struct {
 	Cmd        string  `json:"cmd"`
 	Free       bool    `json:"free"`
 	StaleSince *string `json:"staleSince"`
+	// PaneID is only populated when a query selects it (#27); zero value elsewhere.
+	PaneID string `json:"paneId"`
+}
+
+// windowJSON/sessionJSON are the #27 nesting projection (TmuxWindow/TmuxSession).
+type windowJSON struct {
+	Key     string     `json:"key"`
+	Session string     `json:"session"`
+	Index   int        `json:"index"`
+	Name    *string    `json:"name"`
+	Active  bool       `json:"active"`
+	Panes   []paneJSON `json:"panes"`
+}
+
+type sessionJSON struct {
+	Name      string       `json:"name"`
+	Attached  bool         `json:"attached"`
+	CreatedAt *string      `json:"createdAt"`
+	Windows   []windowJSON `json:"windows"`
 }
 
 func (g *tmuxWorld) queryData(gql string, into any) error {
@@ -198,6 +241,41 @@ func (g *tmuxWorld) panes() ([]paneJSON, error) {
 	}
 	err := g.queryData(`{ tmuxPanes { key session cmd free staleSince } }`, &d)
 	return d.TmuxPanes, err
+}
+
+// sessions queries tmuxSessions with the full #27 nesting shape (attach/createdAt/
+// windows/panes) so a single helper covers every window-nesting and attach scenario.
+func (g *tmuxWorld) sessions() ([]sessionJSON, error) {
+	var d struct {
+		TmuxSessions []sessionJSON `json:"tmuxSessions"`
+	}
+	err := g.queryData(`{ tmuxSessions { name attached createdAt windows { key session index name active panes { key session cmd free staleSince paneId } } } }`, &d)
+	return d.TmuxSessions, err
+}
+
+// sessionByName finds one session by name in an already-queried slice, or nil.
+func sessionByName(ss []sessionJSON, name string) *sessionJSON {
+	for i := range ss {
+		if ss[i].Name == name {
+			return &ss[i]
+		}
+	}
+	return nil
+}
+
+// windowByIndex finds one window of session name by index in an already-queried
+// slice, or nil (absence is the AC-TMUX-NESTING-STALE assertion itself).
+func windowByIndex(ss []sessionJSON, name string, idx int) *windowJSON {
+	s := sessionByName(ss, name)
+	if s == nil {
+		return nil
+	}
+	for i := range s.Windows {
+		if s.Windows[i].Index == idx {
+			return &s.Windows[i]
+		}
+	}
+	return nil
 }
 
 func (g *tmuxWorld) paneForBranch(branch string) ([]paneJSON, error) {
@@ -363,6 +441,159 @@ exit 0
 	}
 	g.tmuxPath = path
 	return nil
+}
+
+// scriptAttachCmd builds a real (non-control-mode) `tmux attach-session` under a
+// portable pty via the `script` utility (AC-TMUX-ATTACHED-LIVE): `tmux attach`
+// needs a controlling terminal the test process itself has none of, and `script`
+// gives the child one without a new Go module dependency. The flag syntax differs
+// between macOS's BSD script (`-q /dev/null <cmd...>`) and Linux's util-linux
+// script (`-q -c "<cmd>" /dev/null`), so the shape is chosen by GOOS. ok is false
+// when `script` is not on PATH or the OS is neither — the caller returns
+// godog.ErrPending rather than faking the attach (a stubbed list-clients would
+// assert nothing about the real attach path).
+func scriptAttachCmd(socket, session string) (cmd *exec.Cmd, ok bool) {
+	if _, err := exec.LookPath("script"); err != nil {
+		return nil, false
+	}
+	tmuxArgs := []string{"-L", socket, "attach-session", "-t", session}
+	switch runtime.GOOS {
+	case "darwin":
+		args := append([]string{"-q", "/dev/null", "tmux"}, tmuxArgs...)
+		return exec.Command("script", args...), true
+	case "linux":
+		full := append([]string{"tmux"}, tmuxArgs...)
+		return exec.Command("script", "-q", "-c", strings.Join(full, " "), "/dev/null"), true
+	default:
+		return nil, false
+	}
+}
+
+// humanClientTTY polls for the tty of the one non-control-mode client attached to
+// "s1". Detaching by session ("detach-client -s s1") would also kick the plugin's
+// OWN control-mode client — which, with only one session on the socket, is by
+// default also attached to "s1" — knocking the very observer that's supposed to
+// see the next cycle's attach offline. Targeting the human client's own tty via
+// "-t" avoids that self-inflicted outage.
+//
+// A `list-clients` error is treated as "zero clients" and retried, not a hard
+// failure: on this tmux build, `list-clients` on a momentarily clientless server
+// exits non-zero with "no current target" instead of printing empty output (seen
+// live between a detach and the control client's reconnect). That is exactly the
+// failure mode plugins/tmux/snapshot.go's attachedSessions already treats as a
+// failsafe (empty map, never an aborted reconcile) — this mirrors that here
+// rather than letting a transient clientless instant abort the scenario.
+func (g *tmuxWorld) humanClientTTY() (string, error) {
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		out, _ := g.tmux("list-clients", "-F", "#{client_session}\t#{client_control_mode}\t#{client_tty}")
+		for _, line := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
+			f := strings.Split(line, "\t")
+			if len(f) < 3 {
+				continue
+			}
+			if f[0] == "s1" && f[1] != "1" {
+				return f[2], nil
+			}
+		}
+		if time.Now().After(deadline) {
+			return "", fmt.Errorf("no human client attached to s1 within 5s")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// waitRealHumanClient polls the real tmux server's own list-clients output (not
+// the plugin's cache) until a client attached to "s1" that is NOT the plugin's own
+// control-mode client is present (want=true) or absent (want=false), and returns
+// the instant that first became true as t0 — the honest start of the attach/detach
+// latency window (AC-TMUX-ATTACHED-LIVE), since cmd.Start() on the `script` wrapper
+// returns well before tmux has actually registered the client.
+func (g *tmuxWorld) waitRealHumanClient(want bool) (time.Time, error) {
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		out, _ := g.tmux("list-clients", "-F", "#{client_session}\t#{client_control_mode}")
+		human := false
+		for _, line := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
+			f := strings.Split(line, "\t")
+			if len(f) < 2 {
+				continue
+			}
+			if f[0] == "s1" && f[1] != "1" {
+				human = true
+				break
+			}
+		}
+		if human == want {
+			return time.Now(), nil
+		}
+		if time.Now().After(deadline) {
+			return time.Time{}, fmt.Errorf("real human client on s1 never reached present=%v within 10s", want)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// openTmuxEventsSub opens a tmuxEvents subscription selecting type/key/payload —
+// openSubscription's shared {ts payload v} shape can't tell a session-attached
+// envelope from any other tmuxEvents push.
+func (g *tmuxWorld) openTmuxEventsSub() error {
+	return g.sw.openSubscriptionSelect("tmuxEvents", "type key payload")
+}
+
+// awaitSessionAttachedEnvelope drains the open tmuxEvents subscription (opened via
+// openTmuxEventsSub) until it observes a tmux.session.updated envelope for
+// session "s1" whose payload's attached field equals want, skipping any other
+// envelope (pane/window updates, unrelated sessions) in between. It returns the
+// elapsed time since t0 — the moment the real client's presence/absence was
+// first observed on the real server — which is the quantity AC-TMUX-ATTACHED-LIVE
+// bounds at 1s, not the poll-window floor a `tmuxSessions` query would impose.
+func (g *tmuxWorld) awaitSessionAttachedEnvelope(t0 time.Time, want bool, timeout time.Duration) (time.Duration, error) {
+	const wantKey = "session:s1@test"
+	deadline := t0.Add(timeout)
+	for {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return 0, fmt.Errorf("no tmux.session.updated envelope for s1 with attached=%v within %s", want, timeout)
+		}
+		p, err := g.sw.ws.nextPush(remaining)
+		if err != nil {
+			exited := g.sw.serve != nil && g.sw.serve.exited()
+			// DIAGNOSTIC (temporary): report whether the queryable cache itself
+			// converged even though the subscription never delivered the envelope —
+			// distinguishes a delivery-path issue from a genuine backend miss.
+			queryState := "query failed"
+			if ss, qerr := g.sessions(); qerr == nil {
+				if s1 := sessionByName(ss, "s1"); s1 != nil {
+					queryState = fmt.Sprintf("tmuxSessions query shows attached=%v", s1.Attached)
+				} else {
+					queryState = "tmuxSessions query: s1 not found"
+				}
+			}
+			return 0, fmt.Errorf("subscription read: %w (serve exited=%v stderr=%s; %s)", err, exited, g.sw.serve.stderr.String(), queryState)
+		}
+		data, _ := p["data"].(map[string]any)
+		te, _ := data["tmuxEvents"].(map[string]any)
+		if te == nil {
+			continue
+		}
+		typ, _ := te["type"].(string)
+		key, _ := te["key"].(string)
+		if typ != "tmux.session.updated" || key != wantKey {
+			continue
+		}
+		payloadStr, _ := te["payload"].(string)
+		var body struct {
+			Attached bool `json:"attached"`
+		}
+		if err := json.Unmarshal([]byte(payloadStr), &body); err != nil {
+			continue
+		}
+		if body.Attached != want {
+			continue
+		}
+		return time.Since(t0), nil
+	}
 }
 
 // tmpGitRepoOnBranch creates a throwaway git worktree checked out on branch.
