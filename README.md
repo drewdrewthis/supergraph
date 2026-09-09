@@ -122,10 +122,10 @@ paneTitles = false  # resolve tmux pane titles via `tmux list-panes` (default of
 
 `stateDir` is **opt-in and off by default**. It is the only channel that stores prompt
 text: `first_prompt` becomes `mission` (truncated to 120 runes) and `last_response`
-becomes `lastResponse` (200 runes). Enabling it opts that box's truncated prompt text
-into peer-mesh replication (`docs/edr/claude.md` §Privacy), so leave it empty unless you
-want that. A leading `~/` in `stateDir` expands against `$HOME`. `paneTitles` never
-spawns `tmux` while false.
+becomes `lastResponse` (200 runes). That text is stored on this box only — the claude
+plugin exposes no peer executor, so its rows do not replicate (`docs/edr/claude.md`
+§Privacy). Leave it empty unless you want prompt text in the local db. A leading `~/` in
+`stateDir` expands against `$HOME`. `paneTitles` never spawns `tmux` while false.
 
 ### Querying a cached issue
 

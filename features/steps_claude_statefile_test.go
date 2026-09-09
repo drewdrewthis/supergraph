@@ -3,6 +3,7 @@ package features
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -68,6 +69,8 @@ func registerClaudeStateFileSteps(sc *godog.ScenarioContext, w *world) {
 	sc.Step(lit("the \x60claudeSessions\x60 GraphQL result contains neither secret"), w.assertCarveoutGQLNoSecrets)
 	sc.Step(lit("\x60claudeSession(sessionId: \"SEC\")\x60 \x60mission\x60 is \"SECRET-MISSION-STRING\" and \x60lastResponse\x60 is \"SECRET-RESPONSE-STRING\""), w.assertSECFields)
 	sc.Step(lit("no other field of \x60SEC\x60 carries either secret"), w.assertSECClean)
+	sc.Step(lit("\x60POST /plugins/claude/graphql\x60 is not routed"), w.assertPluginGraphQLNotRouted)
+	sc.Step(lit("\x60POST /plugins/claude/hook\x60 is routed"), w.assertPluginHookRouted)
 }
 
 var carveoutSecrets = []string{"SECRET-MISSION-STRING", "SECRET-RESPONSE-STRING"}
@@ -534,4 +537,36 @@ func (w *world) noClaudeFrame(needle string, window time.Duration) bool {
 			return false
 		}
 	}
+}
+
+// ---- peer-executor route probes (AC-CLAUDE-NO-EXECUTOR) ----
+
+// assertPluginGraphQLNotRouted asserts POST /plugins/claude/graphql 404s. This is the
+// actual assertion this AC exists for: a routed executor here would put mission and
+// lastResponse on the wire to peers, so a 404 is required, not incidental.
+func (w *world) assertPluginGraphQLNotRouted() error {
+	resp, err := http.Post("http://"+w.listen+"/plugins/claude/graphql", "application/json", nil)
+	if err != nil {
+		return fmt.Errorf("POST /plugins/claude/graphql: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusNotFound {
+		return fmt.Errorf("POST /plugins/claude/graphql: want 404, got %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// assertPluginHookRouted asserts POST /plugins/claude/hook is handled at all (any
+// non-404 status). The hook returns 400 on an empty body; we assert not-404 rather
+// than pinning 400 so the hook's own payload validation can change freely.
+func (w *world) assertPluginHookRouted() error {
+	resp, err := http.Post("http://"+w.listen+"/plugins/claude/hook", "application/json", nil)
+	if err != nil {
+		return fmt.Errorf("POST /plugins/claude/hook: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode == http.StatusNotFound {
+		return fmt.Errorf("POST /plugins/claude/hook: want routed (non-404), got 404")
+	}
+	return nil
 }

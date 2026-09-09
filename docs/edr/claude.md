@@ -133,7 +133,7 @@ bodies would **replicate potentially sensitive session content across every box*
 | `sessionId`, `hostId`, `cwd`, `gitBranch`, `issueNumber` | **stored** | structural; join keys; `cwd` is a path, not content — **but a path can embed the OS username** (`/home/<user>/…`, `/Users/<user>/…`), which is stored and emitted, so it is not fully anonymous |
 | `model`, `state`, `lastTool` (name), `toolCalls` (count), `pane`, `pid` | **stored** | operational metadata; `lastTool` is the tool **name** only |
 | `startedAt`, `lastEventAt`, `staleSince`, `prNumber`, `prUrl` | **stored** | timing; PR fields are public |
-| **prompt text** (`last_prompt`/`first_prompt`) | **redacted** on the hook/transcript channels; **opt-in** via the state-file channel as `mission` (below) | user content; never crosses the mesh unless `stateDir` is set |
+| **prompt text** (`last_prompt`/`first_prompt`) | **redacted** on the hook/transcript channels; **opt-in** via the state-file channel as `mission` (below) | user content; stored only under `stateDir`, and box-local while the plugin exposes no executor (AC-CLAUDE-NO-EXECUTOR) |
 | **assistant response text** (`last_response`) | **redacted** on the hook/transcript channels; **opt-in** via the state-file channel as `lastResponse` (below) | model output content |
 | **`tool_input`** (command bodies, file contents, paths) | **redacted** | may contain secrets/paths; only the tool **name** is kept |
 | **`Notification` message body** | **redacted** | may name a gated command; stored as `awaitingInput:true` + `state:input` only |
@@ -157,10 +157,17 @@ still passes on those two channels.
 | `lastResponse` (from `last_response`, ≤ 200 runes) | **stored only when `stateDir` is set** | opt-in response text; truncated the same way |
 | `paneTitle` (from `tmux list-panes`, opt-in via `paneTitles`) | **stored only when `paneTitles` is true** | operational metadata; tmux is never spawned when off |
 
-**This channel is off by default** (`stateDir = ""` reads no directory at all). It is opt-in because
-`plugins/peer/mirror.go` maps the `claude` op into the peer mesh, so **enabling it opts that box's
-truncated prompt text into peer-mesh replication** — the same reason `ClaudeSession` shipped with no
-text field. Enabling it is therefore an explicit operator choice, box-local until made.
+**This channel is off by default** (`stateDir = ""` reads no directory at all), because it is the only
+one that stores user prompt text at all — the same concern that kept `ClaudeSession` free of a text
+field. Enabling it is an explicit operator choice.
+
+**Mesh status, stated precisely.** `plugins/peer/mirror.go` maps the `claude` op to the `claude` plugin,
+but that mapping has **no executor behind it**: the plugin registers only a `hook` route, so a peer's
+`POST /plugins/claude/graphql` 404s and **claude rows do not replicate today**. Prompt text stored under
+`stateDir` is therefore **box-local**. This is a property of the current routes, not a guarantee of the
+design — so it is pinned by **AC-CLAUDE-NO-EXECUTOR**, which fails the moment a `graphql` route appears
+on this plugin. Whoever adds that executor MUST decide what it exposes, and **must exclude `mission` and
+`lastResponse`** unless the mesh's privacy posture is deliberately widened at the same time.
 **AC-CLAUDE-PRIVACY-CARVEOUT** is the negative control: with `stateDir` empty a state file's secrets
 appear in **no** db byte, envelope, or GraphQL field; with it set they appear in `mission`/`lastResponse`
 and **nowhere else**.

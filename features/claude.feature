@@ -327,6 +327,12 @@ Feature: Claude plugin — session state from lifecycle hooks + transcript tail
     When a `SessionStart` hook payload for `AO` is POSTed
     Then `claudeSession(sessionId: "AO")` `mission`, `lastResponse`, and `paneTitle` are all null
 
+  @claude @local @AC-CLAUDE-NO-EXECUTOR
+  Scenario: the claude plugin exposes no peer executor, so its rows stay box-local
+    Given a supergraph server started with the claude plugin and data dir <tmp>
+    Then `POST /plugins/claude/graphql` is not routed
+    And `POST /plugins/claude/hook` is routed
+
   # ---------- Live proof (honest @pending) ----------
 
   @claude @live @pending @AC-CLAUDE-PANE
@@ -368,5 +374,6 @@ Feature: Claude plugin — session state from lifecycle hooks + transcript tail
   # AC-CLAUDE-STATEDIR-TILDE      → a stateDir beginning ~/ resolves against $HOME (empty stateDir → no read, see PRIVACY-CARVEOUT)
   # AC-CLAUDE-PRIVACY-CARVEOUT    → stateDir empty → secrets never read/stored/emitted/served; set → secrets only in mission/lastResponse
   # AC-CLAUDE-ADDONLY             → mission/lastResponse/paneTitle are nullable additions, null on a hook-only session
+  # AC-CLAUDE-NO-EXECUTOR         → no graphql executor route ⇒ claude rows cannot be pulled by a peer
 
   # <!-- ACs ready for ac-reviewer -->
