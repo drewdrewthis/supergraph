@@ -324,11 +324,11 @@ type joinPRJSON struct {
 }
 
 type repoJSON struct {
-	HostID     string          `json:"hostId"`
-	Slug       string          `json:"slug"`
-	Root       string          `json:"root"`
-	StaleSince *string         `json:"staleSince"`
-	Worktrees  []worktreeJSON  `json:"worktrees"`
+	HostID     string         `json:"hostId"`
+	Slug       string         `json:"slug"`
+	Root       string         `json:"root"`
+	StaleSince *string        `json:"staleSince"`
+	Worktrees  []worktreeJSON `json:"worktrees"`
 }
 
 const repoFields = `hostId slug root staleSince worktrees { hostId repoSlug path branch head detached ahead behind staleSince tmuxSession { __typename } issue { number title } pullRequest { number headRefName state } }`
