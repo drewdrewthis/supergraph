@@ -128,7 +128,7 @@ Per the owner rule, the cap is **measured + 5%, rounded up to a multiple of 10**
 | `reconcile.go` | per-root reconcile loop (D3), worktree-node build (D1), hash-gated emit (D9), event payload/envelope construction |
 | `store.go` | SQLite: migrate, upsert repo/worktree (D2's null binding), `markWorktreesStaleForRepo` (D4), scan repos/worktrees |
 | `resolver.go` | exported `Repos`/`WorktreesForRepo` accessors via the package-singleton seam (D6) |
-| **Total** | **<LOC>** — cap TBD (measured + 5%, rounded up to 10) |
+| **Total** | **567** — `loc-git` cap **600** (measured + 5%, rounded up to 10) |
 
 ## Handoff
 
