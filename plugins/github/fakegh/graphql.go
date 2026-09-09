@@ -38,7 +38,7 @@ func (s *Server) handleGraphQL(w http.ResponseWriter, r *http.Request) {
 	owner, _ := req.Variables["owner"].(string)
 	repo, _ := req.Variables["repo"].(string)
 	switch op {
-	case "openIssues", "issue", "issueComments", "checkRunsForPR", "pr", "repoLabels":
+	case "openIssues", "openPRs", "issue", "issueComments", "checkRunsForPR", "pr", "repoLabels":
 		data["repository"] = s.repositoryData(op, owner, repo, req.Variables)
 	}
 	if strings.Contains(req.Query, "__type") {
@@ -62,6 +62,8 @@ func (s *Server) repositoryData(op, owner, repo string, vars map[string]any) map
 	switch op {
 	case "openIssues":
 		rep["issues"] = map[string]any{"nodes": s.nodesWithPrefix(prefix, "open")}
+	case "openPRs":
+		rep["pullRequests"] = map[string]any{"nodes": s.nodesWithPrefix("pr:"+owner+"/"+repo+"#", "open")}
 	case "issue":
 		if num, ok := numString(vars["number"]); ok {
 			if n, ok := s.world.nodes[prefix+num]; ok {

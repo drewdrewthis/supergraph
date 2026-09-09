@@ -19,7 +19,7 @@ import (
 // fake GitHub httptest server (plugins/github/fakegh), and direct reads of the
 // plugin's own github.db SQLite file (the same pattern steps_test.go already uses
 // for template.db) — never an import of the plugins/github package itself, so
-// these steps survive an internal refactor of the plugin (budget 1650).
+// these steps survive an internal refactor of the plugin (budget 1810).
 //
 // @live @pending scenarios: every step in them returns godog.ErrPending directly,
 // per the brief. Godog stops executing a scenario's steps at the first pending
@@ -181,7 +181,7 @@ func registerGithubSteps(sc *godog.ScenarioContext) {
 	// ---------- AC-GH-LOC ----------
 	sc.Step(lit("the github plugin source under `plugins/github`"), noop)
 	sc.Step(lit("`make loc-github` counts non-comment, non-blank prod lines excluding tests and `internal/fakegh`"), g.locRun)
-	sc.Step(lit("the count is 1650 or fewer"), g.locAssert)
+	sc.Step(lit("the count is 1810 or fewer"), g.locAssert)
 
 	// ---------- AC-GH-ZEROCORE ----------
 	sc.Step(lit("the github plugin package and its blank import in graph/plugins_import.go"), noop)
@@ -1256,7 +1256,7 @@ func (g *ghWorld) locRun() error {
 }
 
 func (g *ghWorld) locAssert() error {
-	budget := 1650
+	budget := 1810
 	if v := os.Getenv("LOC_BUDGET"); v != "" {
 		var n int
 		if _, err := fmt.Sscanf(v, "%d", &n); err == nil {

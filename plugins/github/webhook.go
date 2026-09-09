@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 
 	"github.com/drewdrewthis/supergraph/core"
@@ -59,6 +60,21 @@ func (p *Plugin) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p.emitPurged(ctx, key)
+	// A check_run fans out to the pr keys it ran against, so the sidebar's
+	// statusCheckRollup refreshes on the next read (#26). The primary purge already
+	// succeeded; a related-key failure logs and continues rather than 500-ing.
+	for _, rk := range relatedKeys(event, payload) {
+		if rk == key {
+			continue
+		}
+		if _, err := p.store.purge(ctx, rk); err != nil {
+			// %q escapes control chars (incl. newlines), so an attacker-shaped event
+			// or key cannot inject log lines — the gosec taint pass cannot see that.
+			log.Printf("github: webhook %q related purge failed for %q: %v", event, rk, err) //nolint:gosec // G706: %q escapes control chars
+			continue
+		}
+		p.emitPurged(ctx, rk)
+	}
 	w.WriteHeader(http.StatusOK)
 }
 

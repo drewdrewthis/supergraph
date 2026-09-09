@@ -199,12 +199,12 @@ Feature: GitHub plugin — event-invalidated caching proxy
     When the since-cursor reconcile runs once
     Then no `github.node.updated` event was emitted for `issue:o/r#5`
 
-  @github @local @AC-GH-LOC
-  Scenario: Production LOC for the github plugin stays within the 1650-line budget
+  @github @local @AC-GH-LOC @AC-GHPR-LOC
+  Scenario: Production LOC for the github plugin stays within the 1810-line budget
     Given the github plugin source under `plugins/github`
     When `make loc-github` counts non-comment, non-blank prod lines excluding tests and `internal/fakegh`
-    Then the count is 1650 or fewer
-    And evidence is captured: "plugins/github prod LOC <= 1650, via make loc-github output"
+    Then the count is 1810 or fewer
+    And evidence is captured: "plugins/github prod LOC <= 1810, via make loc-github output"
 
   @github @local @AC-GH-ZEROCORE
   Scenario: The github plugin compiles in without touching core

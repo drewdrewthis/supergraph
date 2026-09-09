@@ -221,6 +221,36 @@ func eventKey(event string, payload map[string]any) (string, bool) {
 	return fill(s.keyfmt, map[string]string{"owner": owner, "repo": repo, "disc": disc}), true
 }
 
+// relatedKeys returns the extra object keys a webhook invalidates beyond its
+// primary key. A check_run names the pull requests it ran against
+// (check_run.pull_requests[].number), so completing a run purges each of those
+// pr keys too — otherwise a cached PR keeps serving a stale statusCheckRollup
+// until the next reconcile pass (#26). Only check_run produces extras for now.
+func relatedKeys(event string, payload map[string]any) []string {
+	if event != "check_run" {
+		return nil
+	}
+	owner, repo := repoFullName(payload)
+	if owner == "" || repo == "" || !safeName(owner) || !safeName(repo) {
+		return nil
+	}
+	cr, _ := payload["check_run"].(map[string]any)
+	prs, _ := cr["pull_requests"].([]any)
+	var out []string
+	for _, e := range prs {
+		m, _ := e.(map[string]any)
+		if m == nil {
+			continue
+		}
+		disc := coerce(m["number"])
+		if disc == "" {
+			continue
+		}
+		out = append(out, fill(specByKind["pr"].keyfmt, map[string]string{"owner": owner, "repo": repo, "disc": disc}))
+	}
+	return out
+}
+
 // repoFullName pulls owner/repo from the standard webhook "repository" block.
 func repoFullName(payload map[string]any) (string, string) {
 	repo, ok := payload["repository"].(map[string]any)

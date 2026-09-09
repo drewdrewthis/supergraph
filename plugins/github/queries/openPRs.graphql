@@ -6,6 +6,8 @@ query openPRs($owner: String!, $repo: String!) {
     pullRequests(first: 100, states: OPEN) {
       nodes {
         number title state id merged mergedAt closedAt url updatedAt headRefName baseRefName body
+        isDraft reviewDecision mergeStateStatus
+        commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
         labels(first: 20) { nodes { name } }
       }
     }
