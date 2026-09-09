@@ -526,7 +526,15 @@ type wsClient struct {
 	cancel context.CancelFunc
 }
 
+// openSubscription opens a subscription selecting {ts payload v} — the shape
+// every existing caller needs (AC-CORE-8-style emit-to-receipt latency off the
+// envelope's own TS). openSubscriptionSelect is the general form for a caller
+// that needs more of the envelope (type/key), e.g. to filter which envelope it is.
 func (w *world) openSubscription(field string) error {
+	return w.openSubscriptionSelect(field, "ts payload v")
+}
+
+func (w *world) openSubscriptionSelect(field, selection string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	dctx, dcancel := context.WithTimeout(ctx, 5*time.Second)
 	defer dcancel()
@@ -555,10 +563,7 @@ func (w *world) openSubscription(field string) error {
 			break
 		}
 	}
-	// ts is included so AC-CORE-8 can measure genuine emit-to-receipt latency
-	// (envelope TS, source-stamped at emit) instead of clock-starting at an
-	// arbitrary point in the plugin's own tick cycle.
-	q := fmt.Sprintf("subscription { %s { ts payload v } }", field)
+	q := fmt.Sprintf("subscription { %s { %s } }", field, selection)
 	if err := c.write(map[string]any{"id": "1", "type": "subscribe", "payload": map[string]any{"query": q}}); err != nil {
 		c.close()
 		return err
@@ -585,7 +590,12 @@ func (c *wsClient) read(ctx context.Context) (map[string]any, error) {
 }
 
 // nextPush blocks until a "next" (data) message arrives or timeout, returning the
-// payload object. Non-data frames (ping, ka) are skipped.
+// payload object. Non-data frames (ka) are skipped; a server "ping" (graphql-
+// transport-ws) is answered with "pong" so a subscription held open across many
+// seconds (e.g. AC-TMUX-ATTACHED-LIVE's 20 attach/detach cycles) isn't force-
+// closed by the server's PingPongInterval*2 read deadline (see gqlgen's
+// transport.Websocket.ping/run) — every other caller's subscription is short
+// enough that this deadline never fires, so this was previously silent.
 func (c *wsClient) nextPush(timeout time.Duration) (map[string]any, error) {
 	ctx, cancel := context.WithTimeout(c.ctx, timeout)
 	defer cancel()
@@ -595,6 +605,10 @@ func (c *wsClient) nextPush(timeout time.Duration) (map[string]any, error) {
 			return nil, err
 		}
 		switch m["type"] {
+		case "ping":
+			if err := c.write(map[string]any{"type": "pong", "payload": m["payload"]}); err != nil {
+				return nil, fmt.Errorf("reply to server ping: %w", err)
+			}
 		case "next":
 			if p, ok := m["payload"].(map[string]any); ok {
 				return p, nil

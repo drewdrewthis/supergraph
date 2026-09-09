@@ -22,12 +22,13 @@ func (r *queryResolver) TmuxSessions(ctx context.Context, hostID *string) ([]mod
 	if err != nil {
 		return nil, err
 	}
+	bySession, err := tmux.WindowsBySession(ctx, hostArg(hostID))
+	if err != nil {
+		return nil, err
+	}
 	out := make([]model.TmuxSession, 0, len(rows))
 	for _, s := range rows {
-		out = append(out, model.TmuxSession{
-			HostID: s.HostID, Name: s.Name, Worktree: optStr(s.Worktree), Branch: optStr(s.Branch),
-			LastSeenAt: s.LastSeenAt, StaleSince: s.StaleSince,
-		})
+		out = append(out, sessionToModel(s, bySession[s.Name]))
 	}
 	return out, nil
 }

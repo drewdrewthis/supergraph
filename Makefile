@@ -163,9 +163,15 @@ features-subscribe:
 # TMUX_LOC_CAP is the ratified LOC budget for the tmux plugin: 600 -> 800 (control
 # client + poll + read model) -> 860 after the B1/B2 bug fixes and review Shoulds
 # landed at a measured 813, then 860->820 after the config helpers moved to
-# plugins/internal/pluginconfig (measured 776 x1.05 rounded up to 10). Owner rule:
-# measured + 5% rounded up to a multiple of 10. See the LOC table in docs/edr/tmux.md.
-TMUX_LOC_CAP := 820
+# plugins/internal/pluginconfig (measured 776 x1.05 rounded up to 10), then 820->1030
+# after issue #27 (epic #30) added the window→pane nesting projection, the
+# tmux.session.updated envelope + list-clients attached probe, createdAt, and the
+# five additive migration columns. The N+1 fix (WindowsBySession + groupWindows)
+# for one pane scan per session raised the measure from 979 to 1002. Per the owner
+# rule (measured + 5% rounded up to a multiple of 10) the formula gives 1060, but
+# the cap is deliberately held at 1030 — a tightening rather than a loosening.
+# See the LOC table in docs/edr/tmux.md.
+TMUX_LOC_CAP := 1030
 
 # features-tmux runs only the tmux plugin's @local scenarios against a real tmux
 # server on a private -L socket (created and torn down per scenario). Requires the

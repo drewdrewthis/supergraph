@@ -78,7 +78,7 @@ func (r *worktreeResolver) TmuxSession(ctx context.Context, obj *git.WorktreeNod
 	if err != nil {
 		return nil, nil
 	}
-	return tmuxSessionForWorktree(sessions, obj.Path), nil
+	return tmuxSessionForWorktree(ctx, sessions, obj.Path)
 }
 
 // Issue is the resolver for the issue field: the cached issue the worktree's

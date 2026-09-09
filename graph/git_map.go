@@ -8,6 +8,7 @@ package graph
 // (internal/issuekey), same as github_map.go.
 
 import (
+	"context"
 	"path/filepath"
 	"strings"
 
@@ -15,15 +16,6 @@ import (
 	"github.com/drewdrewthis/supergraph/plugins/github"
 	"github.com/drewdrewthis/supergraph/plugins/tmux"
 )
-
-// tmuxSessionModel maps a tmux plugin SessionRow to the generated GraphQL model,
-// mirroring the inline mapping in graph/tmux.resolvers.go's TmuxSessions.
-func tmuxSessionModel(s tmux.SessionRow) model.TmuxSession {
-	return model.TmuxSession{
-		HostID: s.HostID, Name: s.Name, Worktree: optStr(s.Worktree), Branch: optStr(s.Branch),
-		LastSeenAt: s.LastSeenAt, StaleSince: s.StaleSince,
-	}
-}
 
 // tmuxSessionForWorktree is the Worktree.tmuxSession join (AC-GIT-TMUX-JOIN): the
 // tmux session whose Worktree path matches path after filepath.Clean. Symlink
@@ -34,7 +26,7 @@ func tmuxSessionModel(s tmux.SessionRow) model.TmuxSession {
 // tmux.Sessions ordering is not guaranteed, so when more than one session sits on
 // the same worktree path the match is tie-broken by the lexicographically smallest
 // Name, keeping the result deterministic across calls.
-func tmuxSessionForWorktree(sessions []tmux.SessionRow, path string) *model.TmuxSession {
+func tmuxSessionForWorktree(ctx context.Context, sessions []tmux.SessionRow, path string) (*model.TmuxSession, error) {
 	want := filepath.Clean(path)
 	var best *tmux.SessionRow
 	for i := range sessions {
@@ -47,10 +39,14 @@ func tmuxSessionForWorktree(sessions []tmux.SessionRow, path string) *model.Tmux
 		}
 	}
 	if best == nil {
-		return nil
+		return nil, nil
 	}
-	m := tmuxSessionModel(*best)
-	return &m
+	windows, err := tmux.Windows(ctx, best.HostID, best.Name)
+	if err != nil {
+		return nil, err
+	}
+	m := sessionToModel(*best, windows)
+	return &m, nil
 }
 
 // splitRepoSlug splits a WorktreeNode.RepoSlug ("owner/name") into its two parts.

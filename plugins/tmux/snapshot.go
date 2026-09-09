@@ -15,8 +15,11 @@ import (
 // paneFmt / sessFmt are the tab-separated field sets list-panes/list-sessions emit
 // (EDR §Measurements: the full reconcile field set).
 const (
-	paneFmt = "#{session_name}\t#{window_index}\t#{pane_index}\t#{pane_pid}\t#{pane_current_command}\t#{pane_current_path}\t#{pane_active}"
-	sessFmt = "#{session_name}\t#{session_path}"
+	paneFmt = "#{session_name}\t#{window_index}\t#{pane_index}\t#{pane_pid}\t#{pane_current_command}\t#{pane_current_path}\t#{pane_active}\t#{pane_id}\t#{window_name}\t#{window_active}"
+	sessFmt = "#{session_name}\t#{session_path}\t#{session_created}"
+	// clientFmt drives the attached probe. #{client_control_mode} distinguishes the
+	// plugin's own `tmux -C attach` client (control=1) from a human client (#27 §3).
+	clientFmt = "#{client_session}\t#{client_control_mode}"
 )
 
 // reconcile runs one backstop poll: it lists every session and pane on the watched
@@ -42,14 +45,32 @@ func (p *Plugin) reconcile(ctx context.Context) error {
 	}
 	now := p.now()
 
+	// attached is derived from list-clients, never #{session_attached} (poisoned by
+	// our own control client — #27 §3). attachedSessions returns empty on ANY error,
+	// so a failed clients probe reads as "zero clients" and never aborts the reconcile
+	// nor marks sessions stale (AC-TMUX-CLIENTS-PROBE-FAILSAFE).
+	attached := p.attachedSessions(ctx)
+
 	prevLive, err := p.store.livePaneRows(ctx)
+	if err != nil {
+		return err
+	}
+	prevSessions, err := p.store.liveSessionRows(ctx)
 	if err != nil {
 		return err
 	}
 
 	for _, sr := range parseSessions(p.hostID, sessOut, p.branchOf) {
+		sr.Attached = attached[sr.Name]
+		old, existed := prevSessions[sr.Key]
 		if err := p.store.upsertSession(ctx, sr, now); err != nil {
 			return err
+		}
+		// Emit tmux.session.updated (the fifth envelope) for a new or changed session:
+		// an attach/detach, a createdAt fill, or a worktree/branch move is what the
+		// tmuxEvents attach subscriber sees (AC-TMUX-ATTACHED-LIVE).
+		if !existed || sessionChanged(old, sr) {
+			p.emitSession(ctx, sr, now)
 		}
 	}
 
@@ -92,6 +113,50 @@ func paneChanged(old, cur PaneRow) bool {
 	return old.Free != cur.Free || old.Cmd != cur.Cmd || old.Path != cur.Path
 }
 
+// attachedSessions returns the set of session names with at least one HUMAN client
+// attached. #{session_attached} is NOT used: the plugin's own `tmux -C attach`
+// control-mode client makes its session read attached=1 with zero human clients
+// (#27 §3, measured), a false positive the sidebar highlight keys on. Instead it
+// reads list-clients and counts only clients whose #{client_control_mode} != "1".
+// ANY error (a zero-client server exits non-zero on some tmux versions) yields an
+// empty map — a failed clients probe means "no clients", never a reconcile abort
+// (AC-TMUX-CLIENTS-PROBE-FAILSAFE).
+func (p *Plugin) attachedSessions(ctx context.Context) map[string]bool {
+	out := map[string]bool{}
+	raw, err := p.run(ctx, p.tmuxArgs("list-clients", "-F", clientFmt)...)
+	if err != nil {
+		return out
+	}
+	for _, line := range splitLines(raw) {
+		f := strings.Split(line, "\t")
+		if len(f) < 2 || f[0] == "" {
+			continue
+		}
+		if f[1] != "1" { // control-mode clients (our own) never count as a human attach
+			out[f[0]] = true
+		}
+	}
+	return out
+}
+
+// sessionChanged reports whether a live session's reconcile-visible state moved:
+// attached (a human client came or went), createdAt, worktree, or branch. A new or
+// changed session drives one tmux.session.updated envelope.
+func sessionChanged(old, cur SessionRow) bool {
+	return old.Attached != cur.Attached ||
+		!sameTime(old.CreatedAt, cur.CreatedAt) ||
+		old.Worktree != cur.Worktree ||
+		old.Branch != cur.Branch
+}
+
+// sameTime compares two optional times by instant (nil == nil, nil != set).
+func sameTime(a, b *time.Time) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.Equal(*b)
+}
+
 // parsePanes turns list-panes tab output into pane rows, classifying free/busy.
 func parsePanes(host string, out []byte, idleShells []string) []PaneRow {
 	var rows []PaneRow
@@ -106,7 +171,7 @@ func parsePanes(host string, out []byte, idleShells []string) []PaneRow {
 		if err1 != nil || err2 != nil {
 			continue
 		}
-		rows = append(rows, PaneRow{
+		r := PaneRow{
 			Key:     paneKey(f[0], win, pane, host),
 			HostID:  host,
 			Session: f[0],
@@ -117,7 +182,13 @@ func parsePanes(host string, out []byte, idleShells []string) []PaneRow {
 			Path:    f[5],
 			Active:  f[6] == "1",
 			Free:    isIdle(f[4], idleShells),
-		})
+		}
+		// pane_id/window_name/window_active are appended to paneFmt for #27; live tmux
+		// always emits all ten fields, a shorter line leaves the #27 fields zero.
+		if len(f) >= 10 {
+			r.PaneID, r.WindowName, r.WindowActive = f[7], f[8], f[9] == "1"
+		}
+		rows = append(rows, r)
 	}
 	return rows
 }
@@ -131,15 +202,34 @@ func parseSessions(host string, out []byte, branchOf func(context.Context, strin
 		if len(f) < 2 {
 			continue
 		}
-		rows = append(rows, SessionRow{
+		sr := SessionRow{
 			Key:      sessionKey(f[0], host),
 			HostID:   host,
 			Name:     f[0],
 			Worktree: f[1],
 			Branch:   branchOf(context.Background(), f[1]),
-		})
+		}
+		if len(f) >= 3 {
+			sr.CreatedAt = parseUnixSeconds(f[2])
+		}
+		rows = append(rows, sr)
 	}
 	return rows
+}
+
+// parseUnixSeconds parses tmux's #{session_created} (unix epoch SECONDS) into a UTC
+// time, or nil when the field is empty or unparseable — never a fabricated zero time.
+func parseUnixSeconds(s string) *time.Time {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil
+	}
+	secs, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return nil
+	}
+	t := time.Unix(secs, 0).UTC()
+	return &t
 }
 
 func splitLines(out []byte) []string {
@@ -170,6 +260,19 @@ func (p *Plugin) emitPane(ctx context.Context, typ string, r PaneRow, now time.T
 	p.emit(ctx, typ, r.Key, map[string]any{
 		"key": r.Key, "session": r.Session, "window": r.Window, "pane": r.Pane,
 		"pid": r.Pid, "cmd": r.Cmd, "path": r.Path, "active": r.Active, "free": r.Free,
+	}, now)
+}
+
+// emitSession emits tmux.session.updated with the session's join-relevant payload
+// (createdAt is null when tmux reported no #{session_created}).
+func (p *Plugin) emitSession(ctx context.Context, r SessionRow, now time.Time) {
+	var created any
+	if r.CreatedAt != nil {
+		created = r.CreatedAt.UTC().Format(rfc)
+	}
+	p.emit(ctx, "tmux.session.updated", r.Key, map[string]any{
+		"key": r.Key, "name": r.Name, "attached": r.Attached,
+		"createdAt": created, "worktree": r.Worktree, "branch": r.Branch,
 	}, now)
 }
 

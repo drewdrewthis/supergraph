@@ -44,8 +44,36 @@ func panesToModel(rows []tmux.PaneRow) []model.TmuxPane {
 	for _, p := range rows {
 		out = append(out, model.TmuxPane{
 			HostID: p.HostID, Key: p.Key, Session: p.Session, Window: p.Window, Pane: p.Pane,
-			Pid: p.Pid, Cmd: p.Cmd, Path: optStr(p.Path), Active: p.Active, Free: p.Free, StaleSince: p.StaleSince,
+			Pid: p.Pid, Cmd: p.Cmd, Path: optStr(p.Path), Active: p.Active, Free: p.Free,
+			PaneID: p.PaneID, StaleSince: p.StaleSince,
 		})
 	}
 	return out
+}
+
+// windowsToModel maps already-grouped window rows to the generated model — a pure
+// mapping, no ctx/store access, so TmuxSessions can scan the pane table once for
+// every session instead of once per session (#27 N+1).
+func windowsToModel(rows []tmux.WindowRow) []model.TmuxWindow {
+	out := make([]model.TmuxWindow, 0, len(rows))
+	for _, w := range rows {
+		out = append(out, model.TmuxWindow{
+			HostID: w.HostID, Key: w.Key, Session: w.Session, Index: w.Index,
+			Name: optStr(w.Name), Active: w.Active, Panes: panesToModel(w.Panes),
+		})
+	}
+	return out
+}
+
+// sessionToModel is the single TmuxSession mapper. Both the tmuxSessions query and
+// the git plugin's Worktree.tmuxSession join go through it so a new TmuxSession
+// field cannot be populated on one path and silently zero-valued on the other
+// (#27 + #29: windows is non-nullable, so a nil slice is a query-time error, and a
+// zero-valued attached is a wrong answer that looks right).
+func sessionToModel(s tmux.SessionRow, windows []tmux.WindowRow) model.TmuxSession {
+	return model.TmuxSession{
+		HostID: s.HostID, Name: s.Name, Worktree: optStr(s.Worktree), Branch: optStr(s.Branch),
+		Attached: s.Attached, CreatedAt: s.CreatedAt, Windows: windowsToModel(windows),
+		LastSeenAt: s.LastSeenAt, StaleSince: s.StaleSince,
+	}
 }

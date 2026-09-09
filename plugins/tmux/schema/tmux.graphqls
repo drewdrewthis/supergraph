@@ -1,13 +1,19 @@
 # tmux plugin's GraphQL contribution (S5 zero-core-edit seam): read model of the
 # local tmux server served over the gqlgen extend-type glob seam (D6) — no webhook,
-# no HTTPRoutes. Types are flattened to scalars so no per-field resolver is needed
-# (the nested-object PRD sketch is not exercised by any AC and would only add
-# resolver LOC). Non-GitHub types keep the Tmux* prefix (PRD §6).
+# no HTTPRoutes. The window nesting (issue #27, epic #30) REVERSES the original
+# flattened-to-scalars decision: the sidebar now reads windows { panes { paneId } },
+# so TmuxWindow is nested here and populated eagerly by the TmuxSessions resolver
+# (no per-field resolver). Non-GitHub types keep the Tmux* prefix (PRD §6).
 type TmuxSession {
   hostId: String!
   name: String!
   worktree: String
   branch: String
+  # attached is derived from list-clients (control-mode clients excluded), NOT from
+  # #{session_attached} — the plugin's own control client poisons that field (#27 §3).
+  attached: Boolean!
+  createdAt: Time
+  windows: [TmuxWindow!]!
   lastSeenAt: Time
   staleSince: Time
 }
@@ -23,7 +29,22 @@ type TmuxPane {
   path: String
   active: Boolean!
   free: Boolean!
+  # paneId is tmux's native #{pane_id} (e.g. "%3"); key is supergraph's composite.
+  paneId: String!
   staleSince: Time
+}
+
+# TmuxWindow is a projection over tmux_panes grouped by (session, window) — no stored
+# table (the EDR's YAGNI call on tmux_windows holds). A window with zero live panes is
+# not emitted.
+type TmuxWindow {
+  hostId: String!
+  key: String!
+  session: String!
+  index: Int!
+  name: String
+  active: Boolean!
+  panes: [TmuxPane!]!
 }
 
 type Slot {
