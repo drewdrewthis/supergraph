@@ -83,7 +83,7 @@ func registerGitSteps(sc *godog.ScenarioContext) {
 	sc.Step(regexp.MustCompile("^GitHub PR #(\\d+) in `([^`]+)` is warm-cached with headRefName \"([^\"]*)\"$"),
 		func(n, slug, head string) error { return g.seedWarmPR(n, slug, head, "") })
 	sc.Step(regexp.MustCompile("^GitHub PR #(\\d+) in `([^`]+)` is warm-cached with headRefName \"([^\"]*)\" and state \"([^\"]*)\"$"), g.seedWarmPR)
-	sc.Step(regexp.MustCompile("^the worktree's pullRequest is GitHub PR #(\\d+)$"),
+	sc.Step(regexp.MustCompile(`^the worktree's pullRequest is GitHub PR #(\d+)$`),
 		func(n string) error { return g.assertPRJoin(n) })
 	sc.Step(regexp.MustCompile("^the worktree's pullRequest is GitHub PR #(\\d+) with state \"([^\"]*)\"$"), g.assertPRJoinState)
 
